@@ -41,6 +41,11 @@ CREATE INDEX IF NOT EXISTS idx_sales_sold_at      ON sales(sold_at);
 CREATE INDEX IF NOT EXISTS idx_sales_paint_seed   ON sales(paint_seed);
 CREATE INDEX IF NOT EXISTS idx_sales_float        ON sales(float_value);
 
+CREATE TABLE IF NOT EXISTS settings (
+    key                 TEXT PRIMARY KEY,
+    value               TEXT
+);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -103,6 +108,22 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    # -- settings (key/value) ------------------------------------------------
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.conn.commit()
 
     # -- items ---------------------------------------------------------------
 

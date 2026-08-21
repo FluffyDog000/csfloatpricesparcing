@@ -73,6 +73,21 @@ class WebConfig:
     # mutating requests must present it (X-Admin-Token header or ?token=).
     # Recommended when the dashboard is exposed beyond localhost.
     admin_token: str | None = None
+    # Login protection. When password_hash is set, the whole dashboard requires
+    # a session login. secret_key signs the session cookie.
+    secret_key: str | None = None
+    auth_username: str = "admin"
+    auth_password_hash: str | None = None
+    session_days: int = 7
+
+
+@dataclass
+class TelegramConfig:
+    bot_token: str | None
+    chat_id: str | None
+
+    def configured(self) -> bool:
+        return bool(self.bot_token and self.chat_id)
 
 
 @dataclass
@@ -100,9 +115,11 @@ class AppConfig:
     reporting: ReportingConfig
     web: WebConfig
     images: ImagesConfig
+    telegram: TelegramConfig
     db_path: Path
     log_path: Path
     raw_dump_dir: Path
+    backups_dir: Path
     _raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -163,6 +180,14 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             host=str(_env("CSFLOAT_WEB_HOST") or web.get("host", "127.0.0.1")),
             port=int(_env("CSFLOAT_WEB_PORT") or web.get("port", 5000)),
             admin_token=_env("CSFLOAT_ADMIN_TOKEN") or (web.get("admin_token") or None),
+            secret_key=_env("FLASK_SECRET_KEY"),
+            auth_username=_env("DASHBOARD_USERNAME") or "admin",
+            auth_password_hash=_env("DASHBOARD_PASSWORD_HASH"),
+            session_days=int(_env("DASHBOARD_SESSION_DAYS") or web.get("session_days", 7)),
+        ),
+        telegram=TelegramConfig(
+            bot_token=_env("TELEGRAM_BOT_TOKEN"),
+            chat_id=_env("TELEGRAM_CHAT_ID"),
         ),
         images=ImagesConfig(
             steam_cdn_prefix=str(
@@ -176,6 +201,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         db_path=_abs(_env("CSFLOAT_DB_PATH", "data/csfloat_sales.db")),
         log_path=_abs(_env("CSFLOAT_LOG_PATH", "logs/collector.log")),
         raw_dump_dir=_abs(_env("CSFLOAT_RAW_DUMP_DIR", "raw_dumps")),
+        backups_dir=_abs(_env("CSFLOAT_BACKUPS_DIR", "data/backups")),
         _raw=cfg,
     )
 

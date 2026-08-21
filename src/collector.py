@@ -25,6 +25,15 @@ class Collector:
         self.client = client
         self._dumped: set[str] = set()
 
+    def reopen_db(self) -> None:
+        """Reopen the DB connection (after the file was swapped by a restore)."""
+        try:
+            self.db.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.db = Database(self.config.db_path)
+        log.info("Collector DB connection reopened.")
+
     # -- item registry (source of truth = DB) --------------------------------
 
     def seed_from_yaml_if_empty(self) -> int:

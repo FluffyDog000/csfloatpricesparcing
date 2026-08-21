@@ -27,6 +27,29 @@ body {
 }
 .brand { color: var(--text); text-decoration: none; font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 14px; }
+.navlink { color: var(--accent); text-decoration: none; font-size: 13px; }
+.navlink:hover { text-decoration: underline; }
+
+/* Login ------------------------------------------------------------------ */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-card { display: flex; flex-direction: column; gap: 12px; width: 300px;
+              background: var(--panel); border: 1px solid var(--line);
+              border-radius: 12px; padding: 24px; }
+.login-card h1 { text-align: center; font-size: 18px; margin: 0 0 4px; }
+.login-error { color: var(--bad); font-size: 13px; text-align: center; }
+
+/* Settings --------------------------------------------------------------- */
+.settings-block { background: var(--panel); border: 1px solid var(--line);
+                  border-radius: 10px; padding: 16px; margin: 14px 0; }
+.settings-block .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.settings-block .time { width: 120px; }
+.settings-msg { font-size: 13px; color: var(--good); margin-top: 10px; min-height: 16px; }
+.settings-msg.err { color: var(--bad); }
+.warn-box { background: rgba(248,81,73,.1); border: 1px solid var(--bad);
+            border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; }
+.danger-btn { background: var(--panel); color: var(--bad); border: 1px solid var(--bad);
+              border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+.danger-btn:hover { background: rgba(248,81,73,.12); }
 .status { color: var(--muted); font-size: 12px; font-family: var(--mono); }
 .timer {
   color: var(--muted); font-size: 12px; font-family: var(--mono);

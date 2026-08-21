@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — CSFloat Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="login-wrap">
+    <form class="login-card" method="post" action="{{ url_for('login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+      <h1>CSFloat Tracker</h1>
+      {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+      <input class="input" type="text" name="username" placeholder="Логин" autocomplete="username" autofocus>
+      <input class="input" type="password" name="password" placeholder="Пароль" autocomplete="current-password">
+      <button class="btn btn-primary" type="submit">Войти</button>
+    </form>
+  </div>
+</body>
+</html>

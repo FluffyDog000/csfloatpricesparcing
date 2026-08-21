@@ -16,10 +16,21 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
 import statistics
+import time
+from datetime import timedelta
+from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, render_template, request
+from flask import (
+    Flask, abort, g, jsonify, redirect, render_template, request, session, url_for,
+)
+from werkzeug.security import check_password_hash
+from werkzeug.utils import secure_filename
 
+from src.backup import bump_generation, restore
+from src.backup_service import export_db
 from src.config import load_config, load_items
 from src.db import Database
 from src.images import ImageService
@@ -36,6 +47,22 @@ setup_logging(config.log_path)
 log = logging.getLogger("csfloat.web")
 
 app = Flask(__name__)
+app.secret_key = config.web.secret_key or secrets.token_hex(32)
+if not config.web.secret_key:
+    log.warning("FLASK_SECRET_KEY not set — using a random key (sessions reset on "
+                "restart). Set it in .env for persistent logins.")
+app.permanent_session_lifetime = timedelta(days=config.web.session_days)
+app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024  # 512 MB upload cap
+
+AUTH_ENABLED = bool(config.web.auth_password_hash)
+if not AUTH_ENABLED:
+    log.warning("DASHBOARD_PASSWORD_HASH not set — the dashboard is OPEN (no "
+                "login). Fine for localhost; set it before exposing to the internet.")
+
+# Simple in-memory brute-force guard: ip -> [fail_count, lock_until_epoch].
+_LOGIN_FAILS: dict[str, list[float]] = {}
+_MAX_FAILS = 7
+_LOCK_SECONDS = 300  # 5 minutes
 
 
 def _seed_if_empty() -> None:
@@ -58,6 +85,95 @@ def _seed_if_empty() -> None:
 
 
 _seed_if_empty()
+
+
+# ---------------------------------------------------------------------------
+# Authentication (single login/password; password stored as a hash in .env)
+# ---------------------------------------------------------------------------
+
+_PUBLIC_ENDPOINTS = {"login", "static"}
+
+
+def _client_ip() -> str:
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return fwd.split(",")[0].strip() if fwd else (request.remote_addr or "?")
+
+
+def _locked_out(ip: str) -> float:
+    """Return seconds remaining on a lockout, or 0 if not locked."""
+    rec = _LOGIN_FAILS.get(ip)
+    if rec and rec[1] > time.time():
+        return rec[1] - time.time()
+    return 0.0
+
+
+def _record_fail(ip: str) -> None:
+    rec = _LOGIN_FAILS.setdefault(ip, [0.0, 0.0])
+    rec[0] += 1
+    if rec[0] >= _MAX_FAILS:
+        rec[1] = time.time() + _LOCK_SECONDS
+        rec[0] = 0
+        log.warning("Login locked for %s for %ds after repeated failures", ip, _LOCK_SECONDS)
+
+
+def _clear_fails(ip: str) -> None:
+    _LOGIN_FAILS.pop(ip, None)
+
+
+@app.before_request
+def _require_login():
+    if not AUTH_ENABLED:
+        return None
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if session.get("logged_in"):
+        return None
+    # Not authenticated.
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "authentication required"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not AUTH_ENABLED:
+        return redirect(url_for("index"))
+    if request.method == "GET":
+        return render_template("login.html", error=None)
+
+    ip = _client_ip()
+    wait = _locked_out(ip)
+    if wait > 0:
+        return render_template(
+            "login.html",
+            error=f"Слишком много попыток. Подожди {int(wait) + 1} с.",
+        ), 429
+
+    username = (request.form.get("username") or "").strip()
+    password = request.form.get("password") or ""
+    if (username == config.web.auth_username
+            and check_password_hash(config.web.auth_password_hash, password)):
+        _clear_fails(ip)
+        session.permanent = True
+        session["logged_in"] = True
+        session["user"] = username
+        nxt = request.args.get("next") or url_for("index")
+        return redirect(nxt if nxt.startswith("/") else url_for("index"))
+
+    _record_fail(ip)
+    log.warning("Failed login for user '%s' from %s", username, ip)
+    return render_template("login.html", error="Неверный логин или пароль."), 401
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login") if AUTH_ENABLED else url_for("index"))
+
+
+@app.context_processor
+def _inject_globals():
+    return {"auth_enabled": AUTH_ENABLED}
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +450,84 @@ def api_delete_item():
     return jsonify({"ok": True, "purged": purge})
 
 
+# ---------------------------------------------------------------------------
+# Settings page + backup/restore
+# ---------------------------------------------------------------------------
+
+@app.route("/settings")
+def settings_page():
+    return render_template(
+        "settings.html",
+        telegram_configured=config.telegram.configured(),
+    )
+
+
+@app.route("/api/settings")
+def api_get_settings():
+    db = get_db()
+    return jsonify(
+        {
+            "export_time_msk": db.get_setting("export_time_msk", "02:00"),
+            "export_enabled": db.get_setting("export_enabled", "0") == "1",
+            "last_export_date_msk": db.get_setting("last_export_date_msk"),
+            "telegram_configured": config.telegram.configured(),
+        }
+    )
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_set_settings():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    if "export_time_msk" in data:
+        t = (data.get("export_time_msk") or "").strip()
+        if t:
+            try:
+                hh, mm = [int(x) for x in t.split(":")]
+                assert 0 <= hh < 24 and 0 <= mm < 60
+            except (ValueError, AssertionError):
+                abort(400, description="Время должно быть в формате ЧЧ:ММ (МСК)")
+        db.set_setting("export_time_msk", t)
+    if "export_enabled" in data:
+        db.set_setting("export_enabled", "1" if data.get("export_enabled") else "0")
+    log.info("Settings updated via web: %s", data)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backup/export_now", methods=["POST"])
+def api_export_now():
+    _require_admin()
+    if not config.telegram.configured():
+        abort(400, description="Telegram не настроен (TELEGRAM_BOT_TOKEN / CHAT_ID в .env)")
+    ok = export_db(config, reason="manual-web")
+    if not ok:
+        abort(502, description="Не удалось отправить в Telegram — смотри лог")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backup/restore", methods=["POST"])
+def api_restore():
+    _require_admin()
+    file = request.files.get("dbfile")
+    if not file or not file.filename:
+        abort(400, description="Файл не выбран")
+    config.backups_dir.mkdir(parents=True, exist_ok=True)
+    tmp = config.backups_dir / ("upload-" + secure_filename(file.filename or "upload.db"))
+    file.save(str(tmp))
+    # Close this request's connection before swapping the file.
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+    try:
+        info = restore(config.db_path, tmp, config.backups_dir)
+    except ValueError as exc:
+        Path(tmp).unlink(missing_ok=True)
+        abort(400, description=str(exc))
+    log.info("DB restored via web upload; previous DB backed up to %s", info.get("backup_path"))
+    return jsonify({"ok": True, "backup": info.get("backup_path")})
+
+
 @app.errorhandler(404)
 def not_found(err):
     return jsonify({"error": str(getattr(err, "description", "not found"))}), 404
@@ -347,6 +541,16 @@ def bad_request(err):
 @app.errorhandler(403)
 def forbidden(err):
     return jsonify({"error": str(getattr(err, "description", "forbidden"))}), 403
+
+
+@app.errorhandler(413)
+def too_large(err):
+    return jsonify({"error": "Файл слишком большой"}), 413
+
+
+@app.errorhandler(502)
+def bad_gateway(err):
+    return jsonify({"error": str(getattr(err, "description", "upstream error"))}), 502
 
 
 if __name__ == "__main__":

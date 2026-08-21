@@ -22,6 +22,8 @@ import logging
 import random
 import time
 
+from src.backup import read_generation
+from src.backup_service import BackupService
 from src.collector import Collector
 from src.config import load_config
 from src.csfloat_client import CSFloatClient
@@ -42,7 +44,11 @@ def run_once(collector: Collector) -> None:
 def run_forever(collector: Collector) -> None:
     """Min-heap scheduler: (next_run_monotonic, seq, name). Each item reschedules
     itself with fresh jitter after every poll. The active set is refreshed from
-    the DB every RESYNC_SECONDS so web edits apply live."""
+    the DB every RESYNC_SECONDS so web edits apply live. Also drives the backup
+    service (daily Telegram export + inbound restore)."""
+    backup = BackupService(collector.config, collector)
+    db_generation = read_generation(collector.config.db_path)
+
     heap: list[tuple[float, int, str]] = []
     seq = 0
     scheduled: set[str] = set()
@@ -66,6 +72,15 @@ def run_forever(collector: Collector) -> None:
     last_resync = time.monotonic()
 
     while True:
+        # Backup service: daily Telegram export + inbound restore polling.
+        backup.tick()
+
+        # If the web UI restored the DB, its generation marker changed — reopen.
+        gen = read_generation(collector.config.db_path)
+        if gen != db_generation:
+            db_generation = gen
+            collector.reopen_db()
+
         # Periodically re-read the active item list from the DB.
         if time.monotonic() - last_resync >= RESYNC_SECONDS:
             last_resync = time.monotonic()

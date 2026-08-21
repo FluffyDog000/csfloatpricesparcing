@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">← к предметам</a>
+<h1>Настройки</h1>
+
+{% if not telegram_configured %}
+<div class="warn-box">
+  Telegram не настроен. Задай <code>TELEGRAM_BOT_TOKEN</code> и
+  <code>TELEGRAM_CHAT_ID</code> в <code>.env</code>, чтобы включить бэкапы.
+</div>
+{% endif %}
+
+<section class="settings-block">
+  <h2>Ежедневный бэкап в Telegram</h2>
+  <div class="row">
+    <label class="chk"><input type="checkbox" id="export-enabled"> включить</label>
+    <label>Время (МСК):
+      <input class="input time" type="time" id="export-time" value="02:00">
+    </label>
+    <button class="btn btn-primary" id="save-settings">Сохранить</button>
+    <button class="btn" id="export-now">Экспортировать сейчас</button>
+  </div>
+  <div class="muted" id="last-export"></div>
+  <div class="settings-msg" id="settings-msg"></div>
+</section>
+
+<section class="settings-block">
+  <h2>Восстановление базы</h2>
+  <p class="muted">
+    Загрузи файл <code>*.db</code> — текущая база будет сохранена в резервную
+    копию, затем заменена. Также можно прислать файл боту в Telegram (с твоего
+    сохранённого чата).
+  </p>
+  <form id="restore-form" class="row">
+    <input type="file" id="restore-file" accept=".db,.sqlite,.sqlite3" class="input">
+    <button class="btn danger-btn" type="submit">Восстановить из файла</button>
+  </form>
+  <div class="settings-msg" id="restore-msg"></div>
+</section>
+
+{% if auth_required %}{% endif %}
+<script>window.ADMIN_REQUIRED = false;</script>
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}
