@@ -25,6 +25,7 @@ from src.logging_setup import setup_logging
 from src.report import (
     aggregate_buckets,
     aggregate_seeds,
+    period_days,
     period_to_since_iso,
 )
 
@@ -159,17 +160,19 @@ def api_aggregates():
         "min_price": round(min(prices), 2) if prices else None,
         "max_price": round(max(prices), 2) if prices else None,
     }
+    days = period_days(None if period == "all" else period, rows)
     icon = ImageService(config, db).get_or_fetch(name)
     return jsonify(
         {
             "item": name,
             "icon_url": icon,
             "period": period,
+            "period_days": round(days, 2),
             "bucket_size": bucket,
             "total_sales": len(rows),
             "overall": overall,
-            "buckets": aggregate_buckets(rows, bucket),
-            "seeds": aggregate_seeds(rows),
+            "buckets": aggregate_buckets(rows, bucket, days),
+            "seeds": aggregate_seeds(rows, days),
             "last_update": db.last_successful_poll(item_id),
         }
     )

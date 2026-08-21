@@ -33,6 +33,52 @@ def _prices(rows: list[dict[str, Any]]) -> list[float]:
     return [r["price"] for r in rows if r["price"] is not None]
 
 
+# Minimum days used as the normalization denominator, so a very short "all"
+# window (e.g. collection just started) cannot inflate the per-week velocity.
+_MIN_PERIOD_DAYS = 1.0
+
+
+def period_days(period: str | None, rows: list[dict[str, Any]]) -> float:
+    """Number of days the velocity metric normalizes against.
+
+    Fixed for bounded periods (7d -> 7, 30d -> 30) so the same sale count over
+    a longer window reads as a lower weekly rate. For "all" we use the actual
+    observed span (now - earliest sale), floored at _MIN_PERIOD_DAYS."""
+    if period and period.lower() not in ("all", "0"):
+        m = _PERIOD_RE.match(period)
+        if m:
+            return max(int(m.group(1)) * _PERIOD_SECONDS[m.group(2).lower()] / 86400.0,
+                       _MIN_PERIOD_DAYS)
+    # "all" (or unparseable): span from earliest sale to now.
+    times = []
+    for r in rows:
+        dt = _parse_iso(r.get("sold_at"))
+        if dt is not None:
+            times.append(dt)
+    if not times:
+        return _MIN_PERIOD_DAYS
+    span_days = (datetime.now(timezone.utc) - min(times)).total_seconds() / 86400.0
+    return max(span_days, _MIN_PERIOD_DAYS)
+
+
+def _parse_iso(val: Any) -> datetime | None:
+    if not val:
+        return None
+    s = str(val)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _velocity(count: int, days: float) -> float:
+    """Sales per week normalized to the period length."""
+    return round(count * 7.0 / days, 2) if days > 0 else 0.0
+
+
 def bucket_label(float_value: float, size: float) -> str:
     lo = (int(float_value / size)) * size
     hi = lo + size
@@ -44,9 +90,10 @@ def bucket_key(float_value: float, size: float) -> float:
 
 
 def aggregate_buckets(
-    rows: list[dict[str, Any]], bucket_size: float
+    rows: list[dict[str, Any]], bucket_size: float, days: float = 7.0
 ) -> list[dict[str, Any]]:
-    """Group sales by float bucket; compute count/avg/median/min/max price."""
+    """Group sales by float bucket; compute count/avg/median/min/max price and
+    velocity (sales/week normalized to `days`)."""
     groups: dict[float, list[dict[str, Any]]] = {}
     for r in rows:
         fv = r["float_value"]
@@ -62,6 +109,7 @@ def aggregate_buckets(
             {
                 "bucket": f"{key:.4f}-{key + bucket_size:.4f}",
                 "count": len(grp),
+                "velocity": _velocity(len(grp), days),
                 "avg_price": round(statistics.mean(prices), 2) if prices else None,
                 "median_price": round(statistics.median(prices), 2) if prices else None,
                 "min_price": round(min(prices), 2) if prices else None,
@@ -71,8 +119,10 @@ def aggregate_buckets(
     return out
 
 
-def aggregate_seeds(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group by paint_seed; count/avg/min/max price."""
+def aggregate_seeds(
+    rows: list[dict[str, Any]], days: float = 7.0
+) -> list[dict[str, Any]]:
+    """Group by paint_seed; count/avg/min/max price and velocity."""
     groups: dict[Any, list[dict[str, Any]]] = {}
     for r in rows:
         groups.setdefault(r["paint_seed"], []).append(r)
@@ -84,6 +134,7 @@ def aggregate_seeds(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "paint_seed": seed if seed is not None else "(none)",
                 "count": len(grp),
+                "velocity": _velocity(len(grp), days),
                 "avg_price": round(statistics.mean(prices), 2) if prices else None,
                 "min_price": round(min(prices), 2) if prices else None,
                 "max_price": round(max(prices), 2) if prices else None,
@@ -132,10 +183,12 @@ def build_report(
     since = period_to_since_iso(period)
     rows = db.query_sales(item_id, since_iso=since, paint_seed=paint_seed)
     prices = _prices(rows)
+    days = period_days(period, rows)
     return {
         "item": market_hash_name,
         "period": period or "all",
         "since": since,
+        "period_days": round(days, 2),
         "paint_seed_filter": paint_seed,
         "total_sales": len(rows),
         "overall": {
@@ -144,7 +197,7 @@ def build_report(
             "min_price": round(min(prices), 2) if prices else None,
             "max_price": round(max(prices), 2) if prices else None,
         },
-        "buckets": aggregate_buckets(rows, bucket_size),
-        "seeds": aggregate_seeds(rows),
+        "buckets": aggregate_buckets(rows, bucket_size, days),
+        "seeds": aggregate_seeds(rows, days),
         "rows": rows,
     }

@@ -4,7 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from src import parser
-from src.report import aggregate_buckets, aggregate_seeds, period_to_since_iso
+from src.report import (
+    aggregate_buckets,
+    aggregate_seeds,
+    period_days,
+    period_to_since_iso,
+)
 
 
 NOW = datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
@@ -109,6 +114,37 @@ def test_aggregate_buckets_and_seeds():
     seeds = aggregate_seeds(rows)
     seed13 = next(s for s in seeds if s["paint_seed"] == 13)
     assert seed13["count"] == 2
+
+
+def test_velocity_normalization():
+    # 14 sales split across two buckets (10 + 4).
+    rows = [{"float_value": 0.151, "price": 100.0, "paint_seed": 1} for _ in range(10)]
+    rows += [{"float_value": 0.161, "price": 100.0, "paint_seed": 2} for _ in range(4)]
+
+    # 7-day period => velocity == count per week (divisor days/7 == 1).
+    b7 = aggregate_buckets(rows, 0.01, days=7.0)
+    v = {b["bucket"][:6]: b["velocity"] for b in b7}
+    assert v["0.1500"] == 10.0
+    assert v["0.1600"] == 4.0
+
+    # 30-day period => same counts read as a lower weekly rate.
+    b30 = aggregate_buckets(rows, 0.01, days=30.0)
+    v30 = {b["bucket"][:6]: b["velocity"] for b in b30}
+    assert v30["0.1500"] == round(10 * 7 / 30, 2)  # ~2.33
+    # never negative, never absurdly large
+    assert all(b["velocity"] >= 0 for b in b30)
+
+    # seeds carry velocity too
+    s = aggregate_seeds(rows, days=7.0)
+    assert {row["paint_seed"]: row["velocity"] for row in s} == {1: 10.0, 2: 4.0}
+
+
+def test_period_days_bounds():
+    assert period_days("7d", []) == 7.0
+    assert period_days("30d", []) == 30.0
+    # "all" with no rows falls back to the floor, never zero (no div-by-zero).
+    assert period_days("all", []) >= 1.0
+    assert period_days(None, []) >= 1.0
 
 
 def test_period_parsing():

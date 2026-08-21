@@ -101,6 +101,18 @@ tr.agg-row.open .caret { transform: rotate(90deg); color: var(--accent); }
 td.hi-max { color: var(--good); }
 td.hi-min { color: var(--bad); }
 
+/* velocity column colouring (relative to item's own median) */
+td.vel { font-weight: 600; }
+td.vel.vel-fast { color: var(--good); }
+td.vel.vel-mid  { color: #d0a53c; }
+td.vel.vel-slow { color: var(--bad); }
+
+/* sortable header */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); }
+th.sortable.sorted { color: var(--accent); }
+th.sortable .sort-ind { font-size: 10px; }
+
 /* Detail (expanded) rows ------------------------------------------------- */
 tr.detail-row > td { padding: 0; background: var(--panel2); }
 .detail-wrap { padding: 6px 10px 10px 26px; }
