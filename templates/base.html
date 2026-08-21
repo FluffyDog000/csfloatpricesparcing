@@ -9,7 +9,10 @@
 <body>
   <header class="topbar">
     <a class="brand" href="{{ url_for('index') }}">CSFloat Sales Tracker</a>
-    <span class="status" id="status">—</span>
+    <div class="topbar-right">
+      <span class="status" id="status">—</span>
+      <span class="timer" id="refresh-timer" title="До следующего автообновления страницы"></span>
+    </div>
   </header>
   <main class="container">
     {% block content %}{% endblock %}

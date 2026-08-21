@@ -48,5 +48,4 @@ async function load() {
   }
 }
 
-load();
-setInterval(load, 60000);
+startAutoRefresh(load, 60000);

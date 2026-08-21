@@ -192,5 +192,4 @@ document.getElementById("periods").addEventListener("click", (ev) => {
   refresh();
 });
 
-refresh();
-setInterval(refresh, 45000);
+startAutoRefresh(refresh, 45000);

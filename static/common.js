@@ -29,6 +29,42 @@ function timeFmt(iso) {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Drive periodic refresh with a visible countdown in the top bar.
+// A single 1-second ticker updates "обновление через Nс" and fires `fn`
+// (an async function) when the countdown reaches zero. Runs `fn` once now.
+function startAutoRefresh(fn, intervalMs) {
+  const el = document.getElementById("refresh-timer");
+  const total = Math.max(1, Math.round(intervalMs / 1000));
+  let remaining = total;
+  let running = false;
+
+  function render() {
+    if (!el) return;
+    el.textContent = running ? "обновление…" : `обновление через ${remaining}с`;
+  }
+
+  async function run() {
+    running = true;
+    render();
+    try { await fn(); } finally {
+      running = false;
+      remaining = total;
+      render();
+    }
+  }
+
+  run();
+  setInterval(() => {
+    if (running) return;           // don't count down while a refresh is in flight
+    remaining -= 1;
+    if (remaining <= 0) {
+      remaining = total;
+      run();
+    }
+    render();
+  }, 1000);
+}
+
 // Show "данные актуальны на HH:MM" in the top bar; warn if stale.
 function renderStatus(lastUpdateIso) {
   const el = document.getElementById("status");
