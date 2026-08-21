@@ -1,0 +1,246 @@
+# CSFloat Sales Tracker
+
+Собирает **полную** историю продаж по выбранным предметам CS2 с вкладки
+**"Latest Sales"** на CSFloat и складывает её в локальную SQLite-базу, обходя
+ограничение сайта (видно только последние ~40 продаж, старые исчезают).
+Затем строит статистику: средняя/медианная цена по бакетам float, срезы по
+paint seed, тренды.
+
+> **Дисклеймер.** Вкладка "Latest Sales" обслуживается недокументированным
+> внутренним эндпоинтом фронтенда CSFloat. Скрипт повторяет тот же запрос, что
+> делает браузер, используя твою сессию (cookie/токен). Соблюдай разумный
+> rate limit (в конфиге по умолчанию ~1 запрос/сек и опрос раз в 15–30 минут
+> на предмет).
+
+---
+
+## Как это работает
+
+1. `items.yaml` — список отслеживаемых предметов (`market_hash_name`).
+2. `run_collector.py` — раз в 15–30 минут (рандомизированный джиттер) на каждый
+   предмет опрашивает эндпоинт, парсит продажи и кладёт **только новые** в базу
+   (`INSERT OR IGNORE` по уникальному `sale_id` → дублей нет).
+3. Если между опросами окно из 40 продаж успело «прокрутиться» (совпадений с
+   прошлым опросом почти нет) — в лог падает предупреждение «возможен пропуск».
+4. `report.py` — строит отчёты по накопленным данным.
+
+---
+
+## Установка
+
+```bash
+python -m venv .venv
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# (Linux/macOS: source .venv/bin/activate)
+
+pip install -r requirements.txt
+
+copy .env.example .env      # Windows   (Linux/macOS: cp .env.example .env)
+```
+
+Затем заполни `.env` (см. следующий раздел) и `items.yaml`.
+
+---
+
+## Шаг 1. Получить cookie/токен через DevTools
+
+Секреты берутся **только** из `.env`, в коде их нет.
+
+1. Открой в браузере страницу нужного предмета на CSFloat и войди в аккаунт.
+2. Нажми **F12** → вкладка **Network** → фильтр **Fetch/XHR**.
+3. На странице предмета открой вкладку **"Latest Sales"** (если уже открыта —
+   переключись на другую и обратно, чтобы запрос ушёл заново).
+4. В списке запросов найди тот, что идёт на путь вида
+   **`.../history/.../sales`** (или похожий — именно он отдаёт список продаж).
+5. Правой кнопкой по запросу → **Copy → Copy as cURL (bash)**.
+6. Из скопированного cURL достань значения заголовков:
+   - **`Cookie: ...`** → всё, что после `Cookie: `, вставь в `CSFLOAT_COOKIE`.
+   - если есть **`authorization: ...`** → вставь его значение в
+     `CSFLOAT_AUTHORIZATION` (без слова `authorization:`).
+   - обычно нужен либо cookie, либо токен; если есть оба — укажи оба.
+7. Проверь в cURL сам **URL** запроса. Если путь отличается от
+   `/api/v1/history/{name}/sales`, поправь `http.sales_path_template` в
+   `config.yaml` (`{name}` подставляется автоматически, URL-энкодинг делает
+   скрипт).
+
+> Cookie/сессия со временем протухают. Если в логах появляются ошибки
+> **AUTH ERROR (401/403)** — просто повтори шаги 1–6 и обнови `.env`. Скрипт при
+> этом не падает: он логирует ошибку и пробует снова на следующем цикле.
+
+### Свериться, что поля распарсились правильно
+
+При первом успешном опросе каждого предмета скрипт сохраняет **сырой ответ** API
+в `raw_dumps/<имя>.json`. Открой этот файл и убедись, что поля цены / float /
+paint seed / времени продажи распознаются. Парсер (`src/parser.py`) намеренно
+ищет поля по нескольким возможным путям (защитно), поэтому переносит небольшие
+отличия структуры. Если что-то не совпало — поправь списки путей вверху
+`src/parser.py` (там подробный комментарий) или пришли мне этот дамп, и я
+подгоню маппинг.
+
+---
+
+## Шаг 2. Настроить список предметов
+
+`items.yaml`:
+
+```yaml
+items:
+  - name: "★ Specialist Gloves | Lt. Commander (Field-Tested)"
+  - name: "AK-47 | Redline (Field-Tested)"
+    interval_min_minutes: 10   # для быстро продающихся — чаще
+    interval_max_minutes: 20
+```
+
+Имя должно совпадать с `market_hash_name` как на CSFloat. Удалённые из файла
+предметы помечаются в базе неактивными (история не теряется).
+
+---
+
+## Шаг 3. Тест на 1–2 предметах перед постоянным сбором
+
+Оставь в `items.yaml` один-два предмета и сделай один опрос:
+
+```bash
+python run_collector.py --once
+```
+
+Проверь:
+- в консоли/логе строка `'<item>': fetched=N new=N overlap=0`;
+- появился файл `raw_dumps/<item>.json` — глянь, что поля на месте;
+- отчёт печатается:
+
+```bash
+python report.py --item "★ Specialist Gloves | Lt. Commander (Field-Tested)" --period all
+```
+
+Если всё ок — добавляй остальные предметы и запускай постоянный сбор.
+
+---
+
+## Шаг 4. Постоянный сбор
+
+```bash
+python run_collector.py
+```
+
+Крутится в цикле, опрашивая каждый предмет раз в 15–30 минут с джиттером,
+размазывая запросы по времени. Останов — **Ctrl+C**.
+
+### Фоновый запуск на Windows
+
+**Вариант A — просто свернуть окно.** Запусти в отдельном окне PowerShell:
+
+```powershell
+python run_collector.py
+```
+
+**Вариант B — Task Scheduler (Планировщик заданий), автозапуск при входе.**
+
+1. Создай `run_collector.bat` рядом с проектом:
+   ```bat
+   @echo off
+   cd /d "%~dp0"
+   call .venv\Scripts\activate.bat
+   python run_collector.py
+   ```
+2. Открой **Task Scheduler** → **Create Task**.
+3. **General**: имя `CSFloat Collector`; отметь *Run whether user is logged on
+   or not* (по желанию) и *Run with highest privileges* — не обязательно.
+4. **Triggers**: *At log on* (или по расписанию).
+5. **Actions**: *Start a program* → путь к `run_collector.bat`.
+6. **Settings**: сними *Stop the task if it runs longer than...* (сборщик
+   долгоживущий).
+
+**Вариант C — периодический `--once` по расписанию.** Вместо постоянного
+процесса можно попросить Task Scheduler запускать `python run_collector.py --once`
+каждые, например, 20 минут (триггер *Repeat task every 20 minutes*). Тогда
+джиттер не нужен, но следи, чтобы интервал был достаточно частым и окно 40
+продаж не прокручивалось (см. предупреждения в логе).
+
+Логи пишутся в `logs/collector.log` с ротацией (5 файлов по 5 МБ).
+
+---
+
+## Отчёты
+
+```bash
+# Список отслеживаемых предметов
+python report.py --list
+
+# Сводка по бакетам float и по paint seed за 7 дней (таблицы в консоли)
+python report.py --item "★ Specialist Gloves | Lt. Commander (Field-Tested)"
+
+# Другой период и размер бакета
+python report.py --item "AK-47 | Redline (Field-Tested)" --period 30d --bucket 0.02
+
+# Только конкретный paint seed (напр. посмотреть среднюю цену для seed=13)
+python report.py --item "..." --seed 13
+
+# Выгрузить точные строки продаж в CSV
+python report.py --item "..." --period 30d --csv sales.csv
+```
+
+Периоды: `24h`, `7d`, `2w`, `all`. Отчёт показывает:
+- **Overall** — общее число продаж и avg/median/min/max цены за период;
+- **Float buckets** — разбивка по диапазонам float (размер бакета из
+  `config.yaml` или `--bucket`) с count/avg/median/min/max — видно, что за более
+  редкий/низкий float переплачивают;
+- **Paint seeds** — срез по paint seed.
+
+---
+
+## Структура проекта
+
+```
+├── run_collector.py        # запуск сборщика (постоянно или --once)
+├── report.py               # генерация отчётов (CLI)
+├── items.yaml              # список предметов (редактируй руками)
+├── config.yaml             # интервалы, rate limit, бакеты (не секреты)
+├── .env.example            # шаблон секретов (cookie/токен, пути)
+├── requirements.txt
+├── src/
+│   ├── config.py           # загрузка .env + YAML
+│   ├── db.py               # SQLite: схема, вставка с дедупликацией, запросы
+│   ├── models.py           # dataclass Sale
+│   ├── parser.py           # разбор ответа API → Sale (защитный маппинг полей)
+│   ├── csfloat_client.py   # HTTP-клиент: заголовки, rate limit, 429, 401/403
+│   ├── collector.py        # опрос, дедуп, детект пропусков, raw dump
+│   ├── report.py           # агрегация (бакеты/seed/период), CSV
+│   └── logging_setup.py    # ротируемое логирование
+└── tests/
+    └── test_parser.py      # тесты парсера и агрегации (без сети)
+```
+
+### Схема базы (SQLite)
+
+- **items** — `id, market_hash_name (unique), added_at, active, last_polled_at`.
+- **sales** — `sale_id (PK), item_id, market_hash_name, price_cents, price,
+  float_value, paint_seed, paint_index, sold_at, sold_at_estimated,
+  stickers_json, raw_json, scraped_at`.
+  - `sale_id` = ID из API, а если его нет — детерминированный SHA1-хэш из
+    `item|price|float|seed|sold_at`, чтобы дедуп работал при повторном опросе.
+  - `sold_at_estimated=1`, если время получено из относительного («54 minutes
+    ago») и вычислено на момент сбора.
+- **poll_log** — журнал каждого опроса: сколько получено/новых/совпало, статус
+  (`ok/auth_error/rate_limited/error`), заметки (в т.ч. предупреждение о
+  пропуске).
+
+---
+
+## Тесты
+
+```bash
+python -m pytest -q
+```
+
+---
+
+## Заметки по безопасности / гигиене
+
+- Реальный `.env`, база (`*.db`), логи и `raw_dumps/` уже в `.gitignore` — не
+  коммить их.
+- Официальный API-ключ CSFloat (`CSFLOAT_API_KEY`) для истории продаж бесполезен
+  — это отдельный недокументированный эндпоинт. Ключ оставлен в `.env.example`
+  на случай, если захочешь сверять активные листинги через
+  `GET /api/v1/listings`.

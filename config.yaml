@@ -1,0 +1,49 @@
+# ============================================================================
+# CSFloat Sales Tracker — non-secret configuration.
+# Secrets (cookies/tokens) live in .env, NOT here.
+# ============================================================================
+
+polling:
+  # Per-item poll interval bounds, in minutes. Each poll picks a random value
+  # in [min, max] (jitter) so requests do not fire on a fixed cadence.
+  interval_min_minutes: 15
+  interval_max_minutes: 30
+
+  # Minimum delay between two consecutive HTTP requests, in seconds
+  # (global rate-limit guard, ~1 req/sec => 1.0).
+  min_seconds_between_requests: 1.2
+
+  # HTTP 429 handling: exponential backoff.
+  rate_limit:
+    base_backoff_seconds: 5      # first wait
+    max_backoff_seconds: 300     # cap
+    max_retries: 5
+
+  # If, on a poll, the number of already-known sales among the fetched window
+  # is BELOW this threshold (and we already had data for the item), log a
+  # "possible missed sales" warning — the 40-record window may have rolled
+  # past between polls. Raise the item's frequency if you see this often.
+  gap_warning_min_overlap: 5
+
+http:
+  # Base host for CSFloat. The sales-history path is appended by the client.
+  base_url: "https://csfloat.com"
+
+  # Path template for the undocumented "Latest Sales" endpoint.
+  # {name} is replaced with the URL-encoded market_hash_name.
+  # NOTE: verify this against your real DevTools cURL and adjust if needed.
+  sales_path_template: "/api/v1/history/{name}/sales"
+
+  # Request timeout in seconds.
+  timeout_seconds: 20
+
+  # User-Agent sent with requests. Match a real browser UA for best results.
+  user_agent: >-
+    Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+    (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36
+
+reporting:
+  # Default float bucket size for aggregation (e.g. 0.01 => 0.15-0.16, ...).
+  float_bucket_size: 0.01
+  # Default reporting period if --period not given (e.g. 7d, 24h, 30d).
+  default_period: "7d"

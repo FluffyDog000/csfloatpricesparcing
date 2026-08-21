@@ -1,0 +1,29 @@
+# Secrets / local config
+.env
+
+# Database & data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+raw_dumps/
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

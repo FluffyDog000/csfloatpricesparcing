@@ -1,0 +1,18 @@
+# ============================================================================
+# List of items to track. Edit this file to add / remove items — no code
+# changes needed. Each entry is a CS2 market_hash_name exactly as it appears
+# on CSFloat.
+#
+# Optional per-item override of the poll interval bounds (minutes). Use a
+# tighter interval for fast-selling items so the 40-sale window does not roll
+# past between polls.
+# ============================================================================
+
+items:
+  - name: "★ Specialist Gloves | Lt. Commander (Field-Tested)"
+    # active: true              # optional, default true
+    # interval_min_minutes: 10  # optional per-item override
+    # interval_max_minutes: 20  # optional per-item override
+
+  # - name: "AK-47 | Redline (Field-Tested)"
+  # - name: "★ Karambit | Doppler (Factory New)"
