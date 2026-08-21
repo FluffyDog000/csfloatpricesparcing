@@ -36,9 +36,22 @@ body {
 
 .container { max-width: 1100px; margin: 0 auto; padding: 18px; }
 h1 { font-size: 20px; margin: 4px 0 12px; }
+.page-head { display: flex; align-items: center; justify-content: space-between;
+             gap: 16px; flex-wrap: wrap; }
+.search {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 12px; font-size: 14px; min-width: 240px;
+  flex: 0 1 320px;
+}
+.search:focus { outline: none; border-color: var(--accent); }
+.search::placeholder { color: var(--muted); }
 h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted);
      text-transform: uppercase; letter-spacing: .04em; }
 .muted { color: var(--muted); }
+h2.collapsible { cursor: pointer; user-select: none; }
+h2.collapsible:hover { color: var(--text); }
+h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
+.seeds-hint { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 400; }
 .back { color: var(--accent); text-decoration: none; font-size: 13px; }
 .back:hover { text-decoration: underline; }
 

@@ -18,7 +18,7 @@ import logging
 
 from flask import Flask, abort, g, jsonify, render_template, request
 
-from src.config import load_config
+from src.config import load_config, load_items
 from src.db import Database
 from src.images import ImageService
 from src.logging_setup import setup_logging
@@ -58,6 +58,25 @@ def close_db(_exc: object) -> None:
 # ---------------------------------------------------------------------------
 
 _ALLOWED_PERIODS = {"7d", "30d", "all"}
+
+
+def _pattern_flags() -> dict[str, bool]:
+    """name -> pattern_sensitive, read live from items.yaml (authoritative,
+    so editing the config + refreshing the browser reflects immediately).
+    Missing field defaults to True."""
+    try:
+        return {i.name: i.pattern_sensitive for i in load_items()}
+    except Exception:  # noqa: BLE001 - config error must not break the dashboard
+        return {}
+
+
+def _pattern_sensitive(name: str, db_value: object = None) -> bool:
+    flags = _pattern_flags()
+    if name in flags:
+        return flags[name]
+    if db_value is not None:
+        return bool(db_value)
+    return True
 
 
 def _period() -> str:
@@ -106,6 +125,7 @@ def item_page(name: str):
         "item.html",
         item_name=name,
         default_bucket=config.reporting.float_bucket_size,
+        pattern_sensitive=_pattern_sensitive(name),
     )
 
 
@@ -118,14 +138,18 @@ def api_items():
     db = get_db()
     images = ImageService(config, db)
     rows = db.items_summary()
+    flags = _pattern_flags()
     out = []
     for r in rows:
         # Resolve (and cache) the item image URL; cheap after first fetch.
         icon = images.get_or_fetch(r["market_hash_name"])
+        name = r["market_hash_name"]
+        pattern_sensitive = flags.get(name, bool(r["pattern_sensitive"]))
         out.append(
             {
-                "market_hash_name": r["market_hash_name"],
+                "market_hash_name": name,
                 "active": bool(r["active"]),
+                "pattern_sensitive": pattern_sensitive,
                 "icon_url": icon,
                 "total_sales": r["total_sales"],
                 "avg_price": r["avg_price"],
@@ -166,6 +190,7 @@ def api_aggregates():
         {
             "item": name,
             "icon_url": icon,
+            "pattern_sensitive": _pattern_sensitive(name),
             "period": period,
             "period_days": round(days, 2),
             "bucket_size": bucket,

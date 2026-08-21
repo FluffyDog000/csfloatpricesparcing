@@ -85,28 +85,41 @@ class Database:
             self.conn.execute("ALTER TABLE items ADD COLUMN icon_url TEXT")
         if "image_cached_at" not in cols:
             self.conn.execute("ALTER TABLE items ADD COLUMN image_cached_at TEXT")
+        if "pattern_sensitive" not in cols:
+            self.conn.execute(
+                "ALTER TABLE items ADD COLUMN pattern_sensitive INTEGER NOT NULL "
+                "DEFAULT 1"
+            )
 
     def close(self) -> None:
         self.conn.close()
 
     # -- items ---------------------------------------------------------------
 
-    def upsert_item(self, market_hash_name: str, active: bool = True) -> int:
-        """Ensure an item row exists; return its id. Updates active flag."""
+    def upsert_item(
+        self,
+        market_hash_name: str,
+        active: bool = True,
+        pattern_sensitive: bool = True,
+    ) -> int:
+        """Ensure an item row exists; return its id. Updates active flag and
+        the pattern_sensitive flag from the current config."""
         cur = self.conn.execute(
             "SELECT id FROM items WHERE market_hash_name = ?", (market_hash_name,)
         )
         row = cur.fetchone()
         if row:
             self.conn.execute(
-                "UPDATE items SET active = ? WHERE id = ?",
-                (1 if active else 0, row["id"]),
+                "UPDATE items SET active = ?, pattern_sensitive = ? WHERE id = ?",
+                (1 if active else 0, 1 if pattern_sensitive else 0, row["id"]),
             )
             self.conn.commit()
             return int(row["id"])
         cur = self.conn.execute(
-            "INSERT INTO items (market_hash_name, added_at, active) VALUES (?, ?, ?)",
-            (market_hash_name, utcnow_iso(), 1 if active else 0),
+            "INSERT INTO items (market_hash_name, added_at, active, pattern_sensitive) "
+            "VALUES (?, ?, ?, ?)",
+            (market_hash_name, utcnow_iso(), 1 if active else 0,
+             1 if pattern_sensitive else 0),
         )
         self.conn.commit()
         return int(cur.lastrowid)
@@ -263,6 +276,7 @@ class Database:
                 i.id                       AS item_id,
                 i.market_hash_name         AS market_hash_name,
                 i.active                   AS active,
+                i.pattern_sensitive        AS pattern_sensitive,
                 i.icon_url                 AS icon_url,
                 i.last_polled_at           AS last_polled_at,
                 COUNT(s.sale_id)           AS total_sales,

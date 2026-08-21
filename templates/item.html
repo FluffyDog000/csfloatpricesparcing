@@ -36,8 +36,12 @@
   </table>
 </section>
 
-<section>
-  <h2>Paint seeds</h2>
+<section id="seeds-section">
+  <h2 class="collapsible" id="seeds-toggle">
+    <span class="collapse-ind" id="seeds-ind"></span> Paint seeds
+    <span class="muted seeds-hint" id="seeds-hint" hidden>— паттерн для этого предмета не важен</span>
+  </h2>
+  <div id="seeds-wrap">
   <table class="stat" id="seeds-table">
     <thead>
       <tr>
@@ -50,10 +54,11 @@
     </thead>
     <tbody id="seeds-body"></tbody>
   </table>
+  </div>
 </section>
 
 <script id="cfg" type="application/json">
-{{ {"item": item_name, "bucket": default_bucket} | tojson }}
+{{ {"item": item_name, "bucket": default_bucket, "pattern_sensitive": pattern_sensitive} | tojson }}
 </script>
 {% endblock %}
 {% block scripts %}

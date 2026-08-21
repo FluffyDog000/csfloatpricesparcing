@@ -266,4 +266,20 @@ document.querySelectorAll("th.sortable").forEach((th) => {
   });
 });
 
+// Paint seeds section: collapsed by default when the item is not
+// pattern-sensitive (still openable by clicking the header). Set once at load;
+// auto-refresh never re-collapses, so a manual toggle sticks.
+let seedsCollapsed = CFG.pattern_sensitive === false;
+function applySeedsCollapse() {
+  document.getElementById("seeds-wrap").hidden = seedsCollapsed;
+  document.getElementById("seeds-ind").textContent = seedsCollapsed ? "▶" : "▼";
+  const hint = document.getElementById("seeds-hint");
+  if (hint) hint.hidden = !seedsCollapsed;
+}
+document.getElementById("seeds-toggle").addEventListener("click", () => {
+  seedsCollapsed = !seedsCollapsed;
+  applySeedsCollapse();
+});
+applySeedsCollapse();
+
 startAutoRefresh(refresh, 45000);

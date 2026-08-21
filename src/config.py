@@ -83,6 +83,10 @@ class ItemConfig:
     active: bool = True
     interval_min_minutes: float | None = None
     interval_max_minutes: float | None = None
+    # Whether the paint seed / pattern matters for this skin's price.
+    # Defaults to True (assume pattern matters until explicitly disabled).
+    # Only affects display / future logic, never data collection.
+    pattern_sensitive: bool = True
 
 
 @dataclass
@@ -179,13 +183,21 @@ def load_items(items_path: Path | None = None) -> list[ItemConfig]:
     for entry in raw_items:
         if isinstance(entry, str):
             result.append(ItemConfig(name=entry))
-        elif isinstance(entry, dict) and entry.get("name"):
-            result.append(
-                ItemConfig(
-                    name=str(entry["name"]),
-                    active=bool(entry.get("active", True)),
-                    interval_min_minutes=entry.get("interval_min_minutes"),
-                    interval_max_minutes=entry.get("interval_max_minutes"),
-                )
+            continue
+        if not isinstance(entry, dict):
+            continue
+        # Accept either "name" or "market_hash_name" as the item key.
+        name = entry.get("name") or entry.get("market_hash_name")
+        if not name:
+            continue
+        result.append(
+            ItemConfig(
+                name=str(name),
+                active=bool(entry.get("active", True)),
+                interval_min_minutes=entry.get("interval_min_minutes"),
+                interval_max_minutes=entry.get("interval_max_minutes"),
+                # Default True when the field is omitted.
+                pattern_sensitive=bool(entry.get("pattern_sensitive", True)),
             )
+        )
     return result

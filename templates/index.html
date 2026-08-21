@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Отслеживаемые предметы{% endblock %}
 {% block content %}
-<h1>Отслеживаемые предметы</h1>
+<div class="page-head">
+  <h1>Отслеживаемые предметы</h1>
+  <input type="search" id="search" class="search" placeholder="Поиск предмета…"
+         autocomplete="off" spellcheck="false">
+</div>
 <div class="cards" id="cards">
   <p class="muted">Загрузка…</p>
 </div>

@@ -32,7 +32,9 @@ class Collector:
         were removed. Returns a name -> ItemConfig map of active items."""
         active_names = [i.name for i in items if i.active]
         for it in items:
-            self.db.upsert_item(it.name, active=it.active)
+            self.db.upsert_item(
+                it.name, active=it.active, pattern_sensitive=it.pattern_sensitive
+            )
         self.db.deactivate_missing_items(active_names)
         return {i.name: i for i in items if i.active}
 
@@ -66,7 +68,9 @@ class Collector:
 
     def poll_item(self, item: ItemConfig) -> None:
         name = item.name
-        item_id = self.db.upsert_item(name, active=item.active)
+        item_id = self.db.upsert_item(
+            name, active=item.active, pattern_sensitive=item.pattern_sensitive
+        )
         had_before = self.db.item_sales_count(item_id) > 0
 
         try:

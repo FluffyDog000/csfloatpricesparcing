@@ -13,6 +13,12 @@ items:
     # active: true              # optional, default true
     # interval_min_minutes: 10  # optional per-item override
     # interval_max_minutes: 20  # optional per-item override
+    # pattern_sensitive: true   # optional, default true — does paint seed
+    #                           # matter for this skin's price? Set false for
+    #                           # skins where the seed is noise (the dashboard
+    #                           # then collapses the "Paint seeds" table).
 
-  # - name: "AK-47 | Redline (Field-Tested)"
+  # "name" and "market_hash_name" are both accepted as the item key:
+  # - market_hash_name: "AK-47 | Redline (Field-Tested)"
+  #   pattern_sensitive: false
   # - name: "★ Karambit | Doppler (Factory New)"
