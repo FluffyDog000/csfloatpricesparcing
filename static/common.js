@@ -24,6 +24,32 @@ async function postJSON(url, body, token) {
   return resp.json();
 }
 
+// Copy text to clipboard. Uses the async Clipboard API when available (secure
+// contexts: https or localhost) and falls back to a hidden textarea + execCommand
+// so it also works over plain http on a phone in the LAN.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 function money(v) {
   if (v === null || v === undefined) return "—";
   return "$" + Number(v).toFixed(2);

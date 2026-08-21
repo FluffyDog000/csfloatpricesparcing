@@ -172,6 +172,13 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .item-header { display: flex; gap: 16px; align-items: center; margin: 10px 0; }
 .item-icon { width: 120px; height: 90px; object-fit: contain;
              background: var(--panel2); border-radius: 8px; }
+.copy-btn {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 1px 7px; font-size: 13px; cursor: pointer;
+  vertical-align: middle; margin-left: 8px;
+}
+.copy-btn:hover { border-color: var(--accent); }
+.copy-btn.copied { color: var(--good); border-color: var(--good); }
 .overall { font-family: var(--mono); color: var(--muted); font-size: 13px; }
 .overall b { color: var(--text); }
 

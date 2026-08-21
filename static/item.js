@@ -269,6 +269,20 @@ document.querySelectorAll("th.sortable").forEach((th) => {
   });
 });
 
+// Copy the item name to the clipboard.
+const copyBtn = document.getElementById("copy-name");
+if (copyBtn) {
+  copyBtn.addEventListener("click", async () => {
+    const ok = await copyText(CFG.item);
+    copyBtn.textContent = ok ? "✔" : "✕";
+    copyBtn.classList.toggle("copied", ok);
+    setTimeout(() => {
+      copyBtn.textContent = "📋";
+      copyBtn.classList.remove("copied");
+    }, 1200);
+  });
+}
+
 // Paint seeds section collapse when the item is not pattern-sensitive.
 let seedsCollapsed = CFG.pattern_sensitive === false;
 function applySeedsCollapse() {
