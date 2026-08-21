@@ -190,24 +190,99 @@ python report.py --item "..." --period 30d --csv sales.csv
 
 ---
 
+## Веб-дашборд (часть 2)
+
+Веб-интерфейс поверх той же БД: карточки предметов, страница предмета с
+раскрывающимися таблицами float-бакетов и paint seed, живое автообновление.
+
+### Запуск дашборда
+
+```bash
+python webapp.py
+```
+Открой **http://localhost:5000**. Порт/адрес меняются в `config.yaml` (секция
+`web`) или через `CSFLOAT_WEB_PORT` / `CSFLOAT_WEB_HOST`.
+
+- **Главная** — карточки предметов (картинка, название, всего продаж, avg/min/max).
+- **Страница предмета** — переключатель периода (7д / 30д / всё время); таблицы
+  **Float buckets** и **Paint seeds**; клик по строке разворачивает список
+  конкретных продаж (float, seed, цена, дата, стикеры), подтягивается отдельным
+  AJAX-запросом. Данные сами обновляются каждые ~45с без перезагрузки; уже
+  раскрытые строки при этом не схлопываются. В шапке — «данные актуальны на
+  HH:MM» (краснеет, если сбор завис >1ч).
+
+### Картинки предметов
+
+Берутся через официальный листинг-эндпоинт `GET /api/v1/listings` и требуют
+`CSFLOAT_API_KEY` в `.env` (ключ из настроек аккаунта CSFloat). URL картинки
+кэшируется в таблице `items` (перезапрос не чаще, чем раз в `images.refresh_days`
+дней). **Без ключа дашборд работает** — вместо картинки показывается плейсхолдер.
+
+### Одновременный запуск сборщика и дашборда (Windows)
+
+Это два независимых процесса, работающих с одной SQLite-базой (включён режим
+**WAL**, поэтому чтение дашбордом и запись сборщиком не конфликтуют — ошибок
+`database is locked` не будет).
+
+**Вариант A — два окна.** В одном:
+```
+python run_collector.py
+```
+Во втором:
+```
+python webapp.py
+```
+
+**Вариант B — один `.bat`, оба процесса.** Создай `start_all.bat`:
+```bat
+@echo off
+cd /d "%~dp0"
+call .venv\Scripts\activate.bat
+start "CSFloat Collector" python run_collector.py
+start "CSFloat Dashboard" python webapp.py
+start "" http://localhost:5000
+```
+Двойной клик — поднимутся оба процесса в отдельных окнах и откроется браузер.
+
+**Вариант C — Task Scheduler.** Заведи два задания (или одно на `start_all.bat`)
+с триггером *At log on*, как описано выше в разделе про фоновый запуск сборщика.
+
+### JSON API (если захочешь дёргать данные сам)
+
+| Эндпоинт | Назначение |
+|---|---|
+| `GET /api/items` | список предметов со сводкой + `last_update` |
+| `GET /api/item/aggregates?item=…&period=7d&bucket=0.01` | overall + бакеты + seeds |
+| `GET /api/item/bucket_sales?item=…&bucket_lo=0.15&bucket_size=0.01&period=7d` | продажи внутри бакета |
+| `GET /api/item/seed_sales?item=…&seed=13&period=7d` | продажи по seed |
+| `GET /api/status` | timestamp последнего успешного сбора |
+
+`period`: `7d`, `30d`, `all`.
+
+---
+
 ## Структура проекта
 
 ```
 ├── run_collector.py        # запуск сборщика (постоянно или --once)
 ├── report.py               # генерация отчётов (CLI)
+├── webapp.py               # веб-дашборд (Flask)
 ├── items.yaml              # список предметов (редактируй руками)
-├── config.yaml             # интервалы, rate limit, бакеты (не секреты)
+├── config.yaml             # интервалы, rate limit, бакеты, web, images
 ├── .env.example            # шаблон секретов (cookie/токен, пути)
 ├── requirements.txt
 ├── src/
 │   ├── config.py           # загрузка .env + YAML
-│   ├── db.py               # SQLite: схема, вставка с дедупликацией, запросы
+│   ├── db.py               # SQLite: схема, дедуп, запросы, web-хелперы
 │   ├── models.py           # dataclass Sale
 │   ├── parser.py           # разбор ответа API → Sale (защитный маппинг полей)
 │   ├── csfloat_client.py   # HTTP-клиент: заголовки, rate limit, 429, 401/403
 │   ├── collector.py        # опрос, дедуп, детект пропусков, raw dump
 │   ├── report.py           # агрегация (бакеты/seed/период), CSV
+│   ├── images.py           # картинки предметов через /api/v1/listings + кэш
 │   └── logging_setup.py    # ротируемое логирование
+├── templates/              # Jinja2: base / index / item
+├── static/                 # style.css + vanilla JS (common/index/item)
 └── tests/
     └── test_parser.py      # тесты парсера и агрегации (без сети)
 ```

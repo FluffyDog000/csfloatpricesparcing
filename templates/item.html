@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ item_name }}{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">← ко всем предметам</a>
+
+<div class="item-header">
+  <img id="item-icon" class="item-icon" alt="" hidden>
+  <div>
+    <h1 id="item-name">{{ item_name }}</h1>
+    <div class="overall" id="overall"></div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="periods" id="periods">
+    <button data-period="7d">7 дней</button>
+    <button data-period="30d">30 дней</button>
+    <button data-period="all" class="active">Всё время</button>
+  </div>
+  <span class="muted" id="total"></span>
+</div>
+
+<section>
+  <h2>Float buckets</h2>
+  <table class="stat" id="buckets-table">
+    <thead>
+      <tr>
+        <th>bucket</th><th class="num">count</th><th class="num">avg</th>
+        <th class="num">median</th><th class="num">min</th><th class="num">max</th>
+      </tr>
+    </thead>
+    <tbody id="buckets-body"></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Paint seeds</h2>
+  <table class="stat" id="seeds-table">
+    <thead>
+      <tr>
+        <th>paint seed</th><th class="num">count</th><th class="num">avg</th>
+        <th class="num">min</th><th class="num">max</th>
+      </tr>
+    </thead>
+    <tbody id="seeds-body"></tbody>
+  </table>
+</section>
+
+<script id="cfg" type="application/json">
+{{ {"item": item_name, "bucket": default_bucket} | tojson }}
+</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='item.js') }}"></script>
+{% endblock %}

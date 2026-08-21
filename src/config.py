@@ -66,6 +66,18 @@ class ReportingConfig:
 
 
 @dataclass
+class WebConfig:
+    host: str
+    port: int
+
+
+@dataclass
+class ImagesConfig:
+    steam_cdn_prefix: str
+    refresh_days: int
+
+
+@dataclass
 class ItemConfig:
     name: str
     active: bool = True
@@ -78,6 +90,8 @@ class AppConfig:
     http: HttpConfig
     polling: PollingConfig
     reporting: ReportingConfig
+    web: WebConfig
+    images: ImagesConfig
     db_path: Path
     log_path: Path
     raw_dump_dir: Path
@@ -100,6 +114,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     rl = poll.get("rate_limit", {})
     http = cfg.get("http", {})
     rep = cfg.get("reporting", {})
+    web = cfg.get("web", {})
+    images = cfg.get("images", {})
 
     # Poll bounds: env overrides YAML if present.
     imin = float(_env("CSFLOAT_POLL_MIN_MINUTES") or poll.get("interval_min_minutes", 15))
@@ -134,6 +150,19 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         reporting=ReportingConfig(
             float_bucket_size=float(rep.get("float_bucket_size", 0.01)),
             default_period=str(rep.get("default_period", "7d")),
+        ),
+        web=WebConfig(
+            host=str(_env("CSFLOAT_WEB_HOST") or web.get("host", "127.0.0.1")),
+            port=int(_env("CSFLOAT_WEB_PORT") or web.get("port", 5000)),
+        ),
+        images=ImagesConfig(
+            steam_cdn_prefix=str(
+                images.get(
+                    "steam_cdn_prefix",
+                    "https://community.cloudflare.steamstatic.com/economy/image/",
+                )
+            ),
+            refresh_days=int(images.get("refresh_days", 7)),
         ),
         db_path=_abs(_env("CSFLOAT_DB_PATH", "data/csfloat_sales.db")),
         log_path=_abs(_env("CSFLOAT_LOG_PATH", "logs/collector.log")),

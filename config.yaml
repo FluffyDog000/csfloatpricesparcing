@@ -47,3 +47,17 @@ reporting:
   float_bucket_size: 0.01
   # Default reporting period if --period not given (e.g. 7d, 24h, 30d).
   default_period: "7d"
+
+web:
+  # Local dashboard bind address / port (http://localhost:5000 by default).
+  host: "127.0.0.1"
+  port: 5000
+
+images:
+  # Item images: CSFloat's official listings endpoint returns item.icon_url as
+  # a Steam economy image hash; the full URL is this CDN prefix + that hash.
+  # Requires CSFLOAT_API_KEY for /api/v1/listings. If no key, a placeholder is
+  # shown instead.
+  steam_cdn_prefix: "https://community.cloudflare.steamstatic.com/economy/image/"
+  # Re-fetch a cached image URL only after this many days.
+  refresh_days: 7

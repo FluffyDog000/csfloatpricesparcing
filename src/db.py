@@ -71,7 +71,20 @@ class Database:
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migrations (safe to run repeatedly). Adds columns the web
+        dashboard needs without touching existing data."""
+        cols = {
+            r["name"]
+            for r in self.conn.execute("PRAGMA table_info(items)").fetchall()
+        }
+        if "icon_url" not in cols:
+            self.conn.execute("ALTER TABLE items ADD COLUMN icon_url TEXT")
+        if "image_cached_at" not in cols:
+            self.conn.execute("ALTER TABLE items ADD COLUMN image_cached_at TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -239,3 +252,81 @@ class Database:
             params.append(paint_seed)
         q += " ORDER BY sold_at DESC"
         return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+
+    # -- web dashboard helpers ----------------------------------------------
+
+    def items_summary(self, active_only: bool = False) -> list[dict[str, Any]]:
+        """One row per item with a rollup for the item cards."""
+        where = "WHERE i.active = 1" if active_only else ""
+        q = f"""
+            SELECT
+                i.id                       AS item_id,
+                i.market_hash_name         AS market_hash_name,
+                i.active                   AS active,
+                i.icon_url                 AS icon_url,
+                i.last_polled_at           AS last_polled_at,
+                COUNT(s.sale_id)           AS total_sales,
+                AVG(s.price)               AS avg_price,
+                MIN(s.price)               AS min_price,
+                MAX(s.price)               AS max_price,
+                MAX(s.sold_at)             AS last_sold_at
+            FROM items i
+            LEFT JOIN sales s ON s.item_id = i.id
+            {where}
+            GROUP BY i.id
+            ORDER BY i.market_hash_name
+        """
+        out = []
+        for r in self.conn.execute(q).fetchall():
+            d = dict(r)
+            d["avg_price"] = round(d["avg_price"], 2) if d["avg_price"] is not None else None
+            out.append(d)
+        return out
+
+    def sales_in_float_range(
+        self,
+        item_id: int,
+        lo: float,
+        hi: float,
+        since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Sales whose float_value is in [lo, hi). Newest first."""
+        q = (
+            "SELECT * FROM sales WHERE item_id = ? "
+            "AND float_value >= ? AND float_value < ?"
+        )
+        params: list[Any] = [item_id, lo, hi]
+        if since_iso:
+            q += " AND sold_at >= ?"
+            params.append(since_iso)
+        q += " ORDER BY sold_at DESC"
+        return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+
+    def last_successful_poll(self, item_id: int | None = None) -> str | None:
+        """Timestamp of the most recent successful poll (global or per item)."""
+        if item_id is None:
+            row = self.conn.execute(
+                "SELECT MAX(polled_at) AS t FROM poll_log WHERE status = 'ok'"
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT MAX(polled_at) AS t FROM poll_log "
+                "WHERE status = 'ok' AND item_id = ?",
+                (item_id,),
+            ).fetchone()
+        return row["t"] if row else None
+
+    def get_icon(self, market_hash_name: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT icon_url, image_cached_at FROM items WHERE market_hash_name = ?",
+            (market_hash_name,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_icon(self, market_hash_name: str, icon_url: str | None) -> None:
+        self.conn.execute(
+            "UPDATE items SET icon_url = ?, image_cached_at = ? "
+            "WHERE market_hash_name = ?",
+            (icon_url, utcnow_iso(), market_hash_name),
+        )
+        self.conn.commit()

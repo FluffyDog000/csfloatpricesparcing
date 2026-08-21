@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Отслеживаемые предметы{% endblock %}
+{% block content %}
+<h1>Отслеживаемые предметы</h1>
+<div class="cards" id="cards">
+  <p class="muted">Загрузка…</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='index.js') }}"></script>
+{% endblock %}
