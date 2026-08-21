@@ -36,10 +36,14 @@ python -m venv .venv
 
 pip install -r requirements.txt
 
-copy .env.example .env      # Windows   (Linux/macOS: cp .env.example .env)
+copy .env.example .env               # Windows   (Linux/macOS: cp .env.example .env)
+copy items.example.yaml items.yaml   # начальный список предметов (необязательно)
 ```
 
-Затем заполни `.env` (см. следующий раздел) и `items.yaml`.
+Затем заполни `.env` (см. следующий раздел). `items.yaml` — **необязательный
+начальный seed**: он импортируется в базу только при первом запуске на пустой
+БД, дальше предметы редактируются через веб («Управление»). Файл `items.yaml`
+не в git (личный), шаблон — `items.example.yaml`.
 
 ---
 

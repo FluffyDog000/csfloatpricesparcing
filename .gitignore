@@ -27,3 +27,7 @@ env/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local tracked-items seed (personal; source of truth is the DB).
+# Template lives in items.example.yaml.
+items.yaml

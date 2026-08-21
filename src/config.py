@@ -181,8 +181,14 @@ def load_config(config_path: Path | None = None) -> AppConfig:
 
 
 def load_items(items_path: Path | None = None) -> list[ItemConfig]:
-    """Load the tracked-items list from items.yaml."""
-    data = _load_yaml(items_path or (ROOT / "items.yaml"))
+    """Load the initial tracked-items list. Prefers items.yaml (a local,
+    git-ignored file); falls back to the committed items.example.yaml template
+    on a fresh clone. Used only to seed an empty database — afterwards the DB is
+    the source of truth and this is ignored."""
+    if items_path is None:
+        candidate = ROOT / "items.yaml"
+        items_path = candidate if candidate.exists() else (ROOT / "items.example.yaml")
+    data = _load_yaml(items_path)
     raw_items = data.get("items", []) or []
     result: list[ItemConfig] = []
     for entry in raw_items:
