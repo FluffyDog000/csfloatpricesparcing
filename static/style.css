@@ -55,6 +55,27 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .back { color: var(--accent); text-decoration: none; font-size: 13px; }
 .back:hover { text-decoration: underline; }
 
+/* Folder navigation ------------------------------------------------------ */
+.folders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                gap: 14px; margin-top: 8px; }
+.folder-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 22px 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.folder-tile:hover { border-color: var(--accent); }
+.folder-tile.drop { border-color: var(--accent); background: var(--panel2); }
+.folder-tile .ficon { font-size: 42px; line-height: 1; }
+.folder-tile .fname { font-weight: 600; font-size: 14px; text-align: center;
+                      word-break: break-word; }
+.folder-tile .fcount { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+.items-head { display: flex; align-items: center; gap: 14px; margin: 4px 0 14px; }
+.items-head .back-link { color: var(--accent); cursor: pointer; font-size: 13px; }
+.items-head .back-link:hover { text-decoration: underline; }
+.items-head .crumb { font-weight: 600; font-size: 15px; }
+.card[draggable="true"] { cursor: default; }
+
 /* Cards ------------------------------------------------------------------ */
 .cards { margin-top: 8px; }
 .folder-head { font-size: 12px; color: var(--muted); text-transform: uppercase;
