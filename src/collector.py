@@ -25,18 +25,44 @@ class Collector:
         self.client = client
         self._dumped: set[str] = set()
 
-    # -- item registry -------------------------------------------------------
+    # -- item registry (source of truth = DB) --------------------------------
 
-    def sync_items(self, items: list[ItemConfig]) -> dict[str, ItemConfig]:
-        """Register items from items.yaml into the DB and deactivate any that
-        were removed. Returns a name -> ItemConfig map of active items."""
-        active_names = [i.name for i in items if i.active]
+    def seed_from_yaml_if_empty(self) -> int:
+        """One-time import of items.yaml into the DB when the items table is
+        empty (first run on a fresh DB). After that the DB is authoritative and
+        items.yaml is ignored — items are managed via the web UI. Returns the
+        number of items seeded."""
+        if self.db.items_count() > 0:
+            return 0
+        try:
+            items = load_items()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not read items.yaml for seeding: %s", exc)
+            return 0
         for it in items:
             self.db.upsert_item(
-                it.name, active=it.active, pattern_sensitive=it.pattern_sensitive
+                it.name,
+                active=it.active,
+                pattern_sensitive=it.pattern_sensitive,
+                interval_min_minutes=it.interval_min_minutes,
+                interval_max_minutes=it.interval_max_minutes,
             )
-        self.db.deactivate_missing_items(active_names)
-        return {i.name: i for i in items if i.active}
+        if items:
+            log.info("Seeded %d item(s) from items.yaml into the database.", len(items))
+        return len(items)
+
+    def active_items(self) -> dict[str, ItemConfig]:
+        """Current active items, read live from the DB (so web edits apply)."""
+        out: dict[str, ItemConfig] = {}
+        for r in self.db.get_active_items():
+            out[r["market_hash_name"]] = ItemConfig(
+                name=r["market_hash_name"],
+                active=True,
+                interval_min_minutes=r.get("interval_min_minutes"),
+                interval_max_minutes=r.get("interval_max_minutes"),
+                pattern_sensitive=bool(r.get("pattern_sensitive", 1)),
+            )
+        return out
 
     def interval_for(self, item: ItemConfig) -> float:
         """Random poll interval in seconds for this item (jitter)."""
@@ -68,9 +94,14 @@ class Collector:
 
     def poll_item(self, item: ItemConfig) -> None:
         name = item.name
-        item_id = self.db.upsert_item(
-            name, active=item.active, pattern_sensitive=item.pattern_sensitive
-        )
+        # DB is the source of truth: the item row already exists. Look it up
+        # (don't upsert — that would clobber folder/interval fields). If it was
+        # deleted meanwhile, create it so the poll still records.
+        item_id = self.db.get_item_id(name)
+        if item_id is None:
+            item_id = self.db.upsert_item(
+                name, active=item.active, pattern_sensitive=item.pattern_sensitive
+            )
         had_before = self.db.item_sales_count(item_id) > 0
 
         try:

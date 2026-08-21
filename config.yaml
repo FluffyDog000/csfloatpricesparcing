@@ -52,6 +52,9 @@ web:
   # Local dashboard bind address / port (http://localhost:5000 by default).
   host: "127.0.0.1"
   port: 5000
+  # Optional token for item-management endpoints. Prefer CSFLOAT_ADMIN_TOKEN in
+  # .env; leave null for localhost-only use.
+  admin_token: null
 
 images:
   # Item images: CSFloat's official listings endpoint returns item.icon_url as

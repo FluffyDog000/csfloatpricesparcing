@@ -16,8 +16,14 @@
     <button data-period="7d">7 дней</button>
     <button data-period="30d">30 дней</button>
     <button data-period="all" class="active">Всё время</button>
+    <button data-period="custom">Период…</button>
   </div>
   <span class="muted" id="total"></span>
+</div>
+<div class="daterange" id="daterange" hidden>
+  с <input type="date" id="date-from">
+  по <input type="date" id="date-to">
+  <button id="apply-range">Показать</button>
 </div>
 
 <section>
@@ -25,9 +31,9 @@
   <table class="stat" id="buckets-table">
     <thead>
       <tr>
-        <th>bucket</th><th class="num">count</th>
-        <th class="num sortable" data-table="buckets" title="Скорость продаж, нормализованная под период">
-          скорость<br>продаж/нед <span class="sort-ind"></span></th>
+        <th>bucket</th>
+        <th class="num sortable" data-table="buckets" title="Количество продаж за выбранный период">
+          count <span class="sort-ind"></span></th>
         <th class="num">avg</th>
         <th class="num">median</th><th class="num">min</th><th class="num">max</th>
       </tr>
@@ -45,9 +51,9 @@
   <table class="stat" id="seeds-table">
     <thead>
       <tr>
-        <th>paint seed</th><th class="num">count</th>
-        <th class="num sortable" data-table="seeds" title="Скорость продаж, нормализованная под период">
-          скорость<br>продаж/нед <span class="sort-ind"></span></th>
+        <th>paint seed</th>
+        <th class="num sortable" data-table="seeds" title="Количество продаж за выбранный период">
+          count <span class="sort-ind"></span></th>
         <th class="num">avg</th>
         <th class="num">min</th><th class="num">max</th>
       </tr>

@@ -1,23 +1,29 @@
-// Item page: aggregate tables with expandable rows + live polling.
-// Expanded rows survive refreshes (their keys are tracked and re-opened).
+// Item page: aggregate tables with expandable rows, count sort + colour,
+// period presets + custom date range, live polling that preserves open rows.
 
 const CFG = JSON.parse(document.getElementById("cfg").textContent);
 
-// --- velocity colour thresholds (relative to this item's own median) -------
-// Tweak these to change how aggressively fast/slow groups are highlighted.
-const VELOCITY_FAST_MULT = 1.5;   // >= median * this  -> green (fast)
-const VELOCITY_SLOW_MULT = 0.5;   // <  median * this  -> red   (slow)
-const VELOCITY_MIN_GROUPS = 4;    // need at least this many groups to colour
+// --- count colour thresholds (relative to this item's own median count) ----
+const COUNT_FAST_MULT = 1.5;   // >= median * this  -> green (много продаж)
+const COUNT_SLOW_MULT = 0.5;   // <  median * this  -> red   (мало)
+const COUNT_MIN_GROUPS = 4;    // need at least this many groups to colour
 
 const state = {
-  period: "all",
+  period: "all",                 // "7d" | "30d" | "all" | "custom"
+  from: null, to: null,          // for custom range (YYYY-MM-DD)
   bucketSize: CFG.bucket,
-  expandedBuckets: new Set(),   // keys: bucket_lo as string, e.g. "0.1500"
-  expandedSeeds: new Set(),     // keys: seed as string, e.g. "13" or "(none)"
+  expandedBuckets: new Set(),
+  expandedSeeds: new Set(),
   iconShown: false,
-  data: null,                   // last aggregates payload (for re-render on sort)
-  sort: { buckets: null, seeds: null },  // null | "asc" | "desc" (by velocity)
+  data: null,
+  sort: { buckets: null, seeds: null },   // null | "asc" | "desc" (by count)
 };
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
 
 function median(nums) {
   const xs = nums.filter((n) => n !== null && n !== undefined).slice().sort((a, b) => a - b);
@@ -26,27 +32,27 @@ function median(nums) {
   return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
 }
 
-// Colour class for a velocity value, relative to the item's own median.
-function velocityTier(v, med, groupCount) {
-  if (med === null || med <= 0 || groupCount < VELOCITY_MIN_GROUPS) return "";
-  if (v >= med * VELOCITY_FAST_MULT) return "vel-fast";
-  if (v < med * VELOCITY_SLOW_MULT) return "vel-slow";
+function countTier(v, med, groupCount) {
+  if (med === null || med <= 0 || groupCount < COUNT_MIN_GROUPS) return "";
+  if (v >= med * COUNT_FAST_MULT) return "vel-fast";
+  if (v < med * COUNT_SLOW_MULT) return "vel-slow";
   return "vel-mid";
 }
 
-// Apply the current velocity sort (if any) to a copy of the rows.
 function applySort(rows, table) {
   const dir = state.sort[table];
   if (!dir) return rows;
-  const sorted = rows.slice().sort((a, b) => (a.velocity ?? 0) - (b.velocity ?? 0));
+  const sorted = rows.slice().sort((a, b) => (a.count ?? 0) - (b.count ?? 0));
   if (dir === "desc") sorted.reverse();
   return sorted;
 }
 
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
+// Query fragment for the current time window (preset or custom range).
+function rangeParam() {
+  if (state.period === "custom" && (state.from || state.to)) {
+    return `from=${state.from || ""}&to=${state.to || ""}`;
+  }
+  return `period=${state.period === "custom" ? "all" : state.period}`;
 }
 
 // -- detail rendering -------------------------------------------------------
@@ -91,10 +97,13 @@ function numCell(v, cls) {
   return `<td class="num ${cls || ""}">${v === null || v === undefined ? "—" : Number(v).toFixed(2)}</td>`;
 }
 
-function makeAggRow(cells, colspan, kind, key, detailUrl, showSeed, openSet) {
+function countCell(v, med, groupCount) {
+  return `<td class="num vel ${countTier(v, med, groupCount)}">${v}</td>`;
+}
+
+function makeAggRow(cells, colspan, key, detailUrl, showSeed, openSet) {
   const tr = document.createElement("tr");
   tr.className = "agg-row";
-  tr.dataset.kind = kind;
   tr.dataset.key = key;
   tr.innerHTML = cells;
 
@@ -120,7 +129,6 @@ function makeAggRow(cells, colspan, kind, key, detailUrl, showSeed, openSet) {
   }
   tr.addEventListener("click", toggle);
 
-  // Restore previously-open state (and refresh its data).
   if (openSet.has(key)) {
     tr.classList.add("open");
     detailTr.hidden = false;
@@ -129,37 +137,30 @@ function makeAggRow(cells, colspan, kind, key, detailUrl, showSeed, openSet) {
   return [tr, detailTr];
 }
 
-function velCell(v, med, groupCount) {
-  const cls = velocityTier(v, med, groupCount);
-  const shown = v === null || v === undefined ? "—" : Number(v).toFixed(2);
-  return `<td class="num vel ${cls}">${shown}</td>`;
-}
-
 function renderBuckets(buckets) {
   const body = document.getElementById("buckets-body");
   body.innerHTML = "";
   if (!buckets.length) {
-    body.innerHTML = '<tr><td colspan="7" class="muted">нет данных</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="muted">нет данных</td></tr>';
     return;
   }
   const maxAvg = Math.max(...buckets.map((b) => b.avg_price ?? -Infinity));
   const minAvg = Math.min(...buckets.map((b) => b.avg_price ?? Infinity));
-  const med = median(buckets.map((b) => b.velocity));
+  const medCount = median(buckets.map((b) => b.count));
   applySort(buckets, "buckets").forEach((b) => {
     const lo = b.bucket.split("-")[0];
     const hiCls = b.avg_price === maxAvg ? "hi-max" : (b.avg_price === minAvg ? "hi-min" : "");
     const cells =
       `<td><span class="caret">▶</span> ${esc(b.bucket)}</td>` +
-      `<td class="num">${b.count}</td>` +
-      velCell(b.velocity, med, buckets.length) +
+      countCell(b.count, medCount, buckets.length) +
       numCell(b.avg_price, hiCls) +
       numCell(b.median_price) +
       numCell(b.min_price) +
       numCell(b.max_price);
     const url = () =>
       `/api/item/bucket_sales?item=${encodeURIComponent(CFG.item)}` +
-      `&bucket_lo=${lo}&bucket_size=${state.bucketSize}&period=${state.period}`;
-    const [tr, dtr] = makeAggRow(cells, 7, "bucket", lo, url, true, state.expandedBuckets);
+      `&bucket_lo=${lo}&bucket_size=${state.bucketSize}&${rangeParam()}`;
+    const [tr, dtr] = makeAggRow(cells, 6, "b:" + lo, url, true, state.expandedBuckets);
     body.appendChild(tr);
     body.appendChild(dtr);
   });
@@ -169,25 +170,24 @@ function renderSeeds(seeds) {
   const body = document.getElementById("seeds-body");
   body.innerHTML = "";
   if (!seeds.length) {
-    body.innerHTML = '<tr><td colspan="6" class="muted">нет данных</td></tr>';
+    body.innerHTML = '<tr><td colspan="5" class="muted">нет данных</td></tr>';
     return;
   }
   const maxAvg = Math.max(...seeds.map((s) => s.avg_price ?? -Infinity));
-  const med = median(seeds.map((s) => s.velocity));
+  const medCount = median(seeds.map((s) => s.count));
   applySort(seeds, "seeds").forEach((s) => {
     const key = String(s.paint_seed);
     const hiCls = s.avg_price === maxAvg ? "hi-max" : "";
     const cells =
       `<td><span class="caret">▶</span> ${esc(key)}</td>` +
-      `<td class="num">${s.count}</td>` +
-      velCell(s.velocity, med, seeds.length) +
+      countCell(s.count, medCount, seeds.length) +
       numCell(s.avg_price, hiCls) +
       numCell(s.min_price) +
       numCell(s.max_price);
     const url = () =>
       `/api/item/seed_sales?item=${encodeURIComponent(CFG.item)}` +
-      `&seed=${encodeURIComponent(key)}&period=${state.period}`;
-    const [tr, dtr] = makeAggRow(cells, 6, "seed", key, url, false, state.expandedSeeds);
+      `&seed=${encodeURIComponent(key)}&${rangeParam()}`;
+    const [tr, dtr] = makeAggRow(cells, 5, "s:" + key, url, false, state.expandedSeeds);
     body.appendChild(tr);
     body.appendChild(dtr);
   });
@@ -207,7 +207,7 @@ function updateSortIndicators() {
 async function refresh() {
   const url =
     `/api/item/aggregates?item=${encodeURIComponent(CFG.item)}` +
-    `&period=${state.period}&bucket=${state.bucketSize}`;
+    `&bucket=${state.bucketSize}&${rangeParam()}`;
   try {
     const data = await getJSON(url);
     renderStatus(data.last_update);
@@ -224,10 +224,7 @@ async function refresh() {
       ? `avg <b>${money(ov.avg_price)}</b> · median <b>${money(ov.median_price)}</b> · ` +
         `min ${money(ov.min_price)} · max ${money(ov.max_price)}`
       : "нет продаж за период";
-    const days = data.period_days;
-    document.getElementById("total").textContent =
-      `всего продаж: ${data.total_sales}` +
-      (days ? ` · норм. на ${Number(days).toFixed(days < 10 ? 1 : 0)} дн.` : "");
+    document.getElementById("total").textContent = `всего продаж: ${data.total_sales}`;
 
     state.data = data;
     renderBuckets(data.buckets);
@@ -238,7 +235,6 @@ async function refresh() {
   }
 }
 
-// Re-render tables from cached data (used after a sort toggle, no refetch).
 function rerender() {
   if (!state.data) return;
   renderBuckets(state.data.buckets);
@@ -246,17 +242,24 @@ function rerender() {
   updateSortIndicators();
 }
 
-// Period switcher
+// Period switcher (presets + custom range toggle)
 document.getElementById("periods").addEventListener("click", (ev) => {
   const btn = ev.target.closest("button");
   if (!btn) return;
   state.period = btn.dataset.period;
   document.querySelectorAll("#periods button").forEach((b) =>
     b.classList.toggle("active", b === btn));
+  document.getElementById("daterange").hidden = state.period !== "custom";
+  if (state.period !== "custom") refresh();
+});
+
+document.getElementById("apply-range").addEventListener("click", () => {
+  state.from = document.getElementById("date-from").value || null;
+  state.to = document.getElementById("date-to").value || null;
   refresh();
 });
 
-// Velocity column sort: click cycles desc -> asc -> off, per table.
+// Count column sort: click cycles desc -> asc -> off, per table.
 document.querySelectorAll("th.sortable").forEach((th) => {
   th.addEventListener("click", () => {
     const t = th.dataset.table;
@@ -266,9 +269,7 @@ document.querySelectorAll("th.sortable").forEach((th) => {
   });
 });
 
-// Paint seeds section: collapsed by default when the item is not
-// pattern-sensitive (still openable by clicking the header). Set once at load;
-// auto-refresh never re-collapses, so a manual toggle sticks.
+// Paint seeds section collapse when the item is not pattern-sensitive.
 let seedsCollapsed = CFG.pattern_sensitive === false;
 function applySeedsCollapse() {
   document.getElementById("seeds-wrap").hidden = seedsCollapsed;

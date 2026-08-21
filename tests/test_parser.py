@@ -7,7 +7,7 @@ from src import parser
 from src.report import (
     aggregate_buckets,
     aggregate_seeds,
-    period_days,
+    date_bounds_iso,
     period_to_since_iso,
 )
 
@@ -116,35 +116,24 @@ def test_aggregate_buckets_and_seeds():
     assert seed13["count"] == 2
 
 
-def test_velocity_normalization():
-    # 14 sales split across two buckets (10 + 4).
+def test_count_is_sales_in_period():
+    # count == number of sales in each group (= sales in the selected period).
     rows = [{"float_value": 0.151, "price": 100.0, "paint_seed": 1} for _ in range(10)]
     rows += [{"float_value": 0.161, "price": 100.0, "paint_seed": 2} for _ in range(4)]
-
-    # 7-day period => velocity == count per week (divisor days/7 == 1).
-    b7 = aggregate_buckets(rows, 0.01, days=7.0)
-    v = {b["bucket"][:6]: b["velocity"] for b in b7}
-    assert v["0.1500"] == 10.0
-    assert v["0.1600"] == 4.0
-
-    # 30-day period => same counts read as a lower weekly rate.
-    b30 = aggregate_buckets(rows, 0.01, days=30.0)
-    v30 = {b["bucket"][:6]: b["velocity"] for b in b30}
-    assert v30["0.1500"] == round(10 * 7 / 30, 2)  # ~2.33
-    # never negative, never absurdly large
-    assert all(b["velocity"] >= 0 for b in b30)
-
-    # seeds carry velocity too
-    s = aggregate_seeds(rows, days=7.0)
-    assert {row["paint_seed"]: row["velocity"] for row in s} == {1: 10.0, 2: 4.0}
+    b = {x["bucket"][:6]: x["count"] for x in aggregate_buckets(rows, 0.01)}
+    assert b["0.1500"] == 10
+    assert b["0.1600"] == 4
+    s = {x["paint_seed"]: x["count"] for x in aggregate_seeds(rows)}
+    assert s == {1: 10, 2: 4}
 
 
-def test_period_days_bounds():
-    assert period_days("7d", []) == 7.0
-    assert period_days("30d", []) == 30.0
-    # "all" with no rows falls back to the floor, never zero (no div-by-zero).
-    assert period_days("all", []) >= 1.0
-    assert period_days(None, []) >= 1.0
+def test_date_bounds_iso():
+    since, until = date_bounds_iso("2026-08-01", "2026-08-07")
+    assert since == "2026-08-01T00:00:00+00:00"
+    assert until == "2026-08-07T23:59:59+00:00"
+    assert date_bounds_iso(None, None) == (None, None)
+    s2, u2 = date_bounds_iso("2026-08-01", None)
+    assert s2 is not None and u2 is None
 
 
 def test_period_parsing():

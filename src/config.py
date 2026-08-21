@@ -69,6 +69,10 @@ class ReportingConfig:
 class WebConfig:
     host: str
     port: int
+    # Optional token gating the item-management (write) endpoints. When set,
+    # mutating requests must present it (X-Admin-Token header or ?token=).
+    # Recommended when the dashboard is exposed beyond localhost.
+    admin_token: str | None = None
 
 
 @dataclass
@@ -158,6 +162,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         web=WebConfig(
             host=str(_env("CSFLOAT_WEB_HOST") or web.get("host", "127.0.0.1")),
             port=int(_env("CSFLOAT_WEB_PORT") or web.get("port", 5000)),
+            admin_token=_env("CSFLOAT_ADMIN_TOKEN") or (web.get("admin_token") or None),
         ),
         images=ImagesConfig(
             steam_cdn_prefix=str(

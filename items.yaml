@@ -1,7 +1,11 @@
 # ============================================================================
-# List of items to track. Edit this file to add / remove items — no code
-# changes needed. Each entry is a CS2 market_hash_name exactly as it appears
-# on CSFloat.
+# INITIAL SEED ONLY. On the FIRST run against a fresh (empty) database, this
+# list is imported into the DB. After that the DATABASE is the source of truth
+# and this file is IGNORED — manage tracked items through the web dashboard
+# ("Управление": add / delete / pause / pattern / folders). Editing this file
+# later has no effect unless you start over with an empty database.
+#
+# Each entry is a CS2 market_hash_name exactly as it appears on CSFloat.
 #
 # Optional per-item override of the poll interval bounds (minutes). Use a
 # tighter interval for fast-selling items so the 40-sale window does not roll

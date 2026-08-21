@@ -10,6 +10,20 @@ async function getJSON(url) {
   return resp.json();
 }
 
+async function postJSON(url, body, token) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["X-Admin-Token"] = token;
+  const resp = await fetch(url, {
+    method: "POST", headers, body: JSON.stringify(body || {}),
+  });
+  if (!resp.ok) {
+    let msg = resp.statusText;
+    try { msg = (await resp.json()).error || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return resp.json();
+}
+
 function money(v) {
   if (v === null || v === undefined) return "—";
   return "$" + Number(v).toFixed(2);

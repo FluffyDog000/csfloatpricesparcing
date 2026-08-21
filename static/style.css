@@ -56,15 +56,23 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .back:hover { text-decoration: underline; }
 
 /* Cards ------------------------------------------------------------------ */
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-         gap: 14px; margin-top: 8px; }
+.cards { margin-top: 8px; }
+.folder-head { font-size: 12px; color: var(--muted); text-transform: uppercase;
+               letter-spacing: .05em; margin: 18px 0 8px; border-bottom: 1px solid var(--line);
+               padding-bottom: 4px; }
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+              gap: 14px; }
 .card {
-  display: flex; gap: 12px; padding: 12px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 10px; text-decoration: none;
-  color: var(--text); transition: border-color .15s, transform .05s;
+  display: flex; flex-direction: column; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px;
+  transition: border-color .15s;
 }
 .card:hover { border-color: var(--accent); }
-.card:active { transform: translateY(1px); }
+.card.paused { opacity: .6; }
+.card-main {
+  display: flex; gap: 12px; padding: 12px; text-decoration: none; color: var(--text);
+}
+.card-main:active { transform: translateY(1px); }
 .card img, .card .noimg {
   width: 84px; height: 64px; object-fit: contain; flex: 0 0 auto;
   background: var(--panel2); border-radius: 6px;
@@ -74,7 +82,47 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .card .name { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .card .meta { font-size: 12px; color: var(--muted); font-family: var(--mono); }
 .card .meta b { color: var(--text); font-weight: 600; }
-.card .inactive { color: var(--bad); font-size: 11px; }
+.card .inactive { color: var(--bad); font-size: 10px; font-weight: 600;
+                  border: 1px solid var(--bad); border-radius: 4px; padding: 0 4px; }
+.card .tag { color: var(--muted); font-size: 10px; border: 1px solid var(--line);
+             border-radius: 4px; padding: 0 4px; }
+.card-ctrls { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px;
+              border-top: 1px solid var(--line); }
+.cbtn {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+}
+.cbtn:hover { border-color: var(--accent); }
+.cbtn.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+/* Head tools + management panel ----------------------------------------- */
+.head-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.select, .input {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 10px; font-size: 13px;
+}
+.select:focus, .input:focus { outline: none; border-color: var(--accent); }
+.btn {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.active, .btn-primary { background: var(--accent); border-color: var(--accent);
+                            color: #06101c; font-weight: 600; }
+.manage-panel { background: var(--panel); border: 1px solid var(--line);
+                border-radius: 10px; padding: 12px; margin: 12px 0; }
+.add-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.add-form .input { flex: 1 1 260px; }
+.add-form .folder-input { flex: 0 1 200px; }
+.chk { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+.token-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.manage-msg { font-size: 12px; color: var(--good); margin-top: 8px; min-height: 16px; }
+.manage-msg.err { color: var(--bad); }
+.daterange { margin: 8px 0 4px; font-size: 13px; color: var(--muted); }
+.daterange input { background: var(--panel); color: var(--text);
+                   border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.daterange button { background: var(--accent); border: none; color: #06101c;
+                    border-radius: 6px; padding: 5px 12px; cursor: pointer; font-weight: 600; }
 
 /* Item header ------------------------------------------------------------ */
 .item-header { display: flex; gap: 16px; align-items: center; margin: 10px 0; }

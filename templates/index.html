@@ -3,14 +3,39 @@
 {% block content %}
 <div class="page-head">
   <h1>Отслеживаемые предметы</h1>
-  <input type="search" id="search" class="search" placeholder="Поиск предмета…"
-         autocomplete="off" spellcheck="false">
+  <div class="head-tools">
+    <input type="search" id="search" class="search" placeholder="Поиск предмета…"
+           autocomplete="off" spellcheck="false">
+    <select id="folder-filter" class="select" title="Фильтр по папке">
+      <option value="">Все папки</option>
+    </select>
+    <button id="manage-toggle" class="btn">Управление</button>
+  </div>
 </div>
+
+<div id="manage-panel" class="manage-panel" hidden>
+  <form id="add-form" class="add-form">
+    <input type="text" id="add-name" class="input" placeholder="market_hash_name нового предмета" autocomplete="off">
+    <input type="text" id="add-folder" class="input folder-input" placeholder="папка (необязательно)" autocomplete="off" list="folder-list">
+    <label class="chk"><input type="checkbox" id="add-pattern" checked> паттерн важен</label>
+    <button type="submit" class="btn btn-primary">Добавить</button>
+  </form>
+  <datalist id="folder-list"></datalist>
+  {% if admin_required %}
+  <div class="token-row">
+    <input type="password" id="admin-token" class="input" placeholder="admin token" autocomplete="off">
+    <span class="muted">требуется для изменений (сохраняется в браузере)</span>
+  </div>
+  {% endif %}
+  <div class="manage-msg" id="manage-msg"></div>
+</div>
+
 <div class="cards" id="cards">
   <p class="muted">Загрузка…</p>
 </div>
 {% endblock %}
 {% block scripts %}
+<script>window.ADMIN_REQUIRED = {{ 'true' if admin_required else 'false' }};</script>
 <script src="{{ url_for('static', filename='common.js') }}"></script>
 <script src="{{ url_for('static', filename='index.js') }}"></script>
 {% endblock %}
