@@ -39,17 +39,16 @@ def run_forever(collector: Collector, active: dict) -> None:
     heap: list[tuple[float, int, str]] = []
     seq = 0
 
-    # Spread the first poll of each item across the first interval so they do
-    # not all fire at t=0.
+    # Poll every item promptly on startup so there's an immediate first
+    # collection, but stagger them a few seconds apart (respecting the request
+    # spacing) so many items don't hit the API in one batch. The 15-30 min
+    # jitter applies only to SUBSEQUENT polls, scheduled after each poll below.
     names = list(active.keys())
     random.shuffle(names)
-    if names:
-        window = collector.interval_for(list(active.values())[0])  # rough spread
-        spread = max(window, 60.0)
-        step = spread / len(names)
-        for i, name in enumerate(names):
-            heapq.heappush(heap, (now + i * step + random.uniform(0, step), seq, name))
-            seq += 1
+    stagger = max(collector.config.polling.min_seconds_between_requests, 2.0)
+    for i, name in enumerate(names):
+        heapq.heappush(heap, (now + i * stagger + random.uniform(0, stagger), seq, name))
+        seq += 1
 
     log.info("Collector started for %d item(s). Ctrl+C to stop.", len(names))
     while True:
