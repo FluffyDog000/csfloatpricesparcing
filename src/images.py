@@ -29,12 +29,6 @@ class ImageService:
     def _needs_refresh(self, cached: dict | None) -> bool:
         if not cached:
             return True
-        if not cached.get("icon_url"):
-            # No URL cached yet, or a previous fetch failed — retry, but only
-            # once past the refresh window (avoid hammering on every load).
-            cached_at = cached.get("image_cached_at")
-            if not cached_at:
-                return True
         cached_at = cached.get("image_cached_at")
         if not cached_at:
             return True
@@ -45,6 +39,11 @@ class ImageService:
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
         age = datetime.now(timezone.utc) - when
+        if not cached.get("icon_url"):
+            # Previous fetch produced no URL (e.g. no API key yet, or a transient
+            # failure). Retry soon rather than waiting the full refresh window,
+            # so images appear shortly after an API key is added.
+            return age > timedelta(hours=1)
         return age > timedelta(days=self.config.images.refresh_days)
 
     def _build_url(self, icon_url: str) -> str:
