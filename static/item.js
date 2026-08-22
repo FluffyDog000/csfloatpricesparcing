@@ -233,6 +233,33 @@ async function refresh() {
   } catch (e) {
     document.getElementById("overall").textContent = "Ошибка: " + e.message;
   }
+  refreshLatest();
+}
+
+// Latest sales side panel (like CSFloat's "Latest Sales").
+async function refreshLatest() {
+  try {
+    const data = await getJSON(
+      `/api/item/latest_sales?item=${encodeURIComponent(CFG.item)}&limit=40&${rangeParam()}`
+    );
+    const body = document.getElementById("latest-body");
+    const cnt = document.getElementById("latest-count");
+    if (cnt) cnt.textContent = data.sales.length ? `(${data.sales.length})` : "";
+    if (!data.sales.length) {
+      body.innerHTML = '<tr><td colspan="4" class="muted">нет продаж</td></tr>';
+      return;
+    }
+    body.innerHTML = data.sales.map((s) => {
+      const est = s.sold_at_estimated ? " <span class='est'>≈</span>" : "";
+      return `<tr>
+        <td>${timeFmt(s.sold_at)}${est}</td>
+        <td class="num">${floatFmt(s.float_value)}</td>
+        <td class="num">${money(s.price)}</td>
+        <td class="num">${s.paint_seed ?? "—"}</td></tr>`;
+    }).join("");
+  } catch (e) {
+    /* leave previous content on transient error */
+  }
 }
 
 function rerender() {

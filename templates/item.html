@@ -29,6 +29,8 @@
   <button id="apply-range">Показать</button>
 </div>
 
+<div class="item-body">
+<div class="item-main">
 <section>
   <h2>Float buckets</h2>
   <table class="stat" id="buckets-table">
@@ -65,6 +67,18 @@
   </table>
   </div>
 </section>
+</div>
+
+<aside class="item-side">
+  <h2>Последние продажи <span class="muted" id="latest-count"></span></h2>
+  <table class="stat latest">
+    <thead>
+      <tr><th>время</th><th class="num">float</th><th class="num">цена</th><th class="num">seed</th></tr>
+    </thead>
+    <tbody id="latest-body"></tbody>
+  </table>
+</aside>
+</div>
 
 <script id="cfg" type="application/json">
 {{ {"item": item_name, "bucket": default_bucket, "pattern_sensitive": pattern_sensitive} | tojson }}

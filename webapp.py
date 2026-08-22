@@ -383,6 +383,20 @@ def api_bucket_sales():
     return jsonify({"sales": [_serialize_sale(r) for r in rows]})
 
 
+@app.route("/api/item/latest_sales")
+def api_latest_sales():
+    name = request.args.get("item", "")
+    item_id = _require_item(name)
+    db = get_db()
+    since, until, _ = _resolve_range()
+    try:
+        limit = min(max(int(request.args.get("limit", 40)), 1), 200)
+    except ValueError:
+        limit = 40
+    rows = db.query_sales(item_id, since_iso=since, until_iso=until)[:limit]
+    return jsonify({"sales": [_serialize_sale(r) for r in rows]})
+
+
 @app.route("/api/item/seed_sales")
 def api_seed_sales():
     name = request.args.get("item", "")
