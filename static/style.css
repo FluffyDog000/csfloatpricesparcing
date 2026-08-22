@@ -78,6 +78,24 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .back { color: var(--accent); text-decoration: none; font-size: 13px; }
 .back:hover { text-decoration: underline; }
 
+/* Filters + bulk bar ----------------------------------------------------- */
+.filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+           margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+.filters label { display: flex; align-items: center; gap: 6px; }
+.num-input { width: 90px; }
+.bulk-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 10px 12px; margin: 10px 0;
+            font-size: 13px; }
+.bulk-bar .btn { padding: 5px 10px; font-size: 12px; }
+.bulk-sep { flex: 0 0 1px; height: 20px; background: var(--line); }
+#bulk-count { font-family: var(--mono); color: var(--muted); margin-right: 4px; }
+
+.card .pick { position: absolute; top: 8px; right: 8px; z-index: 2; }
+.card .pick input { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent); }
+.card { position: relative; }
+.card.is-hidden { opacity: .55; border-style: dashed; }
+
 /* Load / health tiles ---------------------------------------------------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
          gap: 12px; margin: 12px 0 8px; }

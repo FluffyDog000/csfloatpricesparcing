@@ -312,6 +312,7 @@ def api_items():
                 "market_hash_name": name,
                 "active": bool(r["active"]),
                 "pattern_sensitive": bool(r["pattern_sensitive"]),
+                "hidden": bool(r["hidden"]),
                 "folder": folder,
                 "icon_url": icon,
                 "total_sales": r["total_sales"],
@@ -466,12 +467,52 @@ def api_update_item():
         kwargs["active"] = bool(data["active"])
     if "pattern_sensitive" in data:
         kwargs["pattern_sensitive"] = bool(data["pattern_sensitive"])
+    if "hidden" in data:
+        kwargs["hidden"] = bool(data["hidden"])
     if "folder" in data:
         kwargs["folder"] = (data.get("folder") or "").strip() or None
     if not get_db().update_item(name, **kwargs):
         abort(404, description=f"Item not tracked: {name}")
     log.info("Item updated via web: '%s' %s", name, kwargs)
     return jsonify({"ok": True})
+
+
+@app.route("/api/items/bulk", methods=["POST"])
+def api_bulk_items():
+    """Apply one action to many items: move to folder, hide/show, pause/resume,
+    or delete (with history)."""
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    names = data.get("names") or []
+    action = (data.get("action") or "").strip()
+    if not isinstance(names, list) or not names:
+        abort(400, description="names must be a non-empty list")
+
+    db = get_db()
+    done, missing = 0, 0
+    for raw in names:
+        name = str(raw).strip()
+        if not name:
+            continue
+        ok = False
+        if action == "delete":
+            ok = db.delete_item(name, purge_history=True)
+        elif action == "folder":
+            ok = db.update_item(name, folder=(data.get("folder") or "").strip() or None)
+        elif action == "hide":
+            ok = db.update_item(name, hidden=True)
+        elif action == "show":
+            ok = db.update_item(name, hidden=False)
+        elif action == "pause":
+            ok = db.update_item(name, active=False)
+        elif action == "resume":
+            ok = db.update_item(name, active=True)
+        else:
+            abort(400, description=f"Unknown action: {action}")
+        done += 1 if ok else 0
+        missing += 0 if ok else 1
+    log.info("Bulk '%s' via web on %d item(s) (%d applied)", action, len(names), done)
+    return jsonify({"ok": True, "applied": done, "missing": missing})
 
 
 @app.route("/api/items/delete", methods=["POST"])

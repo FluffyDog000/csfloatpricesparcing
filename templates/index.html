@@ -10,6 +10,34 @@
   </div>
 </div>
 
+<div class="filters">
+  <label>цена от <input type="number" id="price-min" class="input num-input" placeholder="0" min="0" step="1"></label>
+  <label>до <input type="number" id="price-max" class="input num-input" placeholder="∞" min="0" step="1"></label>
+  <label>сортировка
+    <select id="sort-by" class="select">
+      <option value="name">по названию</option>
+      <option value="price-desc">цена ↓</option>
+      <option value="price-asc">цена ↑</option>
+      <option value="sales-desc">продаж ↓</option>
+    </select>
+  </label>
+  <label class="chk"><input type="checkbox" id="show-hidden"> показать скрытые</label>
+  <span class="muted" id="filter-info"></span>
+</div>
+
+<div class="bulk-bar" id="bulk-bar" hidden>
+  <span id="bulk-count">выбрано: 0</span>
+  <button class="btn" data-bulk="all">выбрать всё</button>
+  <button class="btn" data-bulk="none">снять</button>
+  <span class="bulk-sep"></span>
+  <button class="btn" data-bulk="folder">📁 в папку</button>
+  <button class="btn" data-bulk="hide">🙈 скрыть</button>
+  <button class="btn" data-bulk="show">👁 показать</button>
+  <button class="btn" data-bulk="pause">⏸ пауза</button>
+  <button class="btn" data-bulk="resume">▶ возобновить</button>
+  <button class="btn danger-btn" data-bulk="delete">🗑 удалить</button>
+</div>
+
 <div id="manage-panel" class="manage-panel" hidden>
   <form id="add-form" class="add-form">
     <textarea id="add-name" class="input add-names" rows="3"

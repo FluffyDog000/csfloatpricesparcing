@@ -105,6 +105,10 @@ class Database:
             self.conn.execute("ALTER TABLE items ADD COLUMN interval_min_minutes REAL")
         if "interval_max_minutes" not in cols:
             self.conn.execute("ALTER TABLE items ADD COLUMN interval_max_minutes REAL")
+        if "hidden" not in cols:
+            self.conn.execute(
+                "ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
+            )
 
     def close(self) -> None:
         self.conn.close()
@@ -196,6 +200,7 @@ class Database:
         *,
         active: bool | None = None,
         pattern_sensitive: bool | None = None,
+        hidden: bool | None = None,
         folder: object = _UNSET,
     ) -> bool:
         """Patch selected fields of an item. Returns True if the item existed."""
@@ -211,6 +216,9 @@ class Database:
         if pattern_sensitive is not None:
             sets.append("pattern_sensitive = ?")
             params.append(1 if pattern_sensitive else 0)
+        if hidden is not None:
+            sets.append("hidden = ?")
+            params.append(1 if hidden else 0)
         if folder is not _UNSET:
             sets.append("folder = ?")
             params.append(folder or None)
@@ -415,6 +423,7 @@ class Database:
                 i.market_hash_name         AS market_hash_name,
                 i.active                   AS active,
                 i.pattern_sensitive        AS pattern_sensitive,
+                i.hidden                   AS hidden,
                 i.folder                   AS folder,
                 i.icon_url                 AS icon_url,
                 i.last_polled_at           AS last_polled_at,
