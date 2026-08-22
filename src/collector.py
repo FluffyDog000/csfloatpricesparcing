@@ -14,7 +14,7 @@ from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import AuthError, CSFloatClient, RateLimited
 from .db import Database, utcnow_iso
 from .images import ImageService
-from .parser import extract_records, parse_sales
+from .parser import extract_icon_hash, extract_records, parse_sales
 
 log = logging.getLogger("csfloat.collector")
 
@@ -210,3 +210,15 @@ class Collector:
             new_count=inserted, overlap_count=overlap, status="ok", note=note,
         )
         self.db.set_last_polled(item_id)
+
+        # Item image comes free with the sales data (item.icon_url) — no need
+        # for the rate-limited official listings API. Cache it if changed.
+        try:
+            icon_hash = extract_icon_hash(payload)
+            if icon_hash:
+                url = self.images._build_url(icon_hash)
+                cached = self.db.get_icon(name)
+                if not cached or cached.get("icon_url") != url:
+                    self.db.set_icon(name, url)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("icon extract skipped for '%s': %s", name, exc)

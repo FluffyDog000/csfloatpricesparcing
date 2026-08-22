@@ -63,6 +63,21 @@ def _first(obj: Any, paths: list[str]) -> Any:
     return None
 
 
+ICON_PATHS = ["item.icon_url", "icon_url"]
+
+
+def extract_icon_hash(payload: Any) -> str | None:
+    """Pull the Steam economy icon hash from the sales response (it lives on
+    each sale's item). Lets us show item images WITHOUT the rate-limited
+    official listings API — the sales endpoint already carries it."""
+    for rec in extract_records(payload):
+        if isinstance(rec, dict):
+            icon = _first(rec, ICON_PATHS)
+            if icon:
+                return str(icon)
+    return None
+
+
 # Candidate key paths for each field, most-likely first.
 PRICE_PATHS = ["price", "sale_price", "sold_price", "item.price"]
 FLOAT_PATHS = [
