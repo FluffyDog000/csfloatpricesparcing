@@ -33,7 +33,6 @@ from src.backup import bump_generation, restore
 from src.backup_service import export_db
 from src.config import load_config, load_items
 from src.db import Database
-from src.images import ImageService
 from src.logging_setup import setup_logging
 from src.report import (
     aggregate_buckets,
@@ -299,13 +298,12 @@ def item_page(name: str):
 @app.route("/api/items")
 def api_items():
     db = get_db()
-    images = ImageService(config, db)
     rows = db.items_summary()
     out = []
     folders: set[str] = set()
     for r in rows:
         name = r["market_hash_name"]
-        icon = images.get_or_fetch(name)
+        icon = r["icon_url"]        # cached by the collector; never fetched here
         folder = r["folder"] or ""
         if folder:
             folders.add(folder)
@@ -352,7 +350,8 @@ def api_aggregates():
         "min_price": round(min(prices), 2) if prices else None,
         "max_price": round(max(prices), 2) if prices else None,
     }
-    icon = ImageService(config, db).get_or_fetch(name)
+    meta_icon = db.get_icon(name)
+    icon = meta_icon.get("icon_url") if meta_icon else None
     return jsonify(
         {
             "item": name,

@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import AuthError, CSFloatClient, RateLimited
 from .db import Database, utcnow_iso
+from .images import ImageService
 from .parser import extract_records, parse_sales
 
 log = logging.getLogger("csfloat.collector")
@@ -24,6 +25,9 @@ class Collector:
         self.db = db
         self.client = client
         self._dumped: set[str] = set()
+        # Resolve item images here (spaced via the client) so the dashboard only
+        # reads cached URLs and never bursts the official API into a 429.
+        self.images = ImageService(config, db, client=client)
 
     def reopen_db(self) -> None:
         """Reopen the DB connection (after the file was swapped by a restore)."""
@@ -188,3 +192,10 @@ class Collector:
             new_count=inserted, overlap_count=overlap, status="ok", note=note,
         )
         self.db.set_last_polled(item_id)
+
+        # Resolve & cache the item image once (spaced via the client). Cheap
+        # after the first success (cached ~7 days); never breaks the poll.
+        try:
+            self.images.get_or_fetch(name)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("image resolve skipped for '%s': %s", name, exc)

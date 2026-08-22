@@ -21,10 +21,17 @@ from .db import Database
 log = logging.getLogger("csfloat.images")
 
 
+class _RateLimited(Exception):
+    """Official listings API returned 429 — transient, don't cache the miss."""
+
+
 class ImageService:
-    def __init__(self, config: AppConfig, db: Database):
+    def __init__(self, config: AppConfig, db: Database, client: object | None = None):
         self.config = config
         self.db = db
+        # Optional CSFloatClient; if given, image requests share its global
+        # request spacing so they can't burst the official API into a 429.
+        self.client = client
 
     def _needs_refresh(self, cached: dict | None) -> bool:
         if not cached:
@@ -68,6 +75,8 @@ class ImageService:
                 headers=headers,
                 timeout=self.config.http.timeout_seconds,
             )
+            if resp.status_code == 429:
+                raise _RateLimited()
             resp.raise_for_status()
             payload = resp.json()
         except (requests.RequestException, ValueError) as exc:
@@ -87,12 +96,23 @@ class ImageService:
         return self._build_url(str(icon))
 
     def get_or_fetch(self, market_hash_name: str) -> str | None:
-        """Return a cached image URL, fetching + caching if stale/missing."""
+        """Return a cached image URL, fetching + caching if stale/missing.
+        On a 429 the miss is NOT cached, so it is retried on the next pass."""
         cached = self.db.get_icon(market_hash_name)
         if not self._needs_refresh(cached):
             return cached.get("icon_url") if cached else None
 
-        url = self._fetch_icon_url(market_hash_name)
+        # Share the collector's global request spacing to avoid bursts → 429.
+        if self.client is not None and hasattr(self.client, "_respect_spacing"):
+            self.client._respect_spacing()
+
+        try:
+            url = self._fetch_icon_url(market_hash_name)
+        except _RateLimited:
+            log.warning("Image fetch rate-limited (429) for '%s'; will retry later",
+                        market_hash_name)
+            return cached.get("icon_url") if cached else None
+
         # Cache the result (even None marks "tried at this time" via timestamp).
         self.db.set_icon(market_hash_name, url)
         if url:
