@@ -78,6 +78,18 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .back { color: var(--accent); text-decoration: none; font-size: 13px; }
 .back:hover { text-decoration: underline; }
 
+/* Load / health tiles ---------------------------------------------------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+         gap: 12px; margin: 12px 0 8px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; }
+.tile-val { font-size: 24px; font-weight: 700; font-family: var(--mono); }
+.tile-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.tile-sub { font-size: 11px; color: var(--muted); margin-top: 6px; opacity: .8; }
+.tile.good .tile-val { color: var(--good); }
+.tile.warn .tile-val { color: #d0a53c; }
+.tile.bad  .tile-val { color: var(--bad); }
+
 /* Folder navigation ------------------------------------------------------ */
 .folders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
                 gap: 14px; margin-top: 8px; }

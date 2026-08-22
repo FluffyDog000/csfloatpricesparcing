@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Нагрузка{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">← к предметам</a>
+<h1>Нагрузка</h1>
+
+<div class="tiles" id="tiles"></div>
+
+<section>
+  <h2>Опросы за час / сутки</h2>
+  <table class="stat" id="stats-table">
+    <thead>
+      <tr><th>период</th><th class="num">опросов</th><th class="num">новых продаж</th>
+          <th class="num">429</th><th class="num">auth</th><th class="num">ошибки</th></tr>
+    </thead>
+    <tbody id="stats-body"></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Предупреждения о пропусках (за сутки)</h2>
+  <div id="warnings"></div>
+</section>
+
+<section>
+  <h2>Последние опросы</h2>
+  <table class="stat" id="recent-table">
+    <thead>
+      <tr><th>время</th><th>предмет</th><th class="num">fetched</th>
+          <th class="num">new</th><th class="num">overlap</th><th>статус</th></tr>
+    </thead>
+    <tbody id="recent-body"></tbody>
+  </table>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='load.js') }}"></script>
+{% endblock %}

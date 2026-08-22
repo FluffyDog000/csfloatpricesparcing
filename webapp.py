@@ -476,6 +476,49 @@ def api_delete_item():
 # Settings page + backup/restore
 # ---------------------------------------------------------------------------
 
+@app.route("/load")
+def load_page():
+    return render_template("load.html")
+
+
+@app.route("/api/load")
+def api_load():
+    from datetime import datetime, timedelta, timezone
+    db = get_db()
+    active = db.get_active_items()
+
+    # Estimated request rate from each item's average poll interval.
+    gmin = config.polling.interval_min_minutes
+    gmax = config.polling.interval_max_minutes
+    reqs_per_min = 0.0
+    for it in active:
+        lo = it.get("interval_min_minutes") or gmin
+        hi = it.get("interval_max_minutes") or gmax
+        avg_min = max((lo + hi) / 2.0, 0.1)
+        reqs_per_min += 1.0 / avg_min
+    budget = 60.0 / max(config.polling.min_seconds_between_requests, 0.01)
+
+    now = datetime.now(timezone.utc)
+    hour_iso = (now - timedelta(hours=1)).replace(microsecond=0).isoformat()
+    day_iso = (now - timedelta(hours=24)).replace(microsecond=0).isoformat()
+
+    return jsonify(
+        {
+            "active_items": len(active),
+            "total_items": db.items_count(),
+            "reqs_per_min_est": round(reqs_per_min, 2),
+            "budget_per_min": round(budget, 1),
+            "budget_used_pct": round(100.0 * reqs_per_min / budget, 1) if budget else None,
+            "min_seconds_between_requests": config.polling.min_seconds_between_requests,
+            "last_update": db.last_successful_poll(),
+            "stats_hour": db.poll_stats(hour_iso),
+            "stats_day": db.poll_stats(day_iso),
+            "gap_warnings": db.gap_warnings(day_iso, limit=50),
+            "recent": db.recent_poll_log(limit=30),
+        }
+    )
+
+
 @app.route("/settings")
 def settings_page():
     return render_template(

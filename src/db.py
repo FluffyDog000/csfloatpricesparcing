@@ -459,6 +459,46 @@ class Database:
         q += " ORDER BY sold_at DESC"
         return [dict(r) for r in self.conn.execute(q, params).fetchall()]
 
+    def poll_stats(self, since_iso: str) -> dict[str, Any]:
+        """Aggregate poll_log since a cutoff: counts per status + new sales."""
+        rows = self.conn.execute(
+            "SELECT status, COUNT(*) AS c, COALESCE(SUM(new_count), 0) AS n "
+            "FROM poll_log WHERE polled_at >= ? GROUP BY status",
+            (since_iso,),
+        ).fetchall()
+        by_status = {r["status"]: r["c"] for r in rows}
+        total = sum(by_status.values())
+        new_sales = sum(r["n"] for r in rows)
+        return {
+            "total": total,
+            "ok": by_status.get("ok", 0),
+            "rate_limited": by_status.get("rate_limited", 0),
+            "auth_error": by_status.get("auth_error", 0),
+            "error": by_status.get("error", 0),
+            "new_sales": new_sales,
+        }
+
+    def gap_warnings(self, since_iso: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT market_hash_name, polled_at, overlap_count, note FROM poll_log "
+            "WHERE note LIKE '%MISSED%' AND polled_at >= ? ORDER BY id DESC LIMIT ?",
+            (since_iso, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_poll_log(self, limit: int = 30) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT market_hash_name, polled_at, fetched_count, new_count, "
+            "overlap_count, status, note FROM poll_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def active_items_count(self) -> int:
+        return int(self.conn.execute(
+            "SELECT COUNT(*) AS c FROM items WHERE active = 1"
+        ).fetchone()["c"])
+
     def last_successful_poll(self, item_id: int | None = None) -> str | None:
         """Timestamp of the most recent successful poll (global or per item)."""
         if item_id is None:

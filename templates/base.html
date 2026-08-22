@@ -12,6 +12,7 @@
     <div class="topbar-right">
       <span class="status" id="status">—</span>
       <span class="timer" id="refresh-timer" title="До следующего автообновления страницы"></span>
+      <a class="navlink" href="{{ url_for('load_page') }}">📊 Нагрузка</a>
       <a class="navlink" href="{{ url_for('settings_page') }}">⚙ Настройки</a>
       {% if auth_enabled %}<a class="navlink" href="{{ url_for('logout') }}">Выйти</a>{% endif %}
     </div>
