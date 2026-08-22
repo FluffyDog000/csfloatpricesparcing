@@ -249,6 +249,19 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def items_needing_icon(self, cutoff_iso: str, limit: int = 1) -> list[str]:
+        """Active items with no cached image whose last attempt (if any) is
+        older than cutoff_iso. Oldest attempt first."""
+        rows = self.conn.execute(
+            "SELECT market_hash_name FROM items "
+            "WHERE active = 1 AND (icon_url IS NULL OR icon_url = '') "
+            "AND (image_cached_at IS NULL OR image_cached_at <= ?) "
+            "ORDER BY image_cached_at IS NOT NULL, image_cached_at "
+            "LIMIT ?",
+            (cutoff_iso, limit),
+        ).fetchall()
+        return [r["market_hash_name"] for r in rows]
+
     def get_item_meta(self, market_hash_name: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT active, pattern_sensitive, folder FROM items "

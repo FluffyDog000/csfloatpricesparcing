@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
@@ -28,6 +28,24 @@ class Collector:
         # Resolve item images here (spaced via the client) so the dashboard only
         # reads cached URLs and never bursts the official API into a 429.
         self.images = ImageService(config, db, client=client)
+
+    def fetch_one_missing_image(self) -> bool:
+        """Resolve at most ONE item image that still has no cached URL. Called
+        as a slow background trickle so the official listings API is never
+        bursted. Returns True if an item was attempted."""
+        if not self.config.http.api_key:
+            return False
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
+            microsecond=0
+        ).isoformat()
+        names = self.db.items_needing_icon(cutoff, limit=1)
+        if not names:
+            return False
+        try:
+            self.images.get_or_fetch(names[0])
+        except Exception as exc:  # noqa: BLE001
+            log.debug("image trickle skipped for '%s': %s", names[0], exc)
+        return True
 
     def reopen_db(self) -> None:
         """Reopen the DB connection (after the file was swapped by a restore)."""
@@ -192,10 +210,3 @@ class Collector:
             new_count=inserted, overlap_count=overlap, status="ok", note=note,
         )
         self.db.set_last_polled(item_id)
-
-        # Resolve & cache the item image once (spaced via the client). Cheap
-        # after the first success (cached ~7 days); never breaks the poll.
-        try:
-            self.images.get_or_fetch(name)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("image resolve skipped for '%s': %s", name, exc)

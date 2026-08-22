@@ -34,6 +34,9 @@ log = logging.getLogger("csfloat.main")
 
 # How often the running collector re-reads the tracked-item list from the DB.
 RESYNC_SECONDS = 30.0
+# Gentle image trickle: resolve at most one item image this often, so the
+# official listings API is never bursted into a rate limit.
+IMAGE_TRICKLE_SECONDS = 45.0
 
 
 def run_once(collector: Collector) -> None:
@@ -70,10 +73,16 @@ def run_forever(collector: Collector) -> None:
 
     log.info("Collector started for %d item(s). Ctrl+C to stop.", len(names))
     last_resync = time.monotonic()
+    last_image = 0.0
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
         backup.tick()
+
+        # Slow image trickle (one item at a time) to avoid the listings 429.
+        if time.monotonic() - last_image >= IMAGE_TRICKLE_SECONDS:
+            last_image = time.monotonic()
+            collector.fetch_one_missing_image()
 
         # If the web UI restored the DB, its generation marker changed — reopen.
         gen = read_generation(collector.config.db_path)
