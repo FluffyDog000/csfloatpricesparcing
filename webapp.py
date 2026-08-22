@@ -420,6 +420,29 @@ def api_add_item():
     return jsonify({"ok": True})
 
 
+@app.route("/api/items/add_bulk", methods=["POST"])
+def api_add_bulk():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    names = data.get("names") or []
+    if not isinstance(names, list):
+        abort(400, description="names must be a list")
+    folder = (data.get("folder") or "").strip() or None
+    pattern = bool(data.get("pattern_sensitive", True))
+    db = get_db()
+    added, skipped = 0, 0
+    seen: set[str] = set()
+    for raw in names:
+        name = (str(raw) or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        db.add_item(name, folder=folder, pattern_sensitive=pattern)
+        added += 1
+    log.info("Bulk add via web: %d item(s), folder=%s", added, folder)
+    return jsonify({"ok": True, "added": added, "skipped": skipped})
+
+
 @app.route("/api/items/update", methods=["POST"])
 def api_update_item():
     _require_admin()

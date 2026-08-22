@@ -267,21 +267,23 @@ document.getElementById("cards").addEventListener("click", (ev) => {
   doAction(btn.dataset.act, btn.dataset.name);
 });
 
-// Add item — respects the current folder when opened inside a folder.
+// Add one or many items (one market_hash_name per line). Respects the current
+// folder when opened inside a folder.
 document.getElementById("add-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const name = document.getElementById("add-name").value.trim();
-  if (!name) { msg("Введи market_hash_name", true); return; }
+  const raw = document.getElementById("add-name").value;
+  const names = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!names.length) { msg("Введи хотя бы один market_hash_name", true); return; }
   let folder = document.getElementById("add-folder").value.trim();
   if (!folder && state.view === "items" && state.folder && state.folder !== OTHER) {
-    folder = state.folder;  // default new item into the folder you're viewing
+    folder = state.folder;  // default new items into the folder you're viewing
   }
   const pattern = document.getElementById("add-pattern").checked;
   try {
-    await postJSON("/api/items/add",
-      { market_hash_name: name, folder, pattern_sensitive: pattern }, token());
+    const res = await postJSON("/api/items/add_bulk",
+      { names, folder, pattern_sensitive: pattern }, token());
     document.getElementById("add-name").value = "";
-    msg(`«${name}» добавлен${folder ? " → " + folder : ""} — сборщик подхватит в ~30с`);
+    msg(`Добавлено: ${res.added}${folder ? " → " + folder : ""} — сборщик подхватит в ~30с`);
     await load();
   } catch (e) {
     msg("Ошибка: " + e.message, true);

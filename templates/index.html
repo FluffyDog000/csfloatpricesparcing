@@ -12,10 +12,14 @@
 
 <div id="manage-panel" class="manage-panel" hidden>
   <form id="add-form" class="add-form">
-    <input type="text" id="add-name" class="input" placeholder="market_hash_name нового предмета" autocomplete="off">
-    <input type="text" id="add-folder" class="input folder-input" placeholder="папка (необязательно)" autocomplete="off" list="folder-list">
-    <label class="chk"><input type="checkbox" id="add-pattern" checked> паттерн важен</label>
-    <button type="submit" class="btn btn-primary">Добавить</button>
+    <textarea id="add-name" class="input add-names" rows="3"
+      placeholder="market_hash_name — по одному в строке (можно вставить сразу несколько)"
+      autocomplete="off" spellcheck="false"></textarea>
+    <div class="add-row">
+      <input type="text" id="add-folder" class="input folder-input" placeholder="папка (необязательно)" autocomplete="off" list="folder-list">
+      <label class="chk"><input type="checkbox" id="add-pattern" checked> паттерн важен</label>
+      <button type="submit" class="btn btn-primary">Добавить</button>
+    </div>
   </form>
   <datalist id="folder-list"></datalist>
   {% if admin_required %}
