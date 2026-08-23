@@ -600,3 +600,24 @@ def test_edge_block_detection_reads_who_answered():
     assert not client._edge_block(
         _StubResp(403, '{"error": "no"}', {"Content-Type": "application/json"}))
     assert not client._edge_block(_StubResp(200, '[{"price": 1}]', {}))
+
+
+def test_usage_block_reports_actual_alongside_forecast():
+    """The forecast says what the settings imply; the counter says what really
+    went out. They diverge after a settings change or downtime, and that gap is
+    the useful signal."""
+    import webapp
+
+    class FakeDB:
+        def response_size_stats(self, since):
+            return {"avg_bytes": 60000.0, "samples": 100, "total_bytes": 6_000_000}
+
+    out = webapp._usage_forecast(FakeDB(), 2.0, "2026-08-22T00:00:00+00:00",
+                                 {"total": 1200})
+    assert out["requests_day_actual"] == 1200
+    assert out["requests_per_day"] == 2880          # 2/min forecast
+    assert out["traffic_day_actual_mb"] == round(6_000_000 / 1_048_576, 1)
+
+    # No stats passed (or nothing polled yet) must not blow up.
+    empty = webapp._usage_forecast(FakeDB(), 2.0, "2026-08-22T00:00:00+00:00")
+    assert empty["requests_day_actual"] == 0

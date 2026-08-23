@@ -643,6 +643,7 @@ def api_load():
             cooldown_until = None
 
     stats_hour = db.poll_stats(hour_iso)
+    stats_day = db.poll_stats(day_iso)
     last_ok = db.last_successful_poll()
     stale_min = None
     if last_ok:
@@ -698,7 +699,7 @@ def api_load():
             "pace_multiplier": round(pace_mult, 2),
             "pace_max": PACE_MAX,
             "avg_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
-            **_usage_forecast(db, reqs_per_min, day_iso),
+            **_usage_forecast(db, reqs_per_min, day_iso, stats_day),
             "last_429_headers": db.get_setting("last_429_headers") or "",
             "last_429_body": db.get_setting("last_429_body") or "",
             "last_429_at": db.get_setting("last_429_at") or None,
@@ -710,14 +711,15 @@ def api_load():
             "stale_minutes": stale_min,
             "last_update": last_ok,
             "stats_hour": stats_hour,
-            "stats_day": db.poll_stats(day_iso),
+            "stats_day": stats_day,
             "gap_warnings": db.gap_warnings(day_iso, limit=50),
             "recent": db.recent_poll_log(limit=30),
         }
     )
 
 
-def _usage_forecast(db, reqs_per_min: float, day_iso: str) -> dict:
+def _usage_forecast(db, reqs_per_min: float, day_iso: str,
+                    stats_day: dict | None = None) -> dict:
     """What the current schedule costs: requests and traffic per day/month.
 
     Request volume comes from the same per-item intervals the collector uses.
@@ -730,7 +732,12 @@ def _usage_forecast(db, reqs_per_min: float, day_iso: str) -> dict:
 
     per_day = reqs_per_min * 1440.0
     bytes_day = per_day * avg_bytes
+    # What the schedule predicts vs what actually went out: they diverge after a
+    # settings change, a restart, or a stretch of downtime.
+    actual = stats_day.get("total", 0) if stats_day else 0
     return {
+        "requests_day_actual": actual,
+        "traffic_day_actual_mb": round(sizes["total_bytes"] / 1_048_576, 1),
         "requests_per_day": round(per_day),
         "requests_per_month": round(per_day * 30),
         "avg_response_bytes": round(avg_bytes),

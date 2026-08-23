@@ -401,15 +401,31 @@ function renderUsage(d) {
         : `каждый предмет раз в ${Math.round(d.avg_interval_minutes)} мин`)
     : "";
 
+  // Forecast vs reality: a gap means the settings changed recently, the
+  // collector was down, or a backoff is holding it below plan.
+  const plan = d.requests_per_day;
+  const fact = d.requests_day_actual;
+  let factNote = "фактически отправлено за последние 24 ч";
+  if (plan > 0 && fact > 0) {
+    const ratio = fact / plan;
+    if (ratio < 0.7) factNote += ` — ниже плана (${Math.round(ratio * 100)}%)`;
+    else if (ratio > 1.3) factNote += ` — выше плана (${Math.round(ratio * 100)}%)`;
+  } else if (!fact) {
+    factNote = "за сутки не было ни одного запроса";
+  }
+
   body.innerHTML =
-    usageRow("запросов в сутки", d.requests_per_day, perItem) +
-    usageRow("запросов в месяц", d.requests_per_month, quota) +
+    usageRow("запросов за сутки (факт)", fact, factNote) +
+    usageRow("трафик за сутки (факт)", fmtMb(d.traffic_day_actual_mb),
+             "реально скачано за 24 ч") +
+    usageRow("запросов в сутки (план)", d.requests_per_day, perItem) +
+    usageRow("запросов в месяц (план)", d.requests_per_month, quota) +
     usageRow("средний ответ", fmtSize(d.avg_response_bytes),
              d.response_measured
                ? `замерено по ${d.response_samples} опросам за сутки`
                : "оценка — реальных замеров пока нет") +
-    usageRow("трафик в сутки", fmtMb(d.traffic_day_mb), "") +
-    usageRow("трафик в месяц", fmtMb(d.traffic_month_mb),
+    usageRow("трафик в сутки (план)", fmtMb(d.traffic_day_mb), "") +
+    usageRow("трафик в месяц (план)", fmtMb(d.traffic_month_mb),
              "столько спишет прокси с тарификацией по трафику");
 
   const parts = [`${d.active_items} активных предм.`];

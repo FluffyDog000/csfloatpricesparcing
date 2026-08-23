@@ -510,11 +510,13 @@ class Database:
     def response_size_stats(self, since_iso: str) -> dict[str, Any]:
         """Average measured response size since a cutoff, for traffic estimates."""
         row = self.conn.execute(
-            "SELECT AVG(response_bytes) AS avg_bytes, COUNT(response_bytes) AS n "
-            "FROM poll_log WHERE polled_at >= ? AND response_bytes IS NOT NULL",
+            "SELECT AVG(response_bytes) AS avg_bytes, COUNT(response_bytes) AS n, "
+            "COALESCE(SUM(response_bytes), 0) AS total FROM poll_log "
+            "WHERE polled_at >= ? AND response_bytes IS NOT NULL",
             (since_iso,),
         ).fetchone()
-        return {"avg_bytes": row["avg_bytes"], "samples": row["n"] or 0}
+        return {"avg_bytes": row["avg_bytes"], "samples": row["n"] or 0,
+                "total_bytes": row["total"] or 0}
 
     def recent_poll_log(self, limit: int = 30) -> list[dict[str, Any]]:
         rows = self.conn.execute(
