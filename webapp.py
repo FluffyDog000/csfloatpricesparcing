@@ -676,6 +676,7 @@ def api_load():
             "config_interval_min": config.polling.interval_min_minutes,
             "config_interval_max": config.polling.interval_max_minutes,
             "config_spacing": config.polling.min_seconds_between_requests,
+            "routes": json.loads(db.get_setting("proxy_state") or "[]"),
             "quota_limit": _num_setting(db, "rl_limit"),
             "quota_remaining": _num_setting(db, "rl_remaining"),
             "quota_reset": _num_setting(db, "rl_reset"),

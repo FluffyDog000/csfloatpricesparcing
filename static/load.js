@@ -199,6 +199,7 @@ async function refresh() {
     renderPace(d);
     document.getElementById("stats-body").innerHTML =
       statsRow("за час", d.stats_hour) + statsRow("за сутки", d.stats_day);
+    renderRoutes(d.routes || []);
     renderWarnings(d.gap_warnings);
     renderRecent(d.recent);
   } catch (e) {
@@ -257,3 +258,25 @@ document.getElementById("reset-pace-mult").addEventListener("click", async () =>
     paceMsg("Ошибка: " + e.message, true);
   }
 });
+
+// Per-route quota (only shown when proxies are configured).
+function renderRoutes(routes) {
+  const sec = document.getElementById("routes-section");
+  if (!sec) return;
+  sec.hidden = routes.length < 2;          // single direct route: nothing to compare
+  if (sec.hidden) return;
+  document.getElementById("routes-body").innerHTML = routes.map((r) => {
+    let state = "готов", cls = "";
+    if (r.parked_sec > 0) { state = `недоступен ${fmtLeft(r.parked_sec)}`; cls = "hi-min"; }
+    else if (r.cooldown_sec > 0) { state = `пауза ${fmtLeft(r.cooldown_sec)}`; cls = "hi-min"; }
+    else if (!r.available) { state = "квота исчерпана"; cls = "hi-min"; }
+    const reset = r.reset
+      ? timeFmt(new Date(r.reset * 1000).toISOString()) : "—";
+    return `<tr>
+      <td>${esc(r.key)}${r.direct ? " (сервер)" : ""}</td>
+      <td class="num">${r.remaining ?? "—"}</td>
+      <td class="num">${r.limit ?? "—"}</td>
+      <td>${reset}</td>
+      <td class="${cls}">${state}</td></tr>`;
+  }).join("");
+}

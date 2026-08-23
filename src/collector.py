@@ -254,6 +254,18 @@ class Collector:
 
     def store_rate_state(self) -> None:
         """Persist the latest quota snapshot so the dashboard can show it."""
+        pool = getattr(self.client, "pool", None)
+        if pool is not None:
+            self.db.set_setting("proxy_state", pool.to_json())
+            total = pool.total_remaining()
+            if total is not None and len(pool.routes) > 1:
+                # With several routes the usable budget is their sum.
+                self.db.set_setting("rl_remaining", str(total))
+                reset = pool.earliest_reset()
+                if reset:
+                    self.db.set_setting("rl_reset", str(reset))
+                self.db.set_setting("rl_seen_at", utcnow_iso())
+                return
         st = getattr(self.client, "rate_state", None)
         if not st:
             return

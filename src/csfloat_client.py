@@ -17,6 +17,7 @@ from urllib.parse import quote
 import requests
 
 from .config import HttpConfig, PollingConfig
+from .proxies import ProxyPool
 
 log = logging.getLogger("csfloat.client")
 
@@ -48,6 +49,9 @@ class CSFloatClient:
         self.last_429_body: str = ""
         # Latest quota snapshot from x-ratelimit-* headers.
         self.rate_state: dict[str, object] = {}
+        # One budget per outgoing IP: the direct connection plus any proxies.
+        self.pool = ProxyPool(list(http.proxies), use_direct=http.use_direct)
+        self.last_route: str | None = None
         self.session = requests.Session()
         self.session.headers.update(self._base_headers())
 
@@ -75,8 +79,22 @@ class CSFloatClient:
             self._consecutive_429 = max(consecutive, 1)
 
     def cooldown_remaining(self) -> float:
-        """Seconds left of the global 429 cooldown (0 when free to poll)."""
+        """Seconds before polling may resume. With proxies configured this is
+        per-route: as long as one route still has quota, we keep going."""
+        if len(self.pool.routes) > 1:
+            return self.pool.wait_seconds()
         return max(0.0, self._cooldown_until - time.monotonic())
+
+    def _feed_pool(self, route, resp) -> None:
+        def num(name: str):
+            raw = resp.headers.get(name)
+            try:
+                return int(float(raw)) if raw is not None else None
+            except (TypeError, ValueError):
+                return None
+        self.pool.record_headers(route, num("x-ratelimit-limit"),
+                                 num("x-ratelimit-remaining"),
+                                 num("x-ratelimit-reset"))
 
     def _enter_cooldown(self, retry_after: float | None = None) -> float:
         """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped)."""
@@ -133,17 +151,28 @@ class CSFloatClient:
     def fetch_latest_sales(self, market_hash_name: str) -> object:
         """Fetch and return the parsed JSON body for an item's latest sales.
 
-        Raises AuthError on 401/403, RateLimited if 429 exhausts retries."""
+        Picks the outgoing route (direct or a proxy) with the most quota left.
+        Raises AuthError on 401/403, RateLimited when the route is limited."""
         url = self.sales_url(market_hash_name)
         rl = self.polling.rate_limit
         backoff = rl.base_backoff_seconds
         attempt = 0
 
         while True:
+            route = self.pool.pick()
+            if route is None:
+                wait = self.pool.wait_seconds()
+                self._cooldown_until = time.monotonic() + min(wait, 300.0)
+                raise RateLimited(
+                    f"all routes spent or cooling; next free in {wait / 60:.1f} min"
+                )
+            self.last_route = route.key
             self._respect_spacing()
             try:
-                resp = self.session.get(url, timeout=self.http.timeout_seconds)
+                resp = self.session.get(url, timeout=self.http.timeout_seconds,
+                                        proxies=route.proxies())
             except requests.RequestException as exc:
+                self.pool.record_failure(route, exc)
                 attempt += 1
                 if attempt > rl.max_retries:
                     raise
@@ -172,7 +201,9 @@ class CSFloatClient:
                     except ValueError:
                         retry_after = None
                 self._capture_rate_headers(resp)
+                self._feed_pool(route, resp)
                 wait = self._enter_cooldown(retry_after)
+                self.pool.record_429(route, wait)
                 self.last_429_headers = {
                     k: v for k, v in resp.headers.items()
                     if k.lower().startswith(("retry-after", "x-ratelimit", "ratelimit",
@@ -192,6 +223,8 @@ class CSFloatClient:
                 )
 
             self._capture_rate_headers(resp)
+            self._feed_pool(route, resp)
             resp.raise_for_status()
+            self.pool.record_success(route)
             self._consecutive_429 = 0  # healthy response clears the escalation
             return resp.json()

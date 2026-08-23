@@ -13,6 +13,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from .proxies import parse_proxy_list
+
 # Project root = parent of the "src" directory.
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -41,6 +43,10 @@ class HttpConfig:
     cookie: str | None
     authorization: str | None
     api_key: str | None
+    # Optional proxies. CSFloat's quota is counted per IP, so each proxy adds
+    # its own budget; the pool tracks them separately.
+    proxies: list[str] = field(default_factory=list)
+    use_direct: bool = True
 
 
 @dataclass
@@ -158,6 +164,8 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             cookie=_env("CSFLOAT_COOKIE"),
             authorization=_env("CSFLOAT_AUTHORIZATION"),
             api_key=_env("CSFLOAT_API_KEY"),
+            proxies=parse_proxy_list(_env("CSFLOAT_PROXIES")),
+            use_direct=(_env("CSFLOAT_USE_DIRECT", "1") or "1") != "0",
         ),
         polling=PollingConfig(
             interval_min_minutes=imin,
