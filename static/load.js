@@ -6,13 +6,17 @@ function esc(s) {
   ));
 }
 
-function tile(label, value, sub, cls) {
-  return `<div class="tile ${cls || ""}">
+function tile(label, value, sub, cls, id) {
+  return `<div class="tile ${cls || ""}"${id ? ` id="${id}"` : ""}>
     <div class="tile-val">${value}</div>
     <div class="tile-label">${esc(label)}</div>
     ${sub ? `<div class="tile-sub">${esc(sub)}</div>` : ""}
   </div>`;
 }
+
+// Live state: the cooldown ticks down locally between server refreshes.
+let latest = null;
+let cooldownEnd = 0;      // epoch ms when the global 429 pause ends (0 = none)
 
 function renderTiles(d) {
   const rlHour = d.stats_hour.rate_limited;
@@ -41,7 +45,7 @@ function renderTiles(d) {
          d.cooldown_remaining_sec > 0
            ? `до ${timeFmt(d.cooldown_until)} · подряд 429: ${d.cooldown_consecutive}`
            : "опрос идёт без ограничений",
-         d.cooldown_remaining_sec > 0 ? "warn" : "good");
+         d.cooldown_remaining_sec > 0 ? "warn" : "good", "tile-cooldown");
 }
 
 function fmtLeft(sec) {
@@ -52,13 +56,34 @@ function fmtLeft(sec) {
 const STATE_CLASS = { ok: "good", cooldown: "warn", limited: "warn",
                       auth: "bad", stale: "bad", idle: "" };
 
-function renderBanner(d) {
+const STATE_ICON = { ok: "✅", cooldown: "⏸", limited: "⚠️", auth: "🔑",
+                     stale: "⚠️", idle: "💤" };
+
+function renderBanner(d, textOverride) {
   const el = document.getElementById("state-banner");
   el.className = "state-banner " + (STATE_CLASS[d.state] || "");
-  const icon = { ok: "✅", cooldown: "⏸", limited: "⚠️", auth: "🔑",
-                 stale: "⚠️", idle: "💤" }[d.state] || "";
-  el.textContent = `${icon} ${d.state_text}`;
+  el.textContent = `${STATE_ICON[d.state] || ""} ${textOverride || d.state_text}`;
 }
+
+// Tick the cooldown down every second without hitting the server; when it
+// expires, refresh immediately so counters and status catch up at once.
+function tickCooldown() {
+  if (!cooldownEnd) return;
+  const left = Math.max(0, Math.round((cooldownEnd - Date.now()) / 1000));
+  const el = document.getElementById("tile-cooldown");
+  if (el) {
+    el.className = "tile " + (left > 0 ? "warn" : "good");
+    el.querySelector(".tile-val").textContent = left > 0 ? fmtLeft(left) : "нет";
+  }
+  if (left > 0 && latest && latest.state === "cooldown") {
+    renderBanner(latest, `Пауза из-за лимита CSFloat, осталось ${fmtLeft(left)}`);
+  }
+  if (left <= 0) {
+    cooldownEnd = 0;
+    refresh();
+  }
+}
+setInterval(tickCooldown, 1000);
 
 function renderPace(d) {
   // Don't fight the user while they're typing.
@@ -118,6 +143,9 @@ function renderRecent(list) {
 async function refresh() {
   try {
     const d = await getJSON("/api/load");
+    latest = d;
+    cooldownEnd = d.cooldown_remaining_sec > 0
+      ? Date.now() + d.cooldown_remaining_sec * 1000 : 0;
     renderStatus(d.last_update);
     renderBanner(d);
     renderTiles(d);
@@ -132,7 +160,7 @@ async function refresh() {
   }
 }
 
-startAutoRefresh(refresh, 30000);
+startAutoRefresh(refresh, 10000);
 
 // -- polling pace editor ----------------------------------------------------
 
