@@ -343,3 +343,21 @@ def test_rotating_route_is_overflow_only():
 
     assert {pool.pick().key for _ in range(4)} == {"http://gate:7000"}, \
         "once fixed routes are spent the rotating one takes over"
+
+
+def test_backoff_signals_do_not_compound():
+    from src.collector import Collector
+
+    col = Collector.__new__(Collector)
+    col.pace_multiplier = lambda: 8.0          # maxed out by past 429s
+    col.cached_budget_factor = lambda: 8.0     # quota spent for this window
+
+    # Multiplying these gives x64, which turns a 2h interval into five days.
+    assert col.stretch_factor() == 8.0
+
+    col.cached_budget_factor = lambda: 20.0
+    assert col.stretch_factor() == 20.0, "the tighter signal wins"
+
+    col.pace_multiplier = lambda: 1.0
+    col.cached_budget_factor = lambda: 1.0
+    assert col.stretch_factor() == 1.0

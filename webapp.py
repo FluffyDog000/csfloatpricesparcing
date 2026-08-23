@@ -615,7 +615,8 @@ def api_load():
                                          ceiling_minutes=adaptive_ceiling)
                 if adapt is not None:
                     avg_min = adapt
-        avg_min = max(avg_min * pace_mult * quota_factor, 0.1)
+        # Mirrors Collector.stretch_factor: the two signals don't multiply.
+        avg_min = max(avg_min * max(pace_mult, quota_factor), 0.1)
         intervals.append(avg_min)
         reqs_per_min += 1.0 / avg_min
     budget = 60.0 / max(spacing, 0.01)

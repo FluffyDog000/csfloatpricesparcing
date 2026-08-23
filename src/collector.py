@@ -212,6 +212,15 @@ class Collector:
             floor_minutes=floor_min, ceiling_minutes=self.adaptive_ceiling(),
         )
 
+    def stretch_factor(self) -> float:
+        """How much to stretch every interval right now.
+
+        The 429 backoff and the quota budget describe the SAME wall from two
+        sides, so multiplying them double-counts: ×8 after 429s times ×8 for a
+        spent quota is ×64, which pushes a 2h interval past five days and stops
+        collection entirely. Back off by whichever signal is tighter instead."""
+        return max(self.pace_multiplier(), self.cached_budget_factor())
+
     def interval_for(self, item: ItemConfig, item_id: int | None = None) -> float:
         """Seconds until this item's next poll.
 
@@ -219,7 +228,7 @@ class Collector:
         sale rate (when enabled), and the global pace multiplier — learned from
         429s — stretches everything."""
         gmin, gmax, _ = self.runtime_polling()
-        mult = self.pace_multiplier() * self.cached_budget_factor()
+        mult = self.stretch_factor()
 
         if item.interval_min_minutes or item.interval_max_minutes:
             lo = item.interval_min_minutes or gmin
