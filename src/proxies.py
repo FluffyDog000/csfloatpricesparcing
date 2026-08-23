@@ -68,6 +68,29 @@ class ProxyPool:
             key = mask_proxy(url)
             self.routes[key] = RouteState(key=key, url=url)
 
+    def replace(self, proxy_urls: list[str], use_direct: bool = True) -> bool:
+        """Swap in a new proxy list, preserving the quota/cooldown state of any
+        route that is still present. Returns True if anything changed."""
+        wanted: dict[str, str | None] = {}
+        if use_direct:
+            wanted[DIRECT] = None
+        for url in proxy_urls:
+            wanted[mask_proxy(url)] = url
+        if set(wanted) == set(self.routes):
+            for key, url in wanted.items():        # credentials may have changed
+                self.routes[key].url = url
+            return False
+        kept = {k: v for k, v in self.routes.items() if k in wanted}
+        for key, url in wanted.items():
+            if key in kept:
+                kept[key].url = url
+            else:
+                kept[key] = RouteState(key=key, url=url)
+        self.routes = kept
+        log.info("Proxy pool updated: %d route(s) — %s",
+                 len(self.routes), ", ".join(sorted(self.routes)))
+        return True
+
     # -- selection -----------------------------------------------------------
 
     def pick(self) -> RouteState | None:
@@ -164,6 +187,28 @@ def mask_proxy(url: str) -> str:
         scheme, rest = "http", url
     host = rest.rsplit("@", 1)[-1]        # strip user:pass@
     return f"{scheme}://{host}"
+
+
+ALLOWED_SCHEMES = ("http://", "https://", "socks5://", "socks5h://", "socks4://")
+
+
+def validate_proxy(url: str) -> tuple[bool, str]:
+    """(ok, message) — a proxy line must be scheme://[user:pass@]host[:port]."""
+    if "://" not in url:
+        return False, "нужна схема: http://, https:// или socks5://"
+    if not url.lower().startswith(ALLOWED_SCHEMES):
+        return False, "поддерживаются только http, https, socks5, socks4"
+    host = url.split("://", 1)[1].rsplit("@", 1)[-1]
+    if not host or host.startswith(":"):
+        return False, "не указан хост"
+    if ":" not in host:
+        return False, "не указан порт (например http://host:8080)"
+    hostname, port = host.rsplit(":", 1)
+    if not hostname:
+        return False, "не указан хост"
+    if not port.isdigit() or not (1 <= int(port) <= 65535):
+        return False, f"некорректный порт «{port}»"
+    return True, "ok"
 
 
 def parse_proxy_list(raw: str | None) -> list[str]:

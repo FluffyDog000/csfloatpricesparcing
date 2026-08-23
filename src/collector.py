@@ -15,6 +15,7 @@ from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import AuthError, CSFloatClient, RateLimited
 from .db import Database, utcnow_iso
 from .images import ImageService
+from .proxies import parse_proxy_list
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
     PACE_DOWN_FACTOR,
@@ -249,6 +250,32 @@ class Collector:
         self.db.set_setting("cooldown_until", until.replace(microsecond=0).isoformat())
         self.db.set_setting("cooldown_consecutive",
                             str(getattr(self.client, "_consecutive_429", 0)))
+
+    # -- proxies (DB is the source of truth, .env seeds it once) -------------
+
+    def seed_proxies_from_env(self) -> None:
+        """First run: copy CSFLOAT_PROXIES from .env into the DB, after which
+        the dashboard is the place to manage them."""
+        if self.db.get_setting("proxies") is not None:
+            return
+        env_list = list(self.config.http.proxies)
+        self.db.set_setting("proxies", "\n".join(env_list))
+        self.db.set_setting("use_direct", "1" if self.config.http.use_direct else "0")
+        if env_list:
+            log.info("Seeded %d proxy/proxies from .env into the database.",
+                     len(env_list))
+
+    def sync_proxies(self) -> bool:
+        """Apply the proxy list saved in the DB to the live pool. Returns True
+        when the pool changed (called periodically, so web edits apply live)."""
+        raw = self.db.get_setting("proxies")
+        if raw is None:
+            return False
+        urls = parse_proxy_list(raw)
+        use_direct = (self.db.get_setting("use_direct", "1") or "1") != "0"
+        if not urls and not use_direct:
+            use_direct = True          # never leave the pool empty
+        return self.client.pool.replace(urls, use_direct=use_direct)
 
     # -- API quota (x-ratelimit-*) -------------------------------------------
 

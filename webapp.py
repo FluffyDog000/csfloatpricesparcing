@@ -677,6 +677,8 @@ def api_load():
             "config_interval_max": config.polling.interval_max_minutes,
             "config_spacing": config.polling.min_seconds_between_requests,
             "routes": json.loads(db.get_setting("proxy_state") or "[]"),
+            "proxies_text": db.get_setting("proxies") or "",
+            "use_direct": (db.get_setting("use_direct", "1") or "1") != "0",
             "quota_limit": _num_setting(db, "rl_limit"),
             "quota_remaining": _num_setting(db, "rl_remaining"),
             "quota_reset": _num_setting(db, "rl_reset"),
@@ -702,6 +704,48 @@ def api_load():
             "recent": db.recent_poll_log(limit=30),
         }
     )
+
+
+@app.route("/api/load/proxies", methods=["POST"])
+def api_set_proxies():
+    """Replace the proxy list (bulk paste, one per line). The collector applies
+    it within ~30s, keeping the quota state of routes that stay."""
+    _require_admin()
+    from src.proxies import parse_proxy_list, validate_proxy
+
+    data = request.get_json(silent=True) or {}
+    raw = data.get("proxies")
+    db = get_db()
+
+    # Validate everything first, so a bad payload never half-applies.
+    urls = None
+    if raw is not None:
+        urls, bad = [], []
+        seen = set()
+        for line in parse_proxy_list(str(raw)):
+            ok, why = validate_proxy(line)
+            if not ok:
+                bad.append(f"{line} — {why}")
+            elif line not in seen:
+                seen.add(line)
+                urls.append(line)
+        if bad:
+            abort(400, description="Некорректные строки:\n" + "\n".join(bad[:10]))
+
+    count = len(urls) if urls is not None \
+        else len(parse_proxy_list(db.get_setting("proxies") or ""))
+    if "use_direct" in data and not data["use_direct"] and not count:
+        abort(400, description="Нельзя отключить собственный IP, пока не задан "
+                               "ни один прокси — иначе запросы делать неоткуда.")
+
+    if urls is not None:
+        db.set_setting("proxies", "\n".join(urls))
+    if "use_direct" in data:
+        db.set_setting("use_direct", "1" if data["use_direct"] else "0")
+
+    log.info("Proxy list updated via web: %d proxy/proxies, direct=%s",
+             count, db.get_setting("use_direct"))
+    return jsonify({"ok": True, "count": count})
 
 
 @app.route("/api/load/settings", methods=["POST"])

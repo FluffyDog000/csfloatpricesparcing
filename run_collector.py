@@ -53,6 +53,8 @@ def run_forever(collector: Collector) -> None:
     backup = BackupService(collector.config, collector)
     db_generation = read_generation(collector.config.db_path)
     collector.restore_cooldown_from_db()
+    collector.seed_proxies_from_env()
+    collector.sync_proxies()
     alerts = AlertService(collector.config, collector.db)
 
     heap: list[tuple[float, int, str]] = []
@@ -108,6 +110,8 @@ def run_forever(collector: Collector) -> None:
             last_resync = time.monotonic()
             active = collector.active_items()
             collector.refresh_budget_factor()
+            if collector.sync_proxies():      # proxies edited in the dashboard
+                collector.store_rate_state()
             new_names = [n for n in active if n not in scheduled]
             new_step = startup_step(max(len(active), 1))
             for i, name in enumerate(new_names):

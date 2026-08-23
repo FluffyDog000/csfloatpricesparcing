@@ -43,7 +43,8 @@ body {
                   border-radius: 10px; padding: 16px; margin: 14px 0; }
 .settings-block .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .settings-block .time { width: 120px; }
-.settings-msg { font-size: 13px; color: var(--good); margin-top: 10px; min-height: 16px; }
+.settings-msg { font-size: 13px; color: var(--good); margin-top: 10px; min-height: 16px;
+                white-space: pre-wrap; }
 .settings-msg.err { color: var(--bad); }
 .warn-box { background: rgba(248,81,73,.1); border: 1px solid var(--bad);
             border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; }
@@ -196,6 +197,8 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .add-form { display: flex; flex-direction: column; gap: 8px; }
 .add-form .add-names { width: 100%; resize: vertical; font-family: var(--mono);
                        font-size: 13px; }
+.bulk-input { width: 100%; resize: vertical; font-family: var(--mono);
+              font-size: 13px; }
 .add-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .add-form .folder-input { flex: 0 1 220px; }
 .chk { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }

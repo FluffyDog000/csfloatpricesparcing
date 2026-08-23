@@ -33,6 +33,25 @@
   <div class="settings-msg" id="pace-msg"></div>
 </section>
 
+<section class="settings-block">
+  <h2>Прокси</h2>
+  <p class="muted">Квота CSFloat (<code>x-ratelimit-limit</code>, ~500 запросов на окно)
+     считается на IP, поэтому каждый прокси добавляет отдельный бюджет.
+     По одному адресу в строке, можно вставить сразу список:<br>
+     <code>http://user:pass@host:8080</code> · <code>socks5://host:1080</code> ·
+     <code>https://host:3128</code>. Пароли нигде не показываются и не пишутся в логи.
+     Изменения подхватываются сборщиком в течение ~30 секунд.</p>
+  <textarea id="proxies-text" class="input bulk-input" rows="6"
+            placeholder="http://user:pass@host:8080&#10;socks5://host:1080"></textarea>
+  <div class="row" style="margin-top:10px">
+    <label class="chk"><input type="checkbox" id="use-direct">
+      использовать и собственный IP сервера</label>
+    <button class="btn btn-primary" id="save-proxies">Сохранить прокси</button>
+  </div>
+  <div class="muted" id="proxies-hint"></div>
+  <div class="settings-msg" id="proxies-msg"></div>
+</section>
+
 <section id="routes-section" hidden>
   <h2>Маршруты (прокси)</h2>
   <table class="stat">

@@ -172,3 +172,56 @@ def test_adaptive_minutes_needs_history():
     from src.pacing import adaptive_minutes
     assert adaptive_minutes(2, "2026-08-01T00:00:00+00:00", floor_minutes=15) is None
     assert adaptive_minutes(50, None, floor_minutes=15) is None
+
+
+def test_validate_proxy_accepts_supported_urls_and_rejects_junk():
+    from src.proxies import validate_proxy
+
+    for good in ("http://1.2.3.4:8080", "https://host.example:3128",
+                 "socks5://user:pass@host:1080", "socks5h://host:1080"):
+        ok, why = validate_proxy(good)
+        assert ok, f"{good} should be valid ({why})"
+
+    for bad in ("1.2.3.4:8080",          # no scheme
+                "ftp://host:21",         # unsupported scheme
+                "http://:8080",          # no host
+                "http://host",           # no port
+                "http://host:99999"):    # port out of range
+        ok, why = validate_proxy(bad)
+        assert not ok and why, f"{bad} should be rejected"
+
+
+def test_parse_proxy_list_splits_and_trims():
+    from src.proxies import parse_proxy_list
+
+    raw = " http://a:1 \n\nsocks5://b:2 ; http://c:3 , \n"
+    assert parse_proxy_list(raw) == ["http://a:1", "socks5://b:2", "http://c:3"]
+    assert parse_proxy_list("") == []
+    assert parse_proxy_list(None) == []
+
+
+def test_pool_replace_keeps_quota_of_surviving_routes():
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://a:1", "http://b:2"], use_direct=False)
+    pool.routes["http://a:1"].remaining = 300
+    pool.routes["http://a:1"].limit = 500
+
+    changed = pool.replace(["http://a:1", "http://c:3"], use_direct=False)
+    assert changed
+    assert sorted(pool.routes) == ["http://a:1", "http://c:3"]
+    assert pool.routes["http://a:1"].remaining == 300, "surviving route keeps its quota"
+    assert pool.routes["http://c:3"].remaining is None
+
+    assert not pool.replace(["http://a:1", "http://c:3"], use_direct=False), \
+        "replacing with the same list is a no-op"
+
+
+def test_pool_never_exposes_proxy_credentials():
+    import json
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://user:sekret@1.2.3.4:8080"], use_direct=False)
+    dumped = pool.to_json()
+    assert "sekret" not in dumped and "user" not in dumped
+    assert json.loads(dumped)[0]["key"] == "http://1.2.3.4:8080"

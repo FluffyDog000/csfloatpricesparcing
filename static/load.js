@@ -197,6 +197,7 @@ async function refresh() {
     renderBanner(d);
     renderTiles(d);
     renderPace(d);
+    renderProxies(d);
     document.getElementById("stats-body").innerHTML =
       statsRow("за час", d.stats_hour) + statsRow("за сутки", d.stats_day);
     renderRoutes(d.routes || []);
@@ -279,4 +280,58 @@ function renderRoutes(routes) {
       <td>${reset}</td>
       <td class="${cls}">${state}</td></tr>`;
   }).join("");
+}
+
+// -- proxy editor -----------------------------------------------------------
+
+// The DB is the source of truth for proxies; the collector re-reads it every
+// ~30s, so edits here apply without a restart.
+let proxiesDirty = false;
+
+function proxyMsg(text, isError) {
+  const el = document.getElementById("proxies-msg");
+  el.textContent = text || "";
+  el.className = "settings-msg" + (isError ? " err" : "");
+}
+
+function renderProxies(d) {
+  const box = document.getElementById("proxies-text");
+  if (!box) return;
+  const direct = document.getElementById("use-direct");
+  // Never overwrite an edit in progress.
+  if (!proxiesDirty && document.activeElement !== box) {
+    box.value = d.proxies_text || "";
+  }
+  if (!proxiesDirty && document.activeElement !== direct) {
+    direct.checked = d.use_direct !== false;
+  }
+  const n = (d.routes || []).filter((r) => !r.direct).length;
+  document.getElementById("proxies-hint").textContent = n
+    ? `Активных прокси: ${n}${d.use_direct === false ? " (свой IP не используется)" : " + свой IP"}` +
+      ` · суммарный запас квоты: ${d.quota_remaining ?? "—"}`
+    : "Прокси не заданы — все запросы идут с IP сервера.";
+}
+
+const proxiesBox = document.getElementById("proxies-text");
+if (proxiesBox) {
+  proxiesBox.addEventListener("input", () => { proxiesDirty = true; });
+  document.getElementById("use-direct")
+    .addEventListener("change", () => { proxiesDirty = true; });
+
+  document.getElementById("save-proxies").addEventListener("click", async () => {
+    const body = {
+      proxies: proxiesBox.value,
+      use_direct: document.getElementById("use-direct").checked,
+    };
+    try {
+      const r = await postJSON("/api/load/proxies", body, token());
+      proxiesDirty = false;
+      proxyMsg(r.count
+        ? `Сохранено: ${r.count} прокси — сборщик подхватит в течение ~30 секунд.`
+        : "Список очищен — запросы идут напрямую с IP сервера.");
+      refresh();
+    } catch (e) {
+      proxyMsg("Ошибка: " + e.message, true);
+    }
+  });
 }
