@@ -14,6 +14,7 @@ also caps how many distinct IPs CSFloat sees for one account.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -335,13 +336,21 @@ def normalize_proxy(url: str) -> str:
 
 
 def mask_proxy(url: str) -> str:
-    """Readable, credential-free label for a proxy URL (never log passwords)."""
+    """Readable, credential-free label for a proxy URL (never log passwords).
+
+    Sticky sessions of one provider differ only by the login (…-sid-1-ttl-30),
+    so host:port alone would collapse them into a single route. A short digest
+    of the credentials keeps them apart without revealing anything.
+    """
     try:
         scheme, rest = url.split("://", 1)
     except ValueError:
         scheme, rest = "http", url
-    host = rest.rsplit("@", 1)[-1]        # strip user:pass@
-    return f"{scheme}://{host}"
+    creds, sep, host = rest.rpartition("@")
+    if not sep:                           # no credentials in the URL
+        return f"{scheme}://{rest}"
+    digest = hashlib.sha1(creds.encode("utf-8")).hexdigest()[:4]
+    return f"{scheme}://{host}#{digest}"
 
 
 ALLOWED_SCHEMES = ("http://", "https://", "socks5://", "socks5h://", "socks4://")

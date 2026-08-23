@@ -224,7 +224,26 @@ def test_pool_never_exposes_proxy_credentials():
     pool = ProxyPool(["http://user:sekret@1.2.3.4:8080"], use_direct=False)
     dumped = pool.to_json()
     assert "sekret" not in dumped and "user" not in dumped
-    assert json.loads(dumped)[0]["key"] == "http://1.2.3.4:8080"
+    assert json.loads(dumped)[0]["key"].startswith("http://1.2.3.4:8080#")
+
+
+def test_sticky_sessions_on_one_gateway_stay_separate_routes():
+    from src.proxies import ProxyPool
+
+    # A provider's sticky sessions differ only by the login (…-sid-N-…); they
+    # are distinct exit IPs and must not collapse into one route.
+    lines = [f"gate.example.com:8888:acct-sid-{i}-ttl-30:pw" for i in (1, 2, 3)]
+    pool = ProxyPool(lines, use_direct=False)
+    assert len(pool.routes) == 3
+
+    dumped = pool.to_json()
+    assert "acct" not in dumped and "pw@" not in dumped, "no credentials leak"
+
+    # Spending one session's quota must not touch the others.
+    keys = sorted(pool.routes)
+    now = int(time.time())
+    pool.routes[keys[0]].remaining, pool.routes[keys[0]].reset = 0, now + 3600
+    assert {pool.pick().key for _ in range(6)} <= set(keys[1:])
 
 
 def test_rotating_marker_and_seller_formats_are_parsed():
