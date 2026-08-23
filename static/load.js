@@ -110,15 +110,19 @@ function tickCooldown() {
 setInterval(tickCooldown, 1000);
 
 function renderPace(d) {
-  // Don't fight the user while they're typing.
-  if (document.activeElement && document.activeElement.closest(".settings-block")) return;
-  document.getElementById("int-min").value = d.interval_min_minutes;
-  document.getElementById("int-max").value = d.interval_max_minutes;
-  document.getElementById("spacing").value = d.min_seconds_between_requests;
-  document.getElementById("adaptive-on").checked = !!d.adaptive_enabled;
-  document.getElementById("adaptive-max").value = d.adaptive_max_minutes;
+  // Don't overwrite a field the user is editing — but always refresh the
+  // summary, or the page ends up quoting settings that are no longer set.
+  const setField = (id, value, prop) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el[prop || "value"] = value;
+  };
+  setField("int-min", d.interval_min_minutes);
+  setField("int-max", d.interval_max_minutes);
+  setField("spacing", d.min_seconds_between_requests);
+  setField("adaptive-on", !!d.adaptive_enabled, "checked");
+  setField("adaptive-max", d.adaptive_max_minutes);
   const parts = [
-    `${d.active_items} предм. · средний интервал ~${d.avg_interval_minutes ?? "—"} мин ` +
+    `${d.active_items} предм. · ${effectiveInterval(d)} ` +
     `≈ ${d.reqs_per_min_est} запр/мин`,
     d.adaptive_enabled
       ? `адаптивно: от ${d.interval_min_minutes} до ${d.adaptive_max_minutes} мин по скорости продаж`
@@ -374,6 +378,18 @@ if (proxiesBox) {
 
 // -- what the current schedule costs ----------------------------------------
 
+// The number that actually explains the request count: total requests spread
+// over all items. The arithmetic mean of per-item intervals does NOT reconcile
+// with it (fast items dominate the rate), and showing both invited exactly the
+// "these numbers disagree" reaction.
+function effectiveInterval(d) {
+  if (!d.requests_per_day || !d.active_items) return "интервал —";
+  const minutes = (1440 * d.active_items) / d.requests_per_day;
+  const shown = minutes >= 60
+    ? `${(minutes / 60).toFixed(1)} ч` : `${Math.round(minutes)} мин`;
+  return `в среднем предмет раз в ${shown}`;
+}
+
 function fmtSize(bytes) {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " МБ";
   if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " КБ";
@@ -395,11 +411,7 @@ function renderUsage(d) {
 
   const quota = d.quota_remaining != null && d.quota_limit != null
     ? `квота даёт ${d.quota_limit} на окно` : "";
-  const perItem = d.avg_interval_minutes
-    ? (d.avg_interval_minutes >= 60
-        ? `каждый предмет раз в ${(d.avg_interval_minutes / 60).toFixed(1)} ч`
-        : `каждый предмет раз в ${Math.round(d.avg_interval_minutes)} мин`)
-    : "";
+  const perItem = `${d.active_items} предм. · ${effectiveInterval(d)}`;
 
   // Forecast vs reality: a gap means the settings changed recently, the
   // collector was down, or a backoff is holding it below plan.

@@ -625,3 +625,47 @@ def test_usage_block_reports_actual_alongside_forecast():
     # No stats passed (or nothing polled yet) must not blow up.
     empty = webapp._usage_forecast(FakeDB(), 2.0, "2026-08-22T00:00:00+00:00")
     assert empty["requests_day_actual"] == 0
+
+
+def test_raising_the_ceiling_lowers_the_forecast():
+    """The forecast has to move the way the setting promises, or the number is
+    worthless: raise the ceiling, requests must fall — never rise."""
+    import logging
+    from datetime import datetime, timedelta, timezone
+    import webapp
+    from src.models import Sale
+    logging.disable(logging.WARNING)
+
+    # webapp resolves its DB path once at import, so setting the env var here
+    # would be ignored if another test imported it first. Use the path it holds.
+    db = webapp.Database(webapp.config.db_path)
+    now = datetime.now(timezone.utc)
+    import uuid
+    tag = uuid.uuid4().hex[:6]
+    for i in range(20):                       # items with a measurable rate
+        iid = db.add_item(f"Ceil {tag} old {i}")
+        db.insert_sales([
+            Sale(sale_id=f"{tag}-o{i}-{k}", item_id=iid,
+                 market_hash_name=f"Ceil {tag} old {i}",
+                 price_cents=10000, price=100.0, float_value=0.2, paint_seed=1,
+                 paint_index=None,
+                 sold_at=(now - timedelta(days=14) + timedelta(hours=k * 2.4)).isoformat(),
+                 sold_at_estimated=False, stickers=None, raw_json=None,
+                 scraped_at=now.isoformat())
+            for k in range(140)])
+    for i in range(10):                       # brand-new items, no history yet
+        db.add_item(f"Ceil {tag} new {i}")
+
+    db.set_setting("poll_interval_min_minutes", "25")
+    db.set_setting("poll_interval_max_minutes", "45")
+    client = webapp.app.test_client()
+
+    seen = []
+    for ceiling in (80, 160, 240, 480):
+        db.set_setting("adaptive_max_minutes", str(ceiling))
+        seen.append(client.get("/api/load").get_json()["requests_per_day"])
+
+    assert seen == sorted(seen, reverse=True), \
+        f"a higher ceiling must never mean more requests, got {seen}"
+    assert seen[0] > seen[-1], "the ceiling has to actually move the forecast"
+    db.close()
