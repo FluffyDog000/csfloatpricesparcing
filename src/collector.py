@@ -95,13 +95,58 @@ class Collector:
             )
         return out
 
+    def runtime_polling(self) -> tuple[float, float, float]:
+        """(min_minutes, max_minutes, seconds_between_requests) in effect now.
+
+        Values saved from the dashboard (settings table) win over config.yaml,
+        so the pace can be tuned live without restarting the collector."""
+        p = self.config.polling
+
+        def val(key: str, default: float) -> float:
+            raw = self.db.get_setting(key)
+            if raw in (None, ""):
+                return default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        lo = val("poll_interval_min_minutes", p.interval_min_minutes)
+        hi = val("poll_interval_max_minutes", p.interval_max_minutes)
+        spacing = val("min_seconds_between_requests", p.min_seconds_between_requests)
+        if hi < lo:
+            lo, hi = hi, lo
+        return lo, hi, spacing
+
+    def apply_runtime_settings(self) -> None:
+        """Push the live request spacing into the HTTP client."""
+        self.client.polling.min_seconds_between_requests = self.runtime_polling()[2]
+
     def interval_for(self, item: ItemConfig) -> float:
         """Random poll interval in seconds for this item (jitter)."""
-        lo = item.interval_min_minutes or self.config.polling.interval_min_minutes
-        hi = item.interval_max_minutes or self.config.polling.interval_max_minutes
+        gmin, gmax, _ = self.runtime_polling()
+        lo = item.interval_min_minutes or gmin
+        hi = item.interval_max_minutes or gmax
         if hi < lo:
             lo, hi = hi, lo
         return random.uniform(lo, hi) * 60.0
+
+    # -- cooldown state shared with the dashboard ----------------------------
+
+    def _store_cooldown(self) -> None:
+        """Persist the client's global 429 pause so the web UI can display it."""
+        remaining = self.client.cooldown_remaining()
+        if remaining <= 0:
+            return
+        until = (datetime.now(timezone.utc) + timedelta(seconds=remaining))
+        self.db.set_setting("cooldown_until", until.replace(microsecond=0).isoformat())
+        self.db.set_setting("cooldown_consecutive",
+                            str(getattr(self.client, "_consecutive_429", 0)))
+
+    def _clear_cooldown(self) -> None:
+        if self.db.get_setting("cooldown_until"):
+            self.db.set_setting("cooldown_until", "")
+            self.db.set_setting("cooldown_consecutive", "0")
 
     # -- raw dump for field verification ------------------------------------
 
@@ -135,8 +180,10 @@ class Collector:
             )
         had_before = self.db.item_sales_count(item_id) > 0
 
+        self.apply_runtime_settings()
         try:
             payload = self.client.fetch_latest_sales(name)
+            self._clear_cooldown()
         except AuthError as exc:
             log.error("AUTH ERROR for '%s': %s", name, exc)
             self.db.log_poll(
@@ -146,6 +193,7 @@ class Collector:
             return
         except RateLimited as exc:
             log.error("RATE LIMITED for '%s': %s", name, exc)
+            self._store_cooldown()
             self.db.log_poll(
                 item_id=item_id, market_hash_name=name, fetched_count=0,
                 new_count=0, overlap_count=0, status="rate_limited", note=str(exc),

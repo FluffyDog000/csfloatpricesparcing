@@ -536,26 +536,89 @@ def load_page():
     return render_template("load.html")
 
 
+def _polling_settings():
+    """Effective polling pace: dashboard settings override config.yaml."""
+    db = get_db()
+    p = config.polling
+
+    def val(key, default):
+        raw = db.get_setting(key)
+        if raw in (None, ""):
+            return default
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    lo = val("poll_interval_min_minutes", p.interval_min_minutes)
+    hi = val("poll_interval_max_minutes", p.interval_max_minutes)
+    spacing = val("min_seconds_between_requests", p.min_seconds_between_requests)
+    if hi < lo:
+        lo, hi = hi, lo
+    custom = any(db.get_setting(k) not in (None, "") for k in (
+        "poll_interval_min_minutes", "poll_interval_max_minutes",
+        "min_seconds_between_requests"))
+    return lo, hi, spacing, custom
+
+
 @app.route("/api/load")
 def api_load():
     from datetime import datetime, timedelta, timezone
     db = get_db()
     active = db.get_active_items()
+    gmin, gmax, spacing, custom = _polling_settings()
 
     # Estimated request rate from each item's average poll interval.
-    gmin = config.polling.interval_min_minutes
-    gmax = config.polling.interval_max_minutes
     reqs_per_min = 0.0
     for it in active:
         lo = it.get("interval_min_minutes") or gmin
         hi = it.get("interval_max_minutes") or gmax
         avg_min = max((lo + hi) / 2.0, 0.1)
         reqs_per_min += 1.0 / avg_min
-    budget = 60.0 / max(config.polling.min_seconds_between_requests, 0.01)
+    budget = 60.0 / max(spacing, 0.01)
 
     now = datetime.now(timezone.utc)
     hour_iso = (now - timedelta(hours=1)).replace(microsecond=0).isoformat()
     day_iso = (now - timedelta(hours=24)).replace(microsecond=0).isoformat()
+
+    # Global 429 pause, persisted by the collector process.
+    cooldown_until = db.get_setting("cooldown_until") or None
+    cooldown_left = 0.0
+    if cooldown_until:
+        try:
+            until = datetime.fromisoformat(cooldown_until)
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=timezone.utc)
+            cooldown_left = max(0.0, (until - now).total_seconds())
+        except ValueError:
+            cooldown_until = None
+
+    stats_hour = db.poll_stats(hour_iso)
+    last_ok = db.last_successful_poll()
+    stale_min = None
+    if last_ok:
+        try:
+            t = datetime.fromisoformat(last_ok)
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            stale_min = round((now - t).total_seconds() / 60.0, 1)
+        except ValueError:
+            pass
+
+    # One-line health verdict for the dashboard.
+    if stats_hour["auth_error"]:
+        state, state_text = "auth", "Ошибка авторизации — обнови cookie в .env"
+    elif cooldown_left > 0:
+        state, state_text = "cooldown", (
+            f"Пауза из-за лимита CSFloat, осталось {cooldown_left / 60:.1f} мин")
+    elif stats_hour["rate_limited"]:
+        state, state_text = "limited", "Были 429 за последний час — снизь частоту"
+    elif stale_min is not None and stale_min > 60:
+        state, state_text = "stale", f"Нет успешного сбора {stale_min:.0f} мин"
+    elif not active:
+        state, state_text = "idle", "Нет активных предметов"
+    else:
+        state, state_text = "ok", "Сбор идёт штатно"
 
     return jsonify(
         {
@@ -564,14 +627,72 @@ def api_load():
             "reqs_per_min_est": round(reqs_per_min, 2),
             "budget_per_min": round(budget, 1),
             "budget_used_pct": round(100.0 * reqs_per_min / budget, 1) if budget else None,
-            "min_seconds_between_requests": config.polling.min_seconds_between_requests,
-            "last_update": db.last_successful_poll(),
-            "stats_hour": db.poll_stats(hour_iso),
+            "min_seconds_between_requests": spacing,
+            "interval_min_minutes": gmin,
+            "interval_max_minutes": gmax,
+            "intervals_customized": custom,
+            "config_interval_min": config.polling.interval_min_minutes,
+            "config_interval_max": config.polling.interval_max_minutes,
+            "config_spacing": config.polling.min_seconds_between_requests,
+            "cooldown_until": cooldown_until,
+            "cooldown_remaining_sec": round(cooldown_left),
+            "cooldown_consecutive": int(db.get_setting("cooldown_consecutive") or 0),
+            "state": state,
+            "state_text": state_text,
+            "stale_minutes": stale_min,
+            "last_update": last_ok,
+            "stats_hour": stats_hour,
             "stats_day": db.poll_stats(day_iso),
             "gap_warnings": db.gap_warnings(day_iso, limit=50),
             "recent": db.recent_poll_log(limit=30),
         }
     )
+
+
+@app.route("/api/load/settings", methods=["POST"])
+def api_load_settings():
+    """Change the polling pace live (collector picks it up on its next poll)."""
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+
+    def store(key, field, lo_ok, hi_ok, label):
+        # Absent field => leave the current value alone (partial update).
+        if field not in data:
+            return
+        value = data.get(field)
+        if value in (None, ""):
+            db.set_setting(key, "")      # explicit empty = fall back to config.yaml
+            return
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            abort(400, description=f"{label}: нужно число")
+        if not (lo_ok <= num <= hi_ok):
+            abort(400, description=f"{label}: допустимо {lo_ok}–{hi_ok}")
+        db.set_setting(key, str(num))
+
+    if "reset" in data and data["reset"]:
+        for k in ("poll_interval_min_minutes", "poll_interval_max_minutes",
+                  "min_seconds_between_requests"):
+            db.set_setting(k, "")
+        log.info("Polling settings reset to config.yaml defaults")
+        return jsonify({"ok": True, "reset": True})
+
+    imin = data.get("interval_min_minutes")
+    imax = data.get("interval_max_minutes")
+    if imin not in (None, "") and imax not in (None, ""):
+        try:
+            if float(imax) < float(imin):
+                abort(400, description="Максимальный интервал меньше минимального")
+        except (TypeError, ValueError):
+            abort(400, description="Интервалы: нужны числа")
+    store("poll_interval_min_minutes", "interval_min_minutes", 1, 1440, "Интервал min")
+    store("poll_interval_max_minutes", "interval_max_minutes", 1, 1440, "Интервал max")
+    store("min_seconds_between_requests", "min_seconds_between_requests",
+          0.5, 60, "Пауза между запросами")
+    log.info("Polling settings updated via web: %s", data)
+    return jsonify({"ok": True})
 
 
 @app.route("/settings")

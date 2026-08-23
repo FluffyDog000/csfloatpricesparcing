@@ -4,7 +4,27 @@
 <a class="back" href="{{ url_for('index') }}">← к предметам</a>
 <h1>Нагрузка</h1>
 
+<div class="state-banner" id="state-banner"></div>
+
 <div class="tiles" id="tiles"></div>
+
+<section class="settings-block">
+  <h2>Частота опроса</h2>
+  <p class="muted">Применяется на лету — перезапускать сборщик не нужно.
+     Пустые поля = значения из <code>config.yaml</code>.</p>
+  <div class="row">
+    <label>интервал от
+      <input type="number" id="int-min" class="input num-input" min="1" max="1440" step="1"></label>
+    <label>до
+      <input type="number" id="int-max" class="input num-input" min="1" max="1440" step="1"> мин</label>
+    <label>пауза между запросами
+      <input type="number" id="spacing" class="input num-input" min="0.5" max="60" step="0.5"> с</label>
+    <button class="btn btn-primary" id="save-pace">Сохранить</button>
+    <button class="btn" id="reset-pace">Сбросить</button>
+  </div>
+  <div class="muted" id="pace-hint"></div>
+  <div class="settings-msg" id="pace-msg"></div>
+</section>
 
 <section>
   <h2>Опросы за час / сутки</h2>

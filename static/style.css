@@ -96,6 +96,14 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .card { position: relative; }
 .card.is-hidden { opacity: .55; border-style: dashed; }
 
+/* Load page: state banner ------------------------------------------------ */
+.state-banner { padding: 10px 14px; border-radius: 10px; font-size: 14px;
+                border: 1px solid var(--line); background: var(--panel);
+                margin: 12px 0 4px; }
+.state-banner.good { border-color: var(--good); color: var(--good); }
+.state-banner.warn { border-color: #d0a53c; color: #d0a53c; }
+.state-banner.bad  { border-color: var(--bad); color: var(--bad); }
+
 /* Load / health tiles ---------------------------------------------------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
          gap: 12px; margin: 12px 0 8px; }
