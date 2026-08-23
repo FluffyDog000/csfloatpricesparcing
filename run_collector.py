@@ -88,6 +88,7 @@ def run_forever(collector: Collector) -> None:
              len(names), len(names) * step / 60.0)
     last_resync = time.monotonic()
     last_cooldown_log = 0.0
+    last_quota_log = 0.0
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
@@ -106,6 +107,7 @@ def run_forever(collector: Collector) -> None:
         if time.monotonic() - last_resync >= RESYNC_SECONDS:
             last_resync = time.monotonic()
             active = collector.active_items()
+            collector.refresh_budget_factor()
             new_names = [n for n in active if n not in scheduled]
             new_step = startup_step(max(len(active), 1))
             for i, name in enumerate(new_names):
@@ -114,6 +116,17 @@ def run_forever(collector: Collector) -> None:
 
         if not heap:
             time.sleep(min(RESYNC_SECONDS, 5.0))
+            continue
+
+        # Quota exhausted (x-ratelimit-remaining ~ 0): wait for the reset.
+        quota_wait = collector.quota_pause_seconds()
+        if quota_wait > 0:
+            if time.monotonic() - last_quota_log >= 300.0:
+                last_quota_log = time.monotonic()
+                _, remaining, _ = collector.quota()
+                log.warning("API quota spent (remaining=%s); waiting %.1f min for reset",
+                            remaining, quota_wait / 60.0)
+            time.sleep(min(quota_wait, 5.0))
             continue
 
         # Global 429 cooldown: hold every item until CSFloat lets us back in.

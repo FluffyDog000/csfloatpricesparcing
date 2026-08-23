@@ -46,6 +46,8 @@ class CSFloatClient:
         # Whatever rate-limit headers CSFloat returned with the last 429.
         self.last_429_headers: dict[str, str] = {}
         self.last_429_body: str = ""
+        # Latest quota snapshot from x-ratelimit-* headers.
+        self.rate_state: dict[str, object] = {}
         self.session = requests.Session()
         self.session.headers.update(self._base_headers())
 
@@ -88,6 +90,30 @@ class CSFloatClient:
             wait = max(wait, retry_after)
         self._cooldown_until = time.monotonic() + wait
         return wait
+
+    def _capture_rate_headers(self, resp) -> None:
+        """CSFloat sends x-ratelimit-* on every response. Tracking them lets the
+        collector plan against the real remaining quota instead of guessing."""
+        def num(name: str):
+            raw = resp.headers.get(name)
+            if raw is None:
+                return None
+            try:
+                return int(float(raw))
+            except (TypeError, ValueError):
+                return None
+
+        limit = num("x-ratelimit-limit")
+        remaining = num("x-ratelimit-remaining")
+        reset = num("x-ratelimit-reset")
+        if limit is None and remaining is None:
+            return
+        self.rate_state = {
+            "limit": limit,
+            "remaining": remaining,
+            "reset": reset,
+            "seen_at": time.time(),
+        }
 
     def _respect_spacing(self) -> None:
         """Ensure at least `min_seconds_between_requests` between calls."""
@@ -145,6 +171,7 @@ class CSFloatClient:
                         retry_after = float(hdr)
                     except ValueError:
                         retry_after = None
+                self._capture_rate_headers(resp)
                 wait = self._enter_cooldown(retry_after)
                 self.last_429_headers = {
                     k: v for k, v in resp.headers.items()
@@ -164,6 +191,7 @@ class CSFloatClient:
                     f"{wait / 60:.1f} min (consecutive 429: {self._consecutive_429})"
                 )
 
+            self._capture_rate_headers(resp)
             resp.raise_for_status()
             self._consecutive_429 = 0  # healthy response clears the escalation
             return resp.json()

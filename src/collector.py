@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,6 +27,12 @@ from .pacing import (
 from .parser import extract_icon_hash, extract_records, parse_sales
 
 log = logging.getLogger("csfloat.collector")
+
+# Keep this many requests of the quota untouched as a safety margin, and never
+# stretch intervals by more than this factor when the quota is tight.
+QUOTA_RESERVE = 15
+QUOTA_FACTOR_MAX = 60.0
+MAX_QUOTA_PAUSE_SECONDS = 3600.0   # re-check at least hourly while waiting
 
 
 
@@ -211,7 +218,7 @@ class Collector:
         sale rate (when enabled), and the global pace multiplier — learned from
         429s — stretches everything."""
         gmin, gmax, _ = self.runtime_polling()
-        mult = self.pace_multiplier()
+        mult = self.pace_multiplier() * self.cached_budget_factor()
 
         if item.interval_min_minutes or item.interval_max_minutes:
             lo = item.interval_min_minutes or gmin
@@ -242,6 +249,84 @@ class Collector:
         self.db.set_setting("cooldown_until", until.replace(microsecond=0).isoformat())
         self.db.set_setting("cooldown_consecutive",
                             str(getattr(self.client, "_consecutive_429", 0)))
+
+    # -- API quota (x-ratelimit-*) -------------------------------------------
+
+    def store_rate_state(self) -> None:
+        """Persist the latest quota snapshot so the dashboard can show it."""
+        st = getattr(self.client, "rate_state", None)
+        if not st:
+            return
+        for key in ("limit", "remaining", "reset"):
+            value = st.get(key)
+            self.db.set_setting(f"rl_{key}", "" if value is None else str(value))
+        self.db.set_setting("rl_seen_at", utcnow_iso())
+
+    def quota(self) -> tuple[int | None, int | None, int | None]:
+        """(limit, remaining, reset_epoch) as last reported by CSFloat."""
+        def num(key: str) -> int | None:
+            raw = self.db.get_setting(key)
+            try:
+                return int(raw) if raw not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+        return num("rl_limit"), num("rl_remaining"), num("rl_reset")
+
+    def quota_pause_seconds(self) -> float:
+        """Seconds to hold off polling because the quota is (nearly) spent."""
+        _, remaining, reset = self.quota()
+        if remaining is None or reset is None:
+            return 0.0
+        if remaining > QUOTA_RESERVE:
+            return 0.0
+        left = reset - time.time()
+        return max(0.0, min(left, MAX_QUOTA_PAUSE_SECONDS))
+
+    def budget_factor(self, planned_per_second: float) -> float:
+        """How much to stretch every interval so the planned request rate fits
+        the quota that's actually left before the next reset (>= 1.0)."""
+        limit, remaining, reset = self.quota()
+        if remaining is None or reset is None or planned_per_second <= 0:
+            return 1.0
+        seconds_left = max(reset - time.time(), 1.0)
+        usable = max(remaining - QUOTA_RESERVE, 0)
+        if usable <= 0:
+            return PACE_MAX
+        allowed_per_second = usable / seconds_left
+        if planned_per_second <= allowed_per_second:
+            return 1.0
+        return min(planned_per_second / allowed_per_second, QUOTA_FACTOR_MAX)
+
+    def planned_rate_per_second(self) -> float:
+        """Current scheduled request rate across all active items."""
+        gmin, gmax, _ = self.runtime_polling()
+        total = 0.0
+        for row in self.db.get_active_items():
+            lo = row.get("interval_min_minutes")
+            hi = row.get("interval_max_minutes")
+            if lo or hi:
+                minutes = ((lo or gmin) + (hi or gmax)) / 2.0
+            else:
+                minutes = (gmin + gmax) / 2.0
+                if self.adaptive_enabled():
+                    adapt = self.adaptive_interval_minutes(int(row["id"]), gmin)
+                    if adapt is not None:
+                        minutes = adapt
+            total += 1.0 / max(minutes * 60.0, 1.0)
+        return total
+
+    def refresh_budget_factor(self) -> float:
+        """Recompute and cache the quota stretch factor (called periodically)."""
+        factor = self.budget_factor(self.planned_rate_per_second())
+        self.db.set_setting("quota_factor", f"{factor:.3f}")
+        return factor
+
+    def cached_budget_factor(self) -> float:
+        raw = self.db.get_setting("quota_factor")
+        try:
+            return min(max(float(raw), 1.0), QUOTA_FACTOR_MAX) if raw else 1.0
+        except (TypeError, ValueError):
+            return 1.0
 
     def _store_429_headers(self) -> None:
         """Remember what CSFloat told us about its limit (shown on the dashboard)."""
@@ -320,6 +405,7 @@ class Collector:
             payload = self.client.fetch_latest_sales(name)
             self._clear_cooldown()
             self.maybe_speed_up()
+            self.store_rate_state()
         except AuthError as exc:
             log.error("AUTH ERROR for '%s': %s", name, exc)
             self.db.log_poll(
@@ -332,6 +418,7 @@ class Collector:
             self._store_cooldown()
             self.slow_down()
             self._store_429_headers()
+            self.store_rate_state()
             self.db.log_poll(
                 item_id=item_id, market_hash_name=name, fetched_count=0,
                 new_count=0, overlap_count=0, status="rate_limited", note=str(exc),

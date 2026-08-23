@@ -539,6 +539,14 @@ def load_page():
     return render_template("load.html")
 
 
+def _num_setting(db, key):
+    raw = db.get_setting(key)
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _polling_settings():
     """Effective polling pace: dashboard settings override config.yaml."""
     db = get_db()
@@ -585,6 +593,10 @@ def api_load():
     except (TypeError, ValueError):
         pace_mult = 1.0
 
+    try:
+        quota_factor = max(float(db.get_setting("quota_factor") or 1.0), 1.0)
+    except (TypeError, ValueError):
+        quota_factor = 1.0
     rates = db.sales_rates(window_start()) if adaptive_on else {}
     reqs_per_min = 0.0
     intervals: list[float] = []
@@ -602,7 +614,7 @@ def api_load():
                                          ceiling_minutes=adaptive_ceiling)
                 if adapt is not None:
                     avg_min = adapt
-        avg_min = max(avg_min * pace_mult, 0.1)
+        avg_min = max(avg_min * pace_mult * quota_factor, 0.1)
         intervals.append(avg_min)
         reqs_per_min += 1.0 / avg_min
     budget = 60.0 / max(spacing, 0.01)
@@ -664,6 +676,10 @@ def api_load():
             "config_interval_min": config.polling.interval_min_minutes,
             "config_interval_max": config.polling.interval_max_minutes,
             "config_spacing": config.polling.min_seconds_between_requests,
+            "quota_limit": _num_setting(db, "rl_limit"),
+            "quota_remaining": _num_setting(db, "rl_remaining"),
+            "quota_reset": _num_setting(db, "rl_reset"),
+            "quota_factor": float(db.get_setting("quota_factor") or 1.0),
             "adaptive_enabled": adaptive_on,
             "adaptive_max_minutes": adaptive_ceiling,
             "pace_multiplier": round(pace_mult, 2),

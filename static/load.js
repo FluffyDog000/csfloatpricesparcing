@@ -45,7 +45,26 @@ function renderTiles(d) {
          d.cooldown_remaining_sec > 0
            ? `до ${timeFmt(d.cooldown_until)} · подряд 429: ${d.cooldown_consecutive}`
            : "опрос идёт без ограничений",
-         d.cooldown_remaining_sec > 0 ? "warn" : "good", "tile-cooldown");
+         d.cooldown_remaining_sec > 0 ? "warn" : "good", "tile-cooldown") +
+    quotaTile(d);
+}
+
+// CSFloat's own quota (x-ratelimit-*): the real constraint on a big item list.
+function quotaTile(d) {
+  if (d.quota_limit == null && d.quota_remaining == null) {
+    return tile("квота CSFloat", "—", "пока не видели заголовков лимита");
+  }
+  const left = d.quota_remaining;
+  const lim = d.quota_limit;
+  const pct = lim ? left / lim : null;
+  const cls = pct == null ? "" : pct <= 0.05 ? "bad" : pct <= 0.25 ? "warn" : "good";
+  let sub = lim ? `из ${lim} на окно` : "";
+  if (d.quota_reset) {
+    const resetMs = d.quota_reset * 1000;
+    const mins = Math.max(0, Math.round((resetMs - Date.now()) / 60000));
+    sub += ` · сброс через ${mins >= 60 ? Math.floor(mins / 60) + "ч " + (mins % 60) + "м" : mins + "м"}`;
+  }
+  return tile("квота CSFloat", left == null ? "—" : left, sub, cls);
 }
 
 function fmtLeft(sec) {
@@ -100,6 +119,10 @@ function renderPace(d) {
       ? `адаптивно: от ${d.interval_min_minutes} до ${d.adaptive_max_minutes} мин по скорости продаж`
       : `фиксированно ${d.interval_min_minutes}–${d.interval_max_minutes} мин`,
   ];
+  if (d.quota_factor > 1.05) {
+    parts.push(`растянуто под квоту ×${d.quota_factor.toFixed(1)} ` +
+               `(${d.quota_limit ?? "?"} запросов на окно)`);
+  }
   if (d.pace_multiplier > 1) {
     parts.push(`авто-замедление ×${d.pace_multiplier} (после 429; спадает за час без ошибок)`);
   }
