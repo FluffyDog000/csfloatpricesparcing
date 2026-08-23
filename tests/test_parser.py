@@ -361,3 +361,64 @@ def test_backoff_signals_do_not_compound():
     col.pace_multiplier = lambda: 1.0
     col.cached_budget_factor = lambda: 1.0
     assert col.stretch_factor() == 1.0
+
+
+def test_pace_recovery_runs_on_the_clock_not_on_polls():
+    """A x8 backoff must unwind even while polling is nearly stopped — the
+    multiplier is what makes polls rare, so tying recovery to them deadlocks."""
+    from datetime import datetime, timedelta, timezone
+    from src.collector import Collector
+    from src.pacing import PACE_RECOVER_SECONDS, PACE_UP_FACTOR
+
+    store: dict[str, str] = {}
+
+    class FakeDB:
+        def get_setting(self, key, default=None):
+            return store.get(key, default)
+
+        def set_setting(self, key, value):
+            store[key] = value
+
+    col = Collector.__new__(Collector)
+    col.db = FakeDB()
+
+    def hours_ago(h):
+        return (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat()
+
+    store["pace_multiplier"] = "8.0"
+    store["pace_last_429"] = hours_ago(3)      # quiet for three hours
+
+    col.maybe_speed_up()
+    eased = float(store["pace_multiplier"])
+    assert eased == round(8.0 / PACE_UP_FACTOR, 3), "one step down per clean hour"
+
+    # A second call inside the same hour must not double-step.
+    col.maybe_speed_up()
+    assert float(store["pace_multiplier"]) == eased
+
+    # ... but the next clean hour eases it again.
+    store["pace_last_step"] = hours_ago(PACE_RECOVER_SECONDS / 3600 + 0.1)
+    col.maybe_speed_up()
+    assert float(store["pace_multiplier"]) < eased
+
+    # A fresh 429 blocks recovery entirely.
+    store["pace_multiplier"] = "8.0"
+    store["pace_last_429"] = hours_ago(0.1)
+    col.maybe_speed_up()
+    assert float(store["pace_multiplier"]) == 8.0
+
+
+def test_pace_recovery_is_symmetric_with_the_backoff():
+    from src.pacing import PACE_MAX, PACE_UP_FACTOR
+
+    # Six clean hours should undo a backoff that took six 429s to build.
+    mult = 1.0
+    for _ in range(6):
+        mult = min(mult * PACE_UP_FACTOR, PACE_MAX)
+    assert mult == PACE_MAX
+
+    hours = 0
+    while mult > 1.0 and hours < 50:
+        mult = max(mult / PACE_UP_FACTOR, 1.0)
+        hours += 1
+    assert hours <= 6, f"x{PACE_MAX} should unwind within hours, took {hours}"

@@ -110,8 +110,14 @@ def run_forever(collector: Collector) -> None:
             last_resync = time.monotonic()
             active = collector.active_items()
             collector.refresh_budget_factor()
-            if collector.sync_proxies():      # proxies edited in the dashboard
-                collector.store_rate_state()
+            # Unwind the 429 backoff on the clock. Doing this only after a
+            # successful poll deadlocks: a large multiplier is exactly what
+            # makes successful polls rare.
+            collector.maybe_speed_up()
+            collector.sync_proxies()          # proxies edited in the dashboard
+            # Keep the dashboard honest about the live pool even during a long
+            # quiet stretch between polls.
+            collector.store_rate_state()
             new_names = [n for n in active if n not in scheduled]
             new_step = startup_step(max(len(active), 1))
             for i, name in enumerate(new_names):

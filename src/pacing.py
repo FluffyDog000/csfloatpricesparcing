@@ -18,7 +18,6 @@ ADAPTIVE_MAX_MINUTES = 120.0  # never stretch an item beyond this (freshness)
 
 # Global pace multiplier (AIMD): grows on a 429, decays after a clean stretch.
 PACE_UP_FACTOR = 1.5
-PACE_DOWN_FACTOR = 0.9
 PACE_MAX = 8.0
 PACE_RECOVER_SECONDS = 3600.0   # one clean hour before easing back up
 

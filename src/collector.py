@@ -18,7 +18,6 @@ from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
-    PACE_DOWN_FACTOR,
     PACE_MAX,
     PACE_RECOVER_SECONDS,
     PACE_UP_FACTOR,
@@ -163,35 +162,43 @@ class Collector:
                         after, before)
         self.db.set_setting("pace_last_429", utcnow_iso())
 
+    def _clean_seconds(self, key: str) -> float | None:
+        """Seconds since the timestamp in `key`, or None when it isn't set."""
+        raw = self.db.get_setting(key)
+        if not raw:
+            return None
+        try:
+            t = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds()
+
     def maybe_speed_up(self) -> None:
-        """After a clean stretch with no 429, edge the pace back up."""
+        """After a clean stretch with no 429, edge the pace back up.
+
+        Recovery is driven by the CLOCK, not by how often we poll. The pace
+        multiplier is what makes polls rare in the first place, so tying its
+        decay to successful polls means a x8 backoff keeps itself alive: at one
+        poll per 16 hours it would take days to unwind. Each clean hour undoes
+        exactly one slow_down step, so the schedule recovers as fast as it
+        backed off."""
         mult = self.pace_multiplier()
         if mult <= 1.0:
             return
-        last_429 = self.db.get_setting("pace_last_429")
-        if last_429:
-            try:
-                t = datetime.fromisoformat(last_429)
-                if t.tzinfo is None:
-                    t = t.replace(tzinfo=timezone.utc)
-                if (datetime.now(timezone.utc) - t).total_seconds() < PACE_RECOVER_SECONDS:
-                    return
-            except ValueError:
-                pass
-        last_step = self.db.get_setting("pace_last_step")
-        if last_step:
-            try:
-                t = datetime.fromisoformat(last_step)
-                if t.tzinfo is None:
-                    t = t.replace(tzinfo=timezone.utc)
-                if (datetime.now(timezone.utc) - t).total_seconds() < PACE_RECOVER_SECONDS:
-                    return
-            except ValueError:
-                pass
-        new_mult = max(mult * PACE_DOWN_FACTOR, 1.0)
+        since_429 = self._clean_seconds("pace_last_429")
+        if since_429 is not None and since_429 < PACE_RECOVER_SECONDS:
+            return
+        since_step = self._clean_seconds("pace_last_step")
+        if since_step is not None and since_step < PACE_RECOVER_SECONDS:
+            return
+        # Symmetric with slow_down (x1.5 up): one step down per clean hour.
+        new_mult = max(mult / PACE_UP_FACTOR, 1.0)
         self._set_pace_multiplier(new_mult)
         self.db.set_setting("pace_last_step", utcnow_iso())
-        log.info("No rate limits for a while — speeding up to x%.2f", new_mult)
+        log.info("No rate limits for a while — speeding up to x%.2f (was x%.2f)",
+                 new_mult, mult)
 
     def adaptive_enabled(self) -> bool:
         return (self.db.get_setting("adaptive_intervals", "1") or "1") != "0"
