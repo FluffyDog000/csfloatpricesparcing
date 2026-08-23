@@ -10,8 +10,9 @@ polling:
   interval_max_minutes: 30
 
   # Minimum delay between two consecutive HTTP requests, in seconds
-  # (global rate-limit guard, ~1 req/sec => 1.0).
-  min_seconds_between_requests: 1.2
+  # (global rate-limit guard). CSFloat's sales endpoint is stricter than it
+  # looks: with many tracked items raise this (3-5s) if you see 429s.
+  min_seconds_between_requests: 2.5
 
   # HTTP 429 handling: exponential backoff.
   rate_limit:

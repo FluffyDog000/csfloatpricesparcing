@@ -34,6 +34,9 @@ log = logging.getLogger("csfloat.main")
 
 # How often the running collector re-reads the tracked-item list from the DB.
 RESYNC_SECONDS = 30.0
+# Upper bound on the gap between first polls at startup, so a short item
+# list still starts collecting immediately.
+STARTUP_MAX_STEP = 20.0
 
 
 def run_once(collector: Collector) -> None:
@@ -61,15 +64,27 @@ def run_forever(collector: Collector) -> None:
         scheduled.add(name)
         seq += 1
 
-    # Prompt first poll for every current item, staggered a few seconds apart.
+    def startup_step(count: int) -> float:
+        """Seconds between the FIRST poll of consecutive items. A large list is
+        spread across the shortest poll interval so startup doesn't open with a
+        burst (which is what trips CSFloat's rate limit); a small list is capped
+        at STARTUP_MAX_STEP so it still starts collecting right away."""
+        window = collector.config.polling.interval_min_minutes * 60.0
+        per_item = window / max(count, 1)
+        return max(stagger, min(per_item, STARTUP_MAX_STEP))
+
+    # First poll for every item, spread evenly (first one fires immediately).
     now = time.monotonic()
     names = list(active.keys())
     random.shuffle(names)
+    step = startup_step(len(names))
     for i, name in enumerate(names):
-        schedule(name, now + i * stagger, stagger)
+        schedule(name, now + i * step, 0.0)
 
-    log.info("Collector started for %d item(s). Ctrl+C to stop.", len(names))
+    log.info("Collector started for %d item(s); first pass spread over %.1f min.",
+             len(names), len(names) * step / 60.0)
     last_resync = time.monotonic()
+    last_cooldown_log = 0.0
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
@@ -86,12 +101,23 @@ def run_forever(collector: Collector) -> None:
             last_resync = time.monotonic()
             active = collector.active_items()
             new_names = [n for n in active if n not in scheduled]
+            new_step = startup_step(max(len(active), 1))
             for i, name in enumerate(new_names):
-                schedule(name, time.monotonic() + i * stagger, stagger)
+                schedule(name, time.monotonic() + i * new_step, new_step)
                 log.info("New item picked up from DB: '%s'", name)
 
         if not heap:
             time.sleep(min(RESYNC_SECONDS, 5.0))
+            continue
+
+        # Global 429 cooldown: hold every item until CSFloat lets us back in.
+        cooling = collector.client.cooldown_remaining()
+        if cooling > 0:
+            if time.monotonic() - last_cooldown_log >= 60.0:
+                last_cooldown_log = time.monotonic()
+                log.warning("Rate-limited by CSFloat; polling paused for %.1f min",
+                            cooling / 60.0)
+            time.sleep(min(cooling, 5.0))
             continue
 
         run_at, _, name = heap[0]

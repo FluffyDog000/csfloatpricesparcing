@@ -15,16 +15,19 @@ function tile(label, value, sub, cls) {
 }
 
 function renderTiles(d) {
-  const budgetCls = d.budget_used_pct == null ? ""
-    : d.budget_used_pct >= 80 ? "bad" : d.budget_used_pct >= 50 ? "warn" : "good";
   const rlHour = d.stats_hour.rate_limited;
+  // The % is only a theoretical cap (spacing-based). Real 429s override it.
+  const budgetCls = rlHour ? "bad"
+    : d.budget_used_pct == null ? ""
+    : d.budget_used_pct >= 80 ? "bad" : d.budget_used_pct >= 50 ? "warn" : "good";
   const authHour = d.stats_hour.auth_error;
   document.getElementById("tiles").innerHTML =
     tile("активных предметов", d.active_items, `всего в базе: ${d.total_items}`) +
     tile("запросов/мин (оценка)", d.reqs_per_min_est,
          `лимит ~${d.budget_per_min}/мин (пауза ${d.min_seconds_between_requests}s)`) +
     tile("использование лимита", d.budget_used_pct == null ? "—" : d.budget_used_pct + "%",
-         "чем выше — тем ближе к пределу", budgetCls) +
+         rlHour ? "лимит уже бьётся — увеличь интервалы опроса"
+                : "теоретическая оценка; реальный сигнал — 429 справа", budgetCls) +
     tile("429 за час", rlHour, rlHour ? "упираешься в лимит CSFloat" : "лимит не бьётся",
          rlHour ? "bad" : "good") +
     tile("auth-ошибок за час", authHour,
