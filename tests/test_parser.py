@@ -422,3 +422,37 @@ def test_pace_recovery_is_symmetric_with_the_backoff():
         mult = max(mult / PACE_UP_FACTOR, 1.0)
         hours += 1
     assert hours <= 6, f"x{PACE_MAX} should unwind within hours, took {hours}"
+
+
+def test_seller_field_order_is_detected_either_way():
+    """Providers emit the same four fields in both orders; the panel's format
+    dropdown decides which one lands in the paste box."""
+    from src.proxies import normalize_proxy, split_proxy_flags
+
+    want = "http://acct-sid-1-ttl-19:pw@gate.example.com:8888"
+    assert normalize_proxy("gate.example.com:8888:acct-sid-1-ttl-19:pw") == want
+    assert normalize_proxy("acct-sid-1-ttl-19:pw:gate.example.com:8888") == want
+
+    # A numeric password must not flip the line: the half that parses as a
+    # hostname is the host, whichever side it sits on.
+    assert normalize_proxy("user:12345:1.2.3.4:8080") == "http://user:12345@1.2.3.4:8080"
+    assert normalize_proxy("1.2.3.4:8080:user:12345") == "http://user:12345@1.2.3.4:8080"
+
+    # The rotating marker still comes off either order.
+    assert split_proxy_flags("acct:pw:gate.example.com:8888 #rotating") == \
+        ("http://acct:pw@gate.example.com:8888", True)
+
+
+def test_many_sticky_sessions_become_separate_routes():
+    from src.proxies import ProxyPool
+
+    lines = [f"acct-sid-{i}-ttl-19:pw:gate.example.com:8888 #rotating"
+             for i in range(1, 21)]
+    pool = ProxyPool(lines, use_direct=False, rotating_limit=500)
+
+    assert len(pool.routes) == 20, "one route per session, not one per gateway"
+    assert all(r.rotating for r in pool.routes.values())
+    assert pool.total_remaining() == 20 * 500
+
+    # With no fixed route at all, rotating ones still get used.
+    assert pool.pick() is not None

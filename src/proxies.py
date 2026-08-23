@@ -314,22 +314,45 @@ def split_proxy_flags(line: str) -> tuple[str, bool]:
     return normalize_proxy(text), rotating
 
 
+def _looks_like_host(text: str) -> bool:
+    """A hostname or IP, as opposed to a login or a password."""
+    return "." in text or text.lower() == "localhost"
+
+
 def normalize_proxy(url: str) -> str:
     """Accept the formats proxy sellers hand out and return a requests-ready URL.
 
+    Providers emit the same four fields in either order, so both are accepted:
+
     "1.2.3.4:8080:user:pass" -> "http://user:pass@1.2.3.4:8080"
+    "user:pass:1.2.3.4:8080" -> "http://user:pass@1.2.3.4:8080"
     "user:pass@1.2.3.4:8080" -> "http://user:pass@1.2.3.4:8080"
+
     Anything that already carries a scheme is returned untouched.
     """
     text = (url or "").strip()
     if not text or "://" in text:
         return text
-    parts = text.split(":")
-    if len(parts) == 4 and parts[1].isdigit():
-        host, port, user, password = parts
-        return f"http://{user}:{password}@{host}:{port}"
     if "@" in text:
         return f"http://{text}"
+    parts = text.split(":")
+    if len(parts) == 4:
+        head_is_host = parts[1].isdigit() and _looks_like_host(parts[0])
+        tail_is_host = parts[3].isdigit() and _looks_like_host(parts[2])
+        # When both halves could be the host, trust the one that also parses as
+        # a hostname; a numeric password would otherwise flip the whole line.
+        if head_is_host and not tail_is_host:
+            host, port, user, password = parts
+            return f"http://{user}:{password}@{host}:{port}"
+        if tail_is_host:
+            user, password, host, port = parts
+            return f"http://{user}:{password}@{host}:{port}"
+        if parts[1].isdigit():
+            host, port, user, password = parts
+            return f"http://{user}:{password}@{host}:{port}"
+        if parts[3].isdigit():
+            user, password, host, port = parts
+            return f"http://{user}:{password}@{host}:{port}"
     if len(parts) == 2 and parts[1].isdigit():
         return f"http://{text}"
     return text
