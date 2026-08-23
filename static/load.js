@@ -36,6 +36,11 @@ function renderTiles(d) {
          rlHour ? "bad" : "good") +
     tile("auth-ошибок за час", authHour,
          authHour ? "обнови cookie в .env!" : "cookie в порядке", authHour ? "bad" : "good") +
+    tile("прокси заблокирован", d.stats_hour.proxy_blocked || 0,
+         d.stats_hour.proxy_blocked
+           ? "Cloudflare режет выходной IP — смени прокси"
+           : "выходные IP проходят",
+         d.stats_hour.proxy_blocked ? "warn" : "good") +
     tile("данные актуальны на", d.last_update ? timeFmt(d.last_update) : "—",
          d.stale_minutes == null ? "последний успешный сбор"
                                  : `${d.stale_minutes} мин назад`,
@@ -153,6 +158,7 @@ function statsRow(name, s) {
     <td class="num">${s.new_sales}</td>
     <td class="num ${s.rate_limited ? "hi-min" : ""}">${s.rate_limited}</td>
     <td class="num ${s.auth_error ? "hi-min" : ""}">${s.auth_error}</td>
+    <td class="num ${s.proxy_blocked ? "hi-min" : ""}">${s.proxy_blocked || 0}</td>
     <td class="num ${s.error ? "hi-min" : ""}">${s.error}</td></tr>`;
 }
 

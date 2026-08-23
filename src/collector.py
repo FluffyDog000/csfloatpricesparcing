@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
-from .csfloat_client import AuthError, CSFloatClient, RateLimited
+from .csfloat_client import AuthError, CSFloatClient, EdgeBlocked, RateLimited
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
@@ -500,6 +500,16 @@ class Collector:
             self.db.log_poll(
                 item_id=item_id, market_hash_name=name, fetched_count=0,
                 new_count=0, overlap_count=0, status="auth_error", note=str(exc),
+            )
+            return
+        except EdgeBlocked as exc:
+            # The cookie is fine — an exit IP was screened by Cloudflare. Says
+            # "swap the proxy", not "refresh the session".
+            log.error("PROXY BLOCKED for '%s': %s", name, exc)
+            self.store_rate_state()
+            self.db.log_poll(
+                item_id=item_id, market_hash_name=name, fetched_count=0,
+                new_count=0, overlap_count=0, status="proxy_blocked", note=str(exc),
             )
             return
         except RateLimited as exc:

@@ -504,3 +504,99 @@ def test_response_size_is_recorded_and_averaged():
     assert stats["samples"] == 2, "rows without a size must not count"
     assert stats["avg_bytes"] == 9000
     db.close()
+
+
+class _StubResp:
+    def __init__(self, code, body, headers=None):
+        import json as _json
+        self.status_code, self._body = code, body
+        self.headers = headers or {}
+        self.content = body.encode()
+        self._json = _json
+
+    @property
+    def text(self):
+        return self._body
+
+    def json(self):
+        return self._json.loads(self._body)
+
+    def raise_for_status(self):
+        import requests
+        if self.status_code >= 400:
+            raise requests.HTTPError(str(self.status_code))
+
+
+def _client_with_two_routes():
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["http://a.gate:8888 #rotating", "http://b.gate:8888 #rotating"],
+                        use_direct=False)
+    client.polling.rate_limit.base_backoff_seconds = 0
+    client._respect_spacing = lambda: None
+    return client
+
+
+def test_blocked_exit_ip_is_not_reported_as_an_auth_failure():
+    """A rotating proxy rolls its exit IP every few minutes; a screened one
+    answers 403/HTML that looks just like an expired cookie. Confusing the two
+    sends the user chasing their session instead of the proxy."""
+    from src.csfloat_client import AuthError, EdgeBlocked
+
+    challenge = _StubResp(200, "<!DOCTYPE html>Just a moment...",
+                          {"Content-Type": "text/html"})
+    banned = _StubResp(403, "<html>Attention Required! | Cloudflare</html>",
+                       {"Content-Type": "text/html"})
+    good = _StubResp(200, '[{"price": 1}]', {"Content-Type": "application/json"})
+
+    for first in (challenge, banned):
+        client = _client_with_two_routes()
+        seq = [first, good]
+        client.session.get = lambda url, **kw: seq.pop(0)
+        assert client.fetch_latest_sales("Test") == [{"price": 1}], \
+            "a blocked exit IP must fall through to another route"
+
+    # The same status from CSFloat itself (JSON body) still means the cookie.
+    client = _client_with_two_routes()
+    client.session.get = lambda url, **kw: _StubResp(
+        403, '{"error": "unauthorized"}', {"Content-Type": "application/json"})
+    try:
+        client.fetch_latest_sales("Test")
+        assert False, "a real auth failure must still raise AuthError"
+    except AuthError:
+        pass
+    except EdgeBlocked:
+        assert False, "an API auth failure must not be blamed on the proxy"
+
+
+def test_persistently_blocked_routes_are_faulted_and_give_up():
+    from src.csfloat_client import EdgeBlocked
+
+    client = _client_with_two_routes()
+    client.session.get = lambda url, **kw: _StubResp(
+        200, "<!DOCTYPE html>Just a moment...", {"Content-Type": "text/html"})
+
+    try:
+        client.fetch_latest_sales("Test")
+        assert False, "should give up once the retry budget is spent"
+    except EdgeBlocked as exc:
+        assert "route" in str(exc)
+
+    import time as _t
+    now = _t.monotonic()
+    assert any(r.parked_until > now for r in client.pool.routes.values()), \
+        "a route whose exit IP stays blocked must drop out of rotation"
+
+
+def test_edge_block_detection_reads_who_answered():
+    client = _client_with_two_routes()
+
+    assert client._edge_block(_StubResp(403, "<html>Just a moment</html>", {}))
+    assert client._edge_block(_StubResp(200, "anything", {"cf-mitigated": "challenge"}))
+    # JSON is CSFloat answering, whatever the status code.
+    assert not client._edge_block(
+        _StubResp(403, '{"error": "no"}', {"Content-Type": "application/json"}))
+    assert not client._edge_block(_StubResp(200, '[{"price": 1}]', {}))

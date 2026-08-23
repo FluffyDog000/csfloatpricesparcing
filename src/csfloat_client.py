@@ -38,6 +38,13 @@ class RateLimited(Exception):
     """Raised when 429 persists past the configured retry budget."""
 
 
+class EdgeBlocked(Exception):
+    """Raised when Cloudflare screened the exit IP on every route we tried.
+
+    Distinct from AuthError on purpose: the cookie is fine, the IP is not, so
+    the fix is a different proxy rather than a fresh session."""
+
+
 class CSFloatClient:
     def __init__(self, http: HttpConfig, polling: PollingConfig):
         self.http = http
@@ -104,6 +111,32 @@ class CSFloatClient:
                                  num("x-ratelimit-remaining"),
                                  num("x-ratelimit-reset"))
 
+    def _edge_block(self, resp) -> bool:
+        """True when this response came from Cloudflare's edge rather than from
+        CSFloat's API — i.e. the exit IP is challenged or banned, not our cookie.
+
+        Matters for rotating proxies: a sticky session hands out a fresh exit IP
+        every few minutes, and a bad one answers 403 (or a challenge page) that
+        looks exactly like an expired session unless you check who replied. The
+        API always answers JSON; the edge answers HTML."""
+        if "cf-mitigated" in resp.headers:
+            return True
+        ctype = resp.headers.get("Content-Type", "").lower()
+        if "json" in ctype:
+            return False
+        try:
+            body = (resp.text or "").lstrip()[:200].lower()
+        except Exception:  # noqa: BLE001
+            return False
+        if body.startswith(("[", "{")):
+            return False
+        return bool(body) and (
+            body.startswith(("<!doctype", "<html"))
+            or "just a moment" in body
+            or "attention required" in body
+            or "cloudflare" in body
+        )
+
     def _account_ip_complaint(self, resp) -> bool:
         """True when the body is CSFloat's account-level 'too many requests from
         too many IPs'. That one is NOT about a single route's quota: rotating
@@ -130,6 +163,23 @@ class CSFloatClient:
                 ACCOUNT_BLOCK_SECONDS / 3600.0,
             )
         return True
+
+    def _retry_other_route(self, route, attempt: int, rl, backoff: float,
+                           name: str, reason: str):
+        """Park the offending route and let the caller try another one.
+
+        Returns an exception to raise when the retries are spent, or None to
+        keep going. The route is faulted either way, so a proxy whose exit IP
+        stays bad drops out of rotation instead of eating every poll."""
+        self.pool.record_failure(route, reason)
+        if attempt + 1 > rl.max_retries:
+            return EdgeBlocked(f"{reason} for '{name}' on route {route.key}; "
+                               f"gave up after {rl.max_retries} attempts")
+        log.warning("%s for '%s' via %s (attempt %d/%d) — trying another route "
+                    "in %.1fs", reason, name, route.key, attempt + 1,
+                    rl.max_retries, backoff)
+        time.sleep(backoff)
+        return None
 
     def _enter_cooldown(self, retry_after: float | None = None) -> float:
         """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped)."""
@@ -226,6 +276,15 @@ class CSFloatClient:
                         f"account flagged for too many IPs on {market_hash_name}; "
                         f"pausing for {wait / 60:.1f} min"
                     )
+                if self._edge_block(resp):
+                    blocked = self._retry_other_route(
+                        route, attempt, rl, backoff, market_hash_name,
+                        f"HTTP {resp.status_code} from the edge (exit IP blocked)")
+                    if blocked is not None:
+                        raise blocked
+                    attempt += 1
+                    backoff = min(backoff * 2, rl.max_backoff_seconds)
+                    continue
                 raise AuthError(
                     f"HTTP {resp.status_code} for {market_hash_name} — "
                     f"session cookie/token likely expired, refresh it."
@@ -267,6 +326,18 @@ class CSFloatClient:
             self._capture_rate_headers(resp)
             self._feed_pool(route, resp)
             resp.raise_for_status()
+
+            if self._edge_block(resp):
+                # HTTP 200 with a challenge page: the exit IP is being screened.
+                blocked = self._retry_other_route(
+                    route, attempt, rl, backoff, market_hash_name,
+                    "Cloudflare challenge instead of JSON (exit IP screened)")
+                if blocked is not None:
+                    raise blocked
+                attempt += 1
+                backoff = min(backoff * 2, rl.max_backoff_seconds)
+                continue
+
             self.last_response_bytes = len(resp.content)
             self.pool.record_success(route)
             self._consecutive_429 = 0  # healthy response clears the escalation

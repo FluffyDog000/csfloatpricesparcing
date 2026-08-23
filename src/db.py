@@ -494,6 +494,7 @@ class Database:
             "ok": by_status.get("ok", 0),
             "rate_limited": by_status.get("rate_limited", 0),
             "auth_error": by_status.get("auth_error", 0),
+            "proxy_blocked": by_status.get("proxy_blocked", 0),
             "error": by_status.get("error", 0),
             "new_sales": new_sales,
         }
