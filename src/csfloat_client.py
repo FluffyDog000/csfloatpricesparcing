@@ -45,6 +45,7 @@ class CSFloatClient:
         self._consecutive_429 = 0
         # Whatever rate-limit headers CSFloat returned with the last 429.
         self.last_429_headers: dict[str, str] = {}
+        self.last_429_body: str = ""
         self.session = requests.Session()
         self.session.headers.update(self._base_headers())
 
@@ -150,8 +151,14 @@ class CSFloatClient:
                     if k.lower().startswith(("retry-after", "x-ratelimit", "ratelimit",
                                              "x-rate-limit", "cf-ray"))
                 }
-                if self.last_429_headers:
-                    log.warning("429 headers: %s", self.last_429_headers)
+                # The body tells us WHO is blocking: CSFloat's own account-level
+                # message vs a Cloudflare bot/IP challenge. Vital for diagnosis.
+                try:
+                    self.last_429_body = (resp.text or "")[:300]
+                except Exception:  # noqa: BLE001
+                    self.last_429_body = ""
+                log.warning("429 details: headers=%s body=%s",
+                            self.last_429_headers or "{}", self.last_429_body[:200])
                 raise RateLimited(
                     f"429 on {market_hash_name}; pausing all polling for "
                     f"{wait / 60:.1f} min (consecutive 429: {self._consecutive_429})"

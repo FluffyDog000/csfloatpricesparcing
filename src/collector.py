@@ -248,6 +248,9 @@ class Collector:
         headers = getattr(self.client, "last_429_headers", None)
         if headers:
             self.db.set_setting("last_429_headers", json.dumps(headers, ensure_ascii=False))
+        body = getattr(self.client, "last_429_body", "")
+        if body:
+            self.db.set_setting("last_429_body", body)
         self.db.set_setting("last_429_at", utcnow_iso())
 
     def restore_cooldown_from_db(self) -> float:

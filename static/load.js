@@ -116,7 +116,9 @@ function renderPace(d) {
         ? Object.entries(h).map(([k, v]) => `${k}: ${v}`).join(" · ")
         : "заголовков с лимитом сервер не прислал";
     } catch (e) { hdrs = "—"; }
-    diag.textContent = `Последний 429: ${timeFmt(d.last_429_at)} · ${hdrs}`;
+    diag.textContent = `Последний 429: ${timeFmt(d.last_429_at)} · ${hdrs}` +
+      (d.last_429_body ? `\nОтвет сервера: ${d.last_429_body}` : "");
+    diag.style.whiteSpace = "pre-wrap";
   } else {
     diag.textContent = "429 ещё не было — ограничений от CSFloat не фиксировалось. ✅";
   }

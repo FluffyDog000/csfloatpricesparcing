@@ -670,6 +670,7 @@ def api_load():
             "pace_max": PACE_MAX,
             "avg_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
             "last_429_headers": db.get_setting("last_429_headers") or "",
+            "last_429_body": db.get_setting("last_429_body") or "",
             "last_429_at": db.get_setting("last_429_at") or None,
             "cooldown_until": cooldown_until,
             "cooldown_remaining_sec": round(cooldown_left),
