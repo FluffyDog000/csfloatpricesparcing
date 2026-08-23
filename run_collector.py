@@ -23,6 +23,7 @@ import random
 import time
 
 from src.backup import read_generation
+from src.alerts import AlertService
 from src.backup_service import BackupService
 from src.collector import Collector
 from src.config import load_config
@@ -51,6 +52,8 @@ def run_forever(collector: Collector) -> None:
     service (daily Telegram export + inbound restore)."""
     backup = BackupService(collector.config, collector)
     db_generation = read_generation(collector.config.db_path)
+    collector.restore_cooldown_from_db()
+    alerts = AlertService(collector.config, collector.db)
 
     heap: list[tuple[float, int, str]] = []
     seq = 0
@@ -89,6 +92,9 @@ def run_forever(collector: Collector) -> None:
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
         backup.tick()
+        # Health alerts (auth failure / stall / sustained 429) to Telegram.
+        alerts.db = collector.db          # follow DB reopen after a restore
+        alerts.tick(time.monotonic())
 
         # If the web UI restored the DB, its generation marker changed — reopen.
         gen = read_generation(collector.config.db_path)

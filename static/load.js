@@ -91,13 +91,35 @@ function renderPace(d) {
   document.getElementById("int-min").value = d.interval_min_minutes;
   document.getElementById("int-max").value = d.interval_max_minutes;
   document.getElementById("spacing").value = d.min_seconds_between_requests;
-  const avg = (d.interval_min_minutes + d.interval_max_minutes) / 2;
-  const est = d.active_items && avg ? (d.active_items / avg) : 0;
-  document.getElementById("pace-hint").textContent =
-    `${d.active_items} предм. / ~${avg.toFixed(0)} мин ≈ ${est.toFixed(1)} запр/мин` +
-    (d.intervals_customized
-      ? "  ·  задано через дашборд"
-      : `  ·  из config.yaml (${d.config_interval_min}–${d.config_interval_max} мин)`);
+  document.getElementById("adaptive-on").checked = !!d.adaptive_enabled;
+  document.getElementById("adaptive-max").value = d.adaptive_max_minutes;
+  const parts = [
+    `${d.active_items} предм. · средний интервал ~${d.avg_interval_minutes ?? "—"} мин ` +
+    `≈ ${d.reqs_per_min_est} запр/мин`,
+    d.adaptive_enabled
+      ? `адаптивно: от ${d.interval_min_minutes} до ${d.adaptive_max_minutes} мин по скорости продаж`
+      : `фиксированно ${d.interval_min_minutes}–${d.interval_max_minutes} мин`,
+  ];
+  if (d.pace_multiplier > 1) {
+    parts.push(`авто-замедление ×${d.pace_multiplier} (после 429; спадает за час без ошибок)`);
+  }
+  parts.push(d.intervals_customized ? "задано через дашборд" : "из config.yaml");
+  document.getElementById("pace-hint").textContent = parts.join("  ·  ");
+
+  // Diagnostics: what CSFloat itself said about the limit.
+  const diag = document.getElementById("diag");
+  if (d.last_429_at) {
+    let hdrs = "";
+    try {
+      const h = JSON.parse(d.last_429_headers || "{}");
+      hdrs = Object.keys(h).length
+        ? Object.entries(h).map(([k, v]) => `${k}: ${v}`).join(" · ")
+        : "заголовков с лимитом сервер не прислал";
+    } catch (e) { hdrs = "—"; }
+    diag.textContent = `Последний 429: ${timeFmt(d.last_429_at)} · ${hdrs}`;
+  } else {
+    diag.textContent = "429 ещё не было — ограничений от CSFloat не фиксировалось. ✅";
+  }
 }
 
 function statsRow(name, s) {
@@ -179,6 +201,8 @@ document.getElementById("save-pace").addEventListener("click", async () => {
     interval_min_minutes: document.getElementById("int-min").value,
     interval_max_minutes: document.getElementById("int-max").value,
     min_seconds_between_requests: document.getElementById("spacing").value,
+    adaptive_intervals: document.getElementById("adaptive-on").checked,
+    adaptive_max_minutes: document.getElementById("adaptive-max").value,
   };
   try {
     await postJSON("/api/load/settings", body, token());
@@ -193,6 +217,16 @@ document.getElementById("reset-pace").addEventListener("click", async () => {
   try {
     await postJSON("/api/load/settings", { reset: true }, token());
     paceMsg("Сброшено к значениям из config.yaml.");
+    refresh();
+  } catch (e) {
+    paceMsg("Ошибка: " + e.message, true);
+  }
+});
+
+document.getElementById("reset-pace-mult").addEventListener("click", async () => {
+  try {
+    await postJSON("/api/load/settings", { reset_pace: true }, token());
+    paceMsg("Авто-замедление сброшено к ×1.");
     refresh();
   } catch (e) {
     paceMsg("Ошибка: " + e.message, true);

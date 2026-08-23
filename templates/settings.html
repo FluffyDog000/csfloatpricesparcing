@@ -26,6 +26,20 @@
 </section>
 
 <section class="settings-block">
+  <h2>Уведомления о проблемах</h2>
+  <p class="muted">Бот напишет в тот же Telegram-чат, если сбор встал: протухла
+     cookie, долго нет успешных опросов или лимит 429 не отпускает.
+     Не чаще одного сообщения в час на каждую проблему.</p>
+  <div class="row">
+    <label class="chk"><input type="checkbox" id="alerts-enabled"> включить</label>
+    <label>порог простоя
+      <input type="number" id="alert-stale" class="input num-input" min="10" max="1440" step="5"> мин</label>
+    <button class="btn btn-primary" id="save-alerts">Сохранить</button>
+  </div>
+  <div class="settings-msg" id="alerts-msg"></div>
+</section>
+
+<section class="settings-block">
   <h2>Восстановление базы</h2>
   <p class="muted">
     Загрузи файл <code>*.db</code> — текущая база будет сохранена в резервную

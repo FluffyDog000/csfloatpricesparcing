@@ -22,8 +22,20 @@
     <button class="btn btn-primary" id="save-pace">Сохранить</button>
     <button class="btn" id="reset-pace">Сбросить</button>
   </div>
+  <div class="row" style="margin-top:10px">
+    <label class="chk"><input type="checkbox" id="adaptive-on">
+      адаптивный интервал по скорости продаж</label>
+    <label>потолок
+      <input type="number" id="adaptive-max" class="input num-input" min="15" max="1440" step="5"> мин</label>
+    <button class="btn" id="reset-pace-mult">Сбросить замедление</button>
+  </div>
   <div class="muted" id="pace-hint"></div>
   <div class="settings-msg" id="pace-msg"></div>
+</section>
+
+<section class="settings-block">
+  <h2>Диагностика лимита</h2>
+  <div class="muted" id="diag"></div>
 </section>
 
 <section>

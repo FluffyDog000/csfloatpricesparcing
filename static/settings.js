@@ -19,7 +19,9 @@ async function loadSettings() {
     last.textContent = s.last_export_date_msk
       ? `Последний бэкап: ${s.last_export_date_msk}`
       : "Бэкап ещё не отправлялся";
-    if (!s.telegram_configured) setMsg("settings-msg", "Telegram не настроен — бэкапы не будут отправляться.", true);
+    document.getElementById("alerts-enabled").checked = !!s.alerts_enabled;
+    document.getElementById("alert-stale").value = s.alert_stale_minutes;
+    if (!s.telegram_configured) setMsg("settings-msg", "Telegram не настроен — бэкапы и уведомления не будут отправляться.", true);
   } catch (e) {
     setMsg("settings-msg", "Ошибка загрузки настроек: " + e.message, true);
   }
@@ -70,3 +72,15 @@ document.getElementById("restore-form").addEventListener("submit", async (ev) =>
 });
 
 loadSettings();
+
+document.getElementById("save-alerts").addEventListener("click", async () => {
+  try {
+    await postJSON("/api/settings", {
+      alerts_enabled: document.getElementById("alerts-enabled").checked,
+      alert_stale_minutes: document.getElementById("alert-stale").value,
+    }, token());
+    setMsg("alerts-msg", "Сохранено.");
+  } catch (e) {
+    setMsg("alerts-msg", "Ошибка: " + e.message, true);
+  }
+});

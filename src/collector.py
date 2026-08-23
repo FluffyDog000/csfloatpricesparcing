@@ -14,9 +14,19 @@ from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import AuthError, CSFloatClient, RateLimited
 from .db import Database, utcnow_iso
 from .images import ImageService
+from .pacing import (
+    ADAPTIVE_MAX_MINUTES,
+    PACE_DOWN_FACTOR,
+    PACE_MAX,
+    PACE_RECOVER_SECONDS,
+    PACE_UP_FACTOR,
+    adaptive_minutes,
+    window_start,
+)
 from .parser import extract_icon_hash, extract_records, parse_sales
 
 log = logging.getLogger("csfloat.collector")
+
 
 
 class Collector:
@@ -122,14 +132,104 @@ class Collector:
         """Push the live request spacing into the HTTP client."""
         self.client.polling.min_seconds_between_requests = self.runtime_polling()[2]
 
-    def interval_for(self, item: ItemConfig) -> float:
-        """Random poll interval in seconds for this item (jitter)."""
+    # -- adaptive pacing -----------------------------------------------------
+
+    def pace_multiplier(self) -> float:
+        """Global slowdown factor learned from 429s (1.0 = configured pace)."""
+        raw = self.db.get_setting("pace_multiplier")
+        try:
+            return min(max(float(raw), 1.0), PACE_MAX) if raw else 1.0
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _set_pace_multiplier(self, value: float) -> None:
+        self.db.set_setting("pace_multiplier", f"{min(max(value, 1.0), PACE_MAX):.3f}")
+
+    def slow_down(self) -> None:
+        """Called on a 429: back off the whole schedule (multiplicative)."""
+        before = self.pace_multiplier()
+        after = min(before * PACE_UP_FACTOR, PACE_MAX)
+        if after > before:
+            self._set_pace_multiplier(after)
+            log.warning("Rate limit hit — slowing the schedule x%.2f (was x%.2f)",
+                        after, before)
+        self.db.set_setting("pace_last_429", utcnow_iso())
+
+    def maybe_speed_up(self) -> None:
+        """After a clean stretch with no 429, edge the pace back up."""
+        mult = self.pace_multiplier()
+        if mult <= 1.0:
+            return
+        last_429 = self.db.get_setting("pace_last_429")
+        if last_429:
+            try:
+                t = datetime.fromisoformat(last_429)
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - t).total_seconds() < PACE_RECOVER_SECONDS:
+                    return
+            except ValueError:
+                pass
+        last_step = self.db.get_setting("pace_last_step")
+        if last_step:
+            try:
+                t = datetime.fromisoformat(last_step)
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - t).total_seconds() < PACE_RECOVER_SECONDS:
+                    return
+            except ValueError:
+                pass
+        new_mult = max(mult * PACE_DOWN_FACTOR, 1.0)
+        self._set_pace_multiplier(new_mult)
+        self.db.set_setting("pace_last_step", utcnow_iso())
+        log.info("No rate limits for a while — speeding up to x%.2f", new_mult)
+
+    def adaptive_enabled(self) -> bool:
+        return (self.db.get_setting("adaptive_intervals", "1") or "1") != "0"
+
+    def adaptive_ceiling(self) -> float:
+        raw = self.db.get_setting("adaptive_max_minutes")
+        try:
+            return float(raw) if raw else ADAPTIVE_MAX_MINUTES
+        except (TypeError, ValueError):
+            return ADAPTIVE_MAX_MINUTES
+
+    def adaptive_interval_minutes(self, item_id: int, floor_min: float) -> float | None:
+        """Interval sized to this item's own sale rate (None if too little
+        history — the caller then uses the plain configured interval)."""
+        stats = self.db.sales_window(item_id, window_start())
+        return adaptive_minutes(
+            int(stats.get("c") or 0), stats.get("first_sold"),
+            floor_minutes=floor_min, ceiling_minutes=self.adaptive_ceiling(),
+        )
+
+    def interval_for(self, item: ItemConfig, item_id: int | None = None) -> float:
+        """Seconds until this item's next poll.
+
+        Per-item overrides win; otherwise the interval adapts to the item's own
+        sale rate (when enabled), and the global pace multiplier — learned from
+        429s — stretches everything."""
         gmin, gmax, _ = self.runtime_polling()
-        lo = item.interval_min_minutes or gmin
-        hi = item.interval_max_minutes or gmax
-        if hi < lo:
-            lo, hi = hi, lo
-        return random.uniform(lo, hi) * 60.0
+        mult = self.pace_multiplier()
+
+        if item.interval_min_minutes or item.interval_max_minutes:
+            lo = item.interval_min_minutes or gmin
+            hi = item.interval_max_minutes or gmax
+            if hi < lo:
+                lo, hi = hi, lo
+            return random.uniform(lo, hi) * 60.0 * mult
+
+        if self.adaptive_enabled():
+            if item_id is None:
+                item_id = self.db.get_item_id(item.name)
+            adaptive = (self.adaptive_interval_minutes(item_id, gmin)
+                        if item_id is not None else None)
+            if adaptive is not None:
+                jitter = random.uniform(0.9, 1.1)   # avoid items syncing up
+                return adaptive * 60.0 * jitter * mult
+
+        return random.uniform(gmin, gmax) * 60.0 * mult
 
     # -- cooldown state shared with the dashboard ----------------------------
 
@@ -142,6 +242,38 @@ class Collector:
         self.db.set_setting("cooldown_until", until.replace(microsecond=0).isoformat())
         self.db.set_setting("cooldown_consecutive",
                             str(getattr(self.client, "_consecutive_429", 0)))
+
+    def _store_429_headers(self) -> None:
+        """Remember what CSFloat told us about its limit (shown on the dashboard)."""
+        headers = getattr(self.client, "last_429_headers", None)
+        if headers:
+            self.db.set_setting("last_429_headers", json.dumps(headers, ensure_ascii=False))
+        self.db.set_setting("last_429_at", utcnow_iso())
+
+    def restore_cooldown_from_db(self) -> float:
+        """On startup, re-arm a cooldown that was still running before the
+        restart — otherwise we immediately burst back into the rate limit."""
+        raw = self.db.get_setting("cooldown_until")
+        if not raw:
+            return 0.0
+        try:
+            until = datetime.fromisoformat(raw)
+        except ValueError:
+            return 0.0
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        remaining = (until - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            self._clear_cooldown()
+            return 0.0
+        try:
+            consecutive = int(self.db.get_setting("cooldown_consecutive") or 0)
+        except ValueError:
+            consecutive = 0
+        self.client.restore_cooldown(remaining, consecutive)
+        log.warning("Restored 429 cooldown from previous run: %.1f min left",
+                    remaining / 60.0)
+        return remaining
 
     def _clear_cooldown(self) -> None:
         if self.db.get_setting("cooldown_until"):
@@ -184,6 +316,7 @@ class Collector:
         try:
             payload = self.client.fetch_latest_sales(name)
             self._clear_cooldown()
+            self.maybe_speed_up()
         except AuthError as exc:
             log.error("AUTH ERROR for '%s': %s", name, exc)
             self.db.log_poll(
@@ -194,6 +327,8 @@ class Collector:
         except RateLimited as exc:
             log.error("RATE LIMITED for '%s': %s", name, exc)
             self._store_cooldown()
+            self.slow_down()
+            self._store_429_headers()
             self.db.log_poll(
                 item_id=item_id, market_hash_name=name, fetched_count=0,
                 new_count=0, overlap_count=0, status="rate_limited", note=str(exc),

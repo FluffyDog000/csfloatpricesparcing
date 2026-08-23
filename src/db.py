@@ -251,7 +251,7 @@ class Database:
     def get_active_items(self) -> list[dict[str, Any]]:
         """Active items for the collector to poll (source of truth = DB)."""
         rows = self.conn.execute(
-            "SELECT market_hash_name, pattern_sensitive, interval_min_minutes, "
+            "SELECT id, market_hash_name, pattern_sensitive, interval_min_minutes, "
             "interval_max_minutes FROM items WHERE active = 1 "
             "ORDER BY market_hash_name"
         ).fetchall()
@@ -507,6 +507,27 @@ class Database:
         return int(self.conn.execute(
             "SELECT COUNT(*) AS c FROM items WHERE active = 1"
         ).fetchone()["c"])
+
+    def sales_window(self, item_id: int, since_iso: str) -> dict[str, Any]:
+        """Sales count and the earliest sale timestamp within a window — used to
+        estimate how fast an item actually sells."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c, MIN(sold_at) AS first_sold, MAX(sold_at) AS last_sold "
+            "FROM sales WHERE item_id = ? AND sold_at >= ?",
+            (item_id, since_iso),
+        ).fetchone()
+        return dict(row) if row else {"c": 0, "first_sold": None, "last_sold": None}
+
+    def sales_rates(self, since_iso: str) -> dict[int, tuple[int, str | None]]:
+        """{item_id: (sales_in_window, earliest_sold_at)} for every active item."""
+        rows = self.conn.execute(
+            "SELECT i.id AS item_id, COUNT(s.sale_id) AS c, MIN(s.sold_at) AS first_sold "
+            "FROM items i LEFT JOIN sales s "
+            "  ON s.item_id = i.id AND s.sold_at >= ? "
+            "WHERE i.active = 1 GROUP BY i.id",
+            (since_iso,),
+        ).fetchall()
+        return {int(r["item_id"]): (int(r["c"] or 0), r["first_sold"]) for r in rows}
 
     def last_successful_poll(self, item_id: int | None = None) -> str | None:
         """Timestamp of the most recent successful poll (global or per item)."""

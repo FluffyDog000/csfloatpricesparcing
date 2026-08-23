@@ -34,6 +34,9 @@ from src.backup_service import export_db
 from src.config import load_config, load_items
 from src.db import Database
 from src.logging_setup import setup_logging
+from src.pacing import (
+    ADAPTIVE_MAX_MINUTES, PACE_MAX, adaptive_minutes, window_start,
+)
 from src.report import (
     aggregate_buckets,
     aggregate_seeds,
@@ -568,12 +571,39 @@ def api_load():
     active = db.get_active_items()
     gmin, gmax, spacing, custom = _polling_settings()
 
-    # Estimated request rate from each item's average poll interval.
+    # Estimated request rate, mirroring how the collector schedules: per-item
+    # overrides win, then the adaptive interval, then the plain range — all
+    # stretched by the learned pace multiplier.
+    adaptive_on = (db.get_setting("adaptive_intervals", "1") or "1") != "0"
+    try:
+        adaptive_ceiling = float(db.get_setting("adaptive_max_minutes")
+                                 or ADAPTIVE_MAX_MINUTES)
+    except (TypeError, ValueError):
+        adaptive_ceiling = ADAPTIVE_MAX_MINUTES
+    try:
+        pace_mult = min(max(float(db.get_setting("pace_multiplier") or 1.0), 1.0), PACE_MAX)
+    except (TypeError, ValueError):
+        pace_mult = 1.0
+
+    rates = db.sales_rates(window_start()) if adaptive_on else {}
     reqs_per_min = 0.0
+    intervals: list[float] = []
     for it in active:
-        lo = it.get("interval_min_minutes") or gmin
-        hi = it.get("interval_max_minutes") or gmax
-        avg_min = max((lo + hi) / 2.0, 0.1)
+        lo = it.get("interval_min_minutes")
+        hi = it.get("interval_max_minutes")
+        if lo or hi:
+            avg_min = ((lo or gmin) + (hi or gmax)) / 2.0
+        else:
+            avg_min = (gmin + gmax) / 2.0
+            if adaptive_on:
+                item_id = it.get("id")
+                cnt, first = rates.get(item_id, (0, None)) if item_id else (0, None)
+                adapt = adaptive_minutes(cnt, first, floor_minutes=gmin,
+                                         ceiling_minutes=adaptive_ceiling)
+                if adapt is not None:
+                    avg_min = adapt
+        avg_min = max(avg_min * pace_mult, 0.1)
+        intervals.append(avg_min)
         reqs_per_min += 1.0 / avg_min
     budget = 60.0 / max(spacing, 0.01)
 
@@ -634,6 +664,13 @@ def api_load():
             "config_interval_min": config.polling.interval_min_minutes,
             "config_interval_max": config.polling.interval_max_minutes,
             "config_spacing": config.polling.min_seconds_between_requests,
+            "adaptive_enabled": adaptive_on,
+            "adaptive_max_minutes": adaptive_ceiling,
+            "pace_multiplier": round(pace_mult, 2),
+            "pace_max": PACE_MAX,
+            "avg_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
+            "last_429_headers": db.get_setting("last_429_headers") or "",
+            "last_429_at": db.get_setting("last_429_at") or None,
             "cooldown_until": cooldown_until,
             "cooldown_remaining_sec": round(cooldown_left),
             "cooldown_consecutive": int(db.get_setting("cooldown_consecutive") or 0),
@@ -674,7 +711,7 @@ def api_load_settings():
 
     if "reset" in data and data["reset"]:
         for k in ("poll_interval_min_minutes", "poll_interval_max_minutes",
-                  "min_seconds_between_requests"):
+                  "min_seconds_between_requests", "adaptive_max_minutes"):
             db.set_setting(k, "")
         log.info("Polling settings reset to config.yaml defaults")
         return jsonify({"ok": True, "reset": True})
@@ -687,6 +724,12 @@ def api_load_settings():
                 abort(400, description="Максимальный интервал меньше минимального")
         except (TypeError, ValueError):
             abort(400, description="Интервалы: нужны числа")
+    if "adaptive_intervals" in data:
+        db.set_setting("adaptive_intervals", "1" if data["adaptive_intervals"] else "0")
+    if "reset_pace" in data and data["reset_pace"]:
+        db.set_setting("pace_multiplier", "1.0")
+        log.info("Pace multiplier reset to 1.0 by user")
+    store("adaptive_max_minutes", "adaptive_max_minutes", 15, 1440, "Потолок интервала")
     store("poll_interval_min_minutes", "interval_min_minutes", 1, 1440, "Интервал min")
     store("poll_interval_max_minutes", "interval_max_minutes", 1, 1440, "Интервал max")
     store("min_seconds_between_requests", "min_seconds_between_requests",
@@ -712,6 +755,8 @@ def api_get_settings():
             "export_enabled": db.get_setting("export_enabled", "0") == "1",
             "last_export_date_msk": db.get_setting("last_export_date_msk"),
             "telegram_configured": config.telegram.configured(),
+            "alerts_enabled": (db.get_setting("alerts_enabled", "1") or "1") != "0",
+            "alert_stale_minutes": float(db.get_setting("alert_stale_minutes") or 90),
         }
     )
 
@@ -732,6 +777,17 @@ def api_set_settings():
         db.set_setting("export_time_msk", t)
     if "export_enabled" in data:
         db.set_setting("export_enabled", "1" if data.get("export_enabled") else "0")
+    if "alerts_enabled" in data:
+        db.set_setting("alerts_enabled", "1" if data.get("alerts_enabled") else "0")
+    if "alert_stale_minutes" in data:
+        raw = data.get("alert_stale_minutes")
+        try:
+            minutes = float(raw)
+        except (TypeError, ValueError):
+            abort(400, description="Порог простоя: нужно число минут")
+        if not (10 <= minutes <= 1440):
+            abort(400, description="Порог простоя: допустимо 10–1440 минут")
+        db.set_setting("alert_stale_minutes", str(minutes))
     log.info("Settings updated via web: %s", data)
     return jsonify({"ok": True})
 

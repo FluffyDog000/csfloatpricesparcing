@@ -43,6 +43,8 @@ class CSFloatClient:
         # we stop ALL polling for a while instead of hammering item by item.
         self._cooldown_until = 0.0
         self._consecutive_429 = 0
+        # Whatever rate-limit headers CSFloat returned with the last 429.
+        self.last_429_headers: dict[str, str] = {}
         self.session = requests.Session()
         self.session.headers.update(self._base_headers())
 
@@ -61,6 +63,13 @@ class CSFloatClient:
 
     def has_credentials(self) -> bool:
         return bool(self.http.cookie or self.http.authorization)
+
+    def restore_cooldown(self, seconds: float, consecutive: int = 0) -> None:
+        """Re-arm a cooldown that was still running before a restart, so the
+        collector doesn't immediately burst back into the rate limit."""
+        if seconds > 0:
+            self._cooldown_until = time.monotonic() + seconds
+            self._consecutive_429 = max(consecutive, 1)
 
     def cooldown_remaining(self) -> float:
         """Seconds left of the global 429 cooldown (0 when free to poll)."""
@@ -136,6 +145,13 @@ class CSFloatClient:
                     except ValueError:
                         retry_after = None
                 wait = self._enter_cooldown(retry_after)
+                self.last_429_headers = {
+                    k: v for k, v in resp.headers.items()
+                    if k.lower().startswith(("retry-after", "x-ratelimit", "ratelimit",
+                                             "x-rate-limit", "cf-ray"))
+                }
+                if self.last_429_headers:
+                    log.warning("429 headers: %s", self.last_429_headers)
                 raise RateLimited(
                     f"429 on {market_hash_name}; pausing all polling for "
                     f"{wait / 60:.1f} min (consecutive 429: {self._consecutive_429})"
