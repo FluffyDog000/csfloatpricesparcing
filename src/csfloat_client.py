@@ -17,9 +17,13 @@ from urllib.parse import quote
 import requests
 
 from .config import HttpConfig, PollingConfig
+from .db import utcnow_iso
 from .proxies import ProxyPool
 
 log = logging.getLogger("csfloat.client")
+
+# How long rotating routes stay parked after an account-level IP complaint.
+ACCOUNT_BLOCK_SECONDS = 6 * 3600.0
 
 # Global cooldown applied to ALL requests after a 429, doubling each time.
 COOLDOWN_BASE_SECONDS = 60.0
@@ -52,6 +56,8 @@ class CSFloatClient:
         # One budget per outgoing IP: the direct connection plus any proxies.
         self.pool = ProxyPool(list(http.proxies), use_direct=http.use_direct)
         self.last_route: str | None = None
+        # Set when CSFloat complains about one account using too many IPs.
+        self.account_ip_block_at: str | None = None
         self.session = requests.Session()
         self.session.headers.update(self._base_headers())
 
@@ -95,6 +101,33 @@ class CSFloatClient:
         self.pool.record_headers(route, num("x-ratelimit-limit"),
                                  num("x-ratelimit-remaining"),
                                  num("x-ratelimit-reset"))
+
+    def _account_ip_complaint(self, resp) -> bool:
+        """True when the body is CSFloat's account-level 'too many requests from
+        too many IPs'. That one is NOT about a single route's quota: rotating
+        exit IPs are what triggers it, so those routes must stop, not slow."""
+        try:
+            body = (resp.text or "")[:300].lower()
+        except Exception:  # noqa: BLE001
+            return False
+        return "too many ips" in body or "from too many" in body
+
+    def _handle_account_ip_complaint(self, resp) -> bool:
+        if not self._account_ip_complaint(resp):
+            return False
+        self.account_ip_block_at = utcnow_iso()
+        try:
+            self.last_429_body = (resp.text or "")[:300]
+        except Exception:  # noqa: BLE001
+            pass
+        if self.pool.park_rotating(ACCOUNT_BLOCK_SECONDS):
+            log.error(
+                "CSFloat flagged this account for using too many IPs. Rotating "
+                "routes are parked for %.0f h — switch the provider to sticky "
+                "sessions (a few fixed exit IPs) before re-enabling them.",
+                ACCOUNT_BLOCK_SECONDS / 3600.0,
+            )
+        return True
 
     def _enter_cooldown(self, retry_after: float | None = None) -> float:
         """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped)."""
@@ -185,6 +218,12 @@ class CSFloatClient:
                 continue
 
             if resp.status_code in (401, 403):
+                if self._handle_account_ip_complaint(resp):
+                    wait = self._enter_cooldown(None)
+                    raise RateLimited(
+                        f"account flagged for too many IPs on {market_hash_name}; "
+                        f"pausing for {wait / 60:.1f} min"
+                    )
                 raise AuthError(
                     f"HTTP {resp.status_code} for {market_hash_name} — "
                     f"session cookie/token likely expired, refresh it."
@@ -202,6 +241,7 @@ class CSFloatClient:
                         retry_after = None
                 self._capture_rate_headers(resp)
                 self._feed_pool(route, resp)
+                self._handle_account_ip_complaint(resp)
                 wait = self._enter_cooldown(retry_after)
                 self.pool.record_429(route, wait)
                 self.last_429_headers = {

@@ -39,15 +39,23 @@
      считается на IP, поэтому каждый прокси добавляет отдельный бюджет.
      По одному адресу в строке, можно вставить сразу список:<br>
      <code>http://user:pass@host:8080</code> · <code>socks5://host:1080</code> ·
-     <code>https://host:3128</code>. Пароли нигде не показываются и не пишутся в логи.
-     Изменения подхватываются сборщиком в течение ~30 секунд.</p>
+     <code>https://host:3128</code>. Формат продавцов <code>host:port:user:pass</code>
+     тоже понимается. Пароли нигде не показываются и не пишутся в логи.
+     Изменения подхватываются сборщиком в течение ~30 секунд.<br>
+     <b>Ротационный прокси</b> помечай суффиксом <code>#rotating</code> — у него на
+     каждый запрос свой выходной IP, поэтому заголовки лимита от него считать нельзя
+     и бот метит такой маршрут собственным дневным счётчиком.</p>
   <textarea id="proxies-text" class="input bulk-input" rows="6"
             placeholder="http://user:pass@host:8080&#10;socks5://host:1080"></textarea>
   <div class="row" style="margin-top:10px">
     <label class="chk"><input type="checkbox" id="use-direct">
       использовать и собственный IP сервера</label>
+    <label>лимит ротационного
+      <input type="number" id="rot-limit" class="input num-input"
+             min="1" max="20000" step="50"> запр./сутки</label>
     <button class="btn btn-primary" id="save-proxies">Сохранить прокси</button>
   </div>
+  <div class="warn-box" id="proxies-warn" hidden></div>
   <div class="muted" id="proxies-hint"></div>
   <div class="settings-msg" id="proxies-msg"></div>
 </section>

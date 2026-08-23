@@ -1,6 +1,7 @@
 """Tests for parsing & aggregation (pure functions, no network)."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from src import parser
@@ -182,8 +183,7 @@ def test_validate_proxy_accepts_supported_urls_and_rejects_junk():
         ok, why = validate_proxy(good)
         assert ok, f"{good} should be valid ({why})"
 
-    for bad in ("1.2.3.4:8080",          # no scheme
-                "ftp://host:21",         # unsupported scheme
+    for bad in ("ftp://host:21",         # unsupported scheme
                 "http://:8080",          # no host
                 "http://host",           # no port
                 "http://host:99999"):    # port out of range
@@ -225,3 +225,102 @@ def test_pool_never_exposes_proxy_credentials():
     dumped = pool.to_json()
     assert "sekret" not in dumped and "user" not in dumped
     assert json.loads(dumped)[0]["key"] == "http://1.2.3.4:8080"
+
+
+def test_rotating_marker_and_seller_formats_are_parsed():
+    from src.proxies import split_proxy_flags, validate_proxy
+
+    assert split_proxy_flags("http://gate:7000 #rotating") == ("http://gate:7000", True)
+    assert split_proxy_flags("http://gate:7000 #rot") == ("http://gate:7000", True)
+    assert split_proxy_flags("http://gate:7000") == ("http://gate:7000", False)
+
+    # The format proxy sellers hand out, with and without a scheme.
+    assert split_proxy_flags("1.2.3.4:8080:user:pass") == \
+        ("http://user:pass@1.2.3.4:8080", False)
+    assert split_proxy_flags("user:pass@1.2.3.4:8080") == \
+        ("http://user:pass@1.2.3.4:8080", False)
+    assert validate_proxy("1.2.3.4:8080:user:pass")[0]
+
+    # A marker on its own is not a proxy.
+    assert not validate_proxy("#rotating")[0]
+
+
+def test_rotating_route_uses_a_local_budget_not_response_headers():
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://gate:7000 #rotating"], use_direct=False,
+                     rotating_limit=3)
+    route = pool.routes["http://gate:7000"]
+    assert route.rotating
+
+    # A rotating endpoint reports a fresh quota from every exit IP; that must
+    # not be read as "we still have 499 requests left".
+    for _ in range(3):
+        picked = pool.pick()
+        assert picked is not None
+        pool.record_headers(picked, 500, 499, int(time.time()) + 3600)
+
+    assert route.window_used == 3
+    assert route.effective_remaining() == 0
+    assert pool.pick() is None, "local budget spent -> route must stop"
+    assert pool.wait_seconds() > 0
+
+
+def test_rotating_budget_survives_a_restart():
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://gate:7000 #rotating"], use_direct=False,
+                     rotating_limit=10)
+    for _ in range(4):
+        pool.pick()
+    saved = pool.usage_snapshot()
+
+    fresh = ProxyPool(["http://gate:7000 #rotating"], use_direct=False,
+                      rotating_limit=10)
+    fresh.restore_usage(saved)
+    assert fresh.routes["http://gate:7000"].effective_remaining() == 6, \
+        "a restart must not hand back an already-spent budget"
+
+
+def test_park_rotating_leaves_fixed_routes_working():
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://gate:7000 #rotating", "http://fixed:8080"],
+                     use_direct=False)
+    assert pool.park_rotating(3600) == 1
+    keys = {pool.pick().key for _ in range(5)}
+    assert keys == {"http://fixed:8080"}, \
+        "only the rotating route is parked after an account-level IP complaint"
+
+
+def test_client_detects_account_level_ip_complaint():
+    from src.csfloat_client import CSFloatClient
+
+    class FakeResp:
+        text = '{"error": "You have been making too many requests from too many IPs,"}'
+
+    client = CSFloatClient.__new__(CSFloatClient)
+    assert client._account_ip_complaint(FakeResp())
+
+    class Ordinary:
+        text = '{"error": "rate limit exceeded"}'
+
+    assert not client._account_ip_complaint(Ordinary())
+
+
+def test_rotating_route_is_overflow_only():
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://gate:7000 #rotating", "http://fixed:8080"],
+                     use_direct=True, rotating_limit=300)
+
+    used = {pool.pick().key for _ in range(8)}
+    assert "http://gate:7000" not in used, \
+        "a rotating route must not be used while fixed routes have quota"
+
+    now = int(time.time())
+    for key in ("direct", "http://fixed:8080"):
+        pool.routes[key].remaining, pool.routes[key].reset = 0, now + 3600
+
+    assert {pool.pick().key for _ in range(4)} == {"http://gate:7000"}, \
+        "once fixed routes are spent the rotating one takes over"

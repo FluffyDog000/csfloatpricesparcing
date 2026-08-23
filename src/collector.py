@@ -15,7 +15,7 @@ from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import AuthError, CSFloatClient, RateLimited
 from .db import Database, utcnow_iso
 from .images import ImageService
-from .proxies import parse_proxy_list
+from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
     PACE_DOWN_FACTOR,
@@ -265,6 +265,15 @@ class Collector:
             log.info("Seeded %d proxy/proxies from .env into the database.",
                      len(env_list))
 
+    def rotating_limit(self) -> int:
+        """Requests per 24h allowed through a rotating proxy. Deliberately a
+        local cap: a rotating endpoint reports someone else's quota headers."""
+        raw = self.db.get_setting("rotating_daily_limit")
+        try:
+            return max(int(raw), 1) if raw else ROTATING_DEFAULT_LIMIT
+        except (TypeError, ValueError):
+            return ROTATING_DEFAULT_LIMIT
+
     def sync_proxies(self) -> bool:
         """Apply the proxy list saved in the DB to the live pool. Returns True
         when the pool changed (called periodically, so web edits apply live)."""
@@ -275,7 +284,28 @@ class Collector:
         use_direct = (self.db.get_setting("use_direct", "1") or "1") != "0"
         if not urls and not use_direct:
             use_direct = True          # never leave the pool empty
-        return self.client.pool.replace(urls, use_direct=use_direct)
+        changed = self.client.pool.replace(urls, use_direct=use_direct,
+                                           rotating_limit=self.rotating_limit())
+        if changed:
+            self.restore_rotating_usage()
+        return changed
+
+    def restore_rotating_usage(self) -> None:
+        """Re-apply the spent local budget of rotating routes, so a restart (or
+        a list edit) doesn't hand them a fresh window they already used up."""
+        raw = self.db.get_setting("rotating_usage")
+        if not raw:
+            return
+        try:
+            self.client.pool.restore_usage(json.loads(raw))
+        except (TypeError, ValueError):
+            log.warning("Could not read stored rotating-proxy usage; ignoring.")
+
+    def store_rotating_usage(self) -> None:
+        pool = getattr(self.client, "pool", None)
+        if pool is None or not pool.has_rotating():
+            return
+        self.db.set_setting("rotating_usage", json.dumps(pool.usage_snapshot()))
 
     # -- API quota (x-ratelimit-*) -------------------------------------------
 
@@ -284,6 +314,10 @@ class Collector:
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())
+            self.store_rotating_usage()
+            blocked = getattr(self.client, "account_ip_block_at", None)
+            if blocked:
+                self.db.set_setting("account_ip_block_at", blocked)
             total = pool.total_remaining()
             if total is not None and len(pool.routes) > 1:
                 # With several routes the usable budget is their sum.

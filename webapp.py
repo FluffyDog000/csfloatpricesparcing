@@ -34,6 +34,7 @@ from src.backup_service import export_db
 from src.config import load_config, load_items
 from src.db import Database
 from src.logging_setup import setup_logging
+from src.proxies import ROTATING_DEFAULT_LIMIT
 from src.pacing import (
     ADAPTIVE_MAX_MINUTES, PACE_MAX, adaptive_minutes, window_start,
 )
@@ -679,6 +680,9 @@ def api_load():
             "routes": json.loads(db.get_setting("proxy_state") or "[]"),
             "proxies_text": db.get_setting("proxies") or "",
             "use_direct": (db.get_setting("use_direct", "1") or "1") != "0",
+            "rotating_daily_limit": int(db.get_setting("rotating_daily_limit")
+                                        or ROTATING_DEFAULT_LIMIT),
+            "account_ip_block_at": db.get_setting("account_ip_block_at") or None,
             "quota_limit": _num_setting(db, "rl_limit"),
             "quota_remaining": _num_setting(db, "rl_remaining"),
             "quota_reset": _num_setting(db, "rl_reset"),
@@ -738,10 +742,21 @@ def api_set_proxies():
         abort(400, description="Нельзя отключить собственный IP, пока не задан "
                                "ни один прокси — иначе запросы делать неоткуда.")
 
+    limit = None
+    if "rotating_daily_limit" in data:
+        try:
+            limit = int(data["rotating_daily_limit"])
+        except (TypeError, ValueError):
+            abort(400, description="Дневной лимит ротационного прокси — целое число.")
+        if not 1 <= limit <= 20000:
+            abort(400, description="Дневной лимит должен быть от 1 до 20000.")
+
     if urls is not None:
         db.set_setting("proxies", "\n".join(urls))
     if "use_direct" in data:
         db.set_setting("use_direct", "1" if data["use_direct"] else "0")
+    if limit is not None:
+        db.set_setting("rotating_daily_limit", str(limit))
 
     log.info("Proxy list updated via web: %d proxy/proxies, direct=%s",
              count, db.get_setting("use_direct"))

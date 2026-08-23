@@ -264,7 +264,8 @@ document.getElementById("reset-pace-mult").addEventListener("click", async () =>
 function renderRoutes(routes) {
   const sec = document.getElementById("routes-section");
   if (!sec) return;
-  sec.hidden = routes.length < 2;          // single direct route: nothing to compare
+  // Show as soon as a proxy exists; a lone direct route has nothing to compare.
+  sec.hidden = routes.length < 2 && !routes.some((r) => !r.direct);
   if (sec.hidden) return;
   document.getElementById("routes-body").innerHTML = routes.map((r) => {
     let state = "готов", cls = "";
@@ -273,8 +274,10 @@ function renderRoutes(routes) {
     else if (!r.available) { state = "квота исчерпана"; cls = "hi-min"; }
     const reset = r.reset
       ? timeFmt(new Date(r.reset * 1000).toISOString()) : "—";
+    const tag = r.direct ? " (сервер)"
+      : r.rotating ? ' <span class="badge">ротация</span>' : "";
     return `<tr>
-      <td>${esc(r.key)}${r.direct ? " (сервер)" : ""}</td>
+      <td>${esc(r.key)}${tag}</td>
       <td class="num">${r.remaining ?? "—"}</td>
       <td class="num">${r.limit ?? "—"}</td>
       <td>${reset}</td>
@@ -305,11 +308,34 @@ function renderProxies(d) {
   if (!proxiesDirty && document.activeElement !== direct) {
     direct.checked = d.use_direct !== false;
   }
-  const n = (d.routes || []).filter((r) => !r.direct).length;
-  document.getElementById("proxies-hint").textContent = n
-    ? `Активных прокси: ${n}${d.use_direct === false ? " (свой IP не используется)" : " + свой IP"}` +
-      ` · суммарный запас квоты: ${d.quota_remaining ?? "—"}`
-    : "Прокси не заданы — все запросы идут с IP сервера.";
+  const rot = document.getElementById("rot-limit");
+  if (rot && !proxiesDirty && document.activeElement !== rot) {
+    rot.value = d.rotating_daily_limit;
+  }
+  const proxied = (d.routes || []).filter((r) => !r.direct);
+  const rotating = proxied.filter((r) => r.rotating).length;
+  const hint = document.getElementById("proxies-hint");
+  if (!proxied.length) {
+    hint.textContent = "Прокси не заданы — все запросы идут с IP сервера.";
+  } else {
+    hint.textContent =
+      `Активных прокси: ${proxied.length}` +
+      (rotating ? ` (из них ротационных: ${rotating})` : "") +
+      (d.use_direct === false ? " · свой IP не используется" : " + свой IP") +
+      ` · суммарный запас квоты: ${d.quota_remaining ?? "—"}`;
+  }
+  // The account-level complaint is a different failure from a route's quota.
+  const warn = document.getElementById("proxies-warn");
+  if (d.account_ip_block_at) {
+    warn.hidden = false;
+    warn.textContent =
+      `⚠ ${timeFmt(d.account_ip_block_at)}: CSFloat пожаловался, что с аккаунта ` +
+      "идут запросы со слишком многих IP. Ротационные маршруты остановлены на 6 часов. " +
+      "Переключи провайдера на sticky-сессии (несколько постоянных IP) — иначе " +
+      "ограничение вернётся и станет жёстче.";
+  } else {
+    warn.hidden = true;
+  }
 }
 
 const proxiesBox = document.getElementById("proxies-text");
@@ -317,11 +343,14 @@ if (proxiesBox) {
   proxiesBox.addEventListener("input", () => { proxiesDirty = true; });
   document.getElementById("use-direct")
     .addEventListener("change", () => { proxiesDirty = true; });
+  document.getElementById("rot-limit")
+    .addEventListener("input", () => { proxiesDirty = true; });
 
   document.getElementById("save-proxies").addEventListener("click", async () => {
     const body = {
       proxies: proxiesBox.value,
       use_direct: document.getElementById("use-direct").checked,
+      rotating_daily_limit: document.getElementById("rot-limit").value,
     };
     try {
       const r = await postJSON("/api/load/proxies", body, token());
