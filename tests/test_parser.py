@@ -463,7 +463,8 @@ def test_usage_forecast_uses_measured_response_size_when_available():
 
     class FakeDB:
         def __init__(self, samples, avg):
-            self._stats = {"avg_bytes": avg, "samples": samples}
+            self._stats = {"avg_bytes": avg, "samples": samples,
+                           "total_bytes": int((avg or 0) * samples)}
 
         def response_size_stats(self, since):
             return self._stats
@@ -494,7 +495,9 @@ def test_response_size_is_recorded_and_averaged():
 
     db = Database(os.path.join(tempfile.mkdtemp(), "t.db"))
     since = "2000-01-01T00:00:00+00:00"
-    assert db.response_size_stats(since) == {"avg_bytes": None, "samples": 0}
+    empty = db.response_size_stats(since)
+    assert empty["avg_bytes"] is None and empty["samples"] == 0
+    assert empty["total_bytes"] == 0
 
     for size in (8000, 10000, None):        # a failed poll logs no size
         db.log_poll(item_id=None, market_hash_name="x", fetched_count=40,
@@ -503,6 +506,7 @@ def test_response_size_is_recorded_and_averaged():
     stats = db.response_size_stats(since)
     assert stats["samples"] == 2, "rows without a size must not count"
     assert stats["avg_bytes"] == 9000
+    assert stats["total_bytes"] == 18000, "traffic sums only what was measured"
     db.close()
 
 
