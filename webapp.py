@@ -35,6 +35,11 @@ from src.config import load_config, load_items
 from src.db import Database
 from src.logging_setup import setup_logging
 from src.proxies import ROTATING_DEFAULT_LIMIT
+
+# Until real responses are measured, size a full 40-sale page from an
+# observed sample. Replaced by the measured average as soon as one poll
+# has been logged.
+ASSUMED_RESPONSE_BYTES = 9000
 from src.pacing import (
     ADAPTIVE_MAX_MINUTES, PACE_MAX, adaptive_minutes, window_start,
 )
@@ -693,6 +698,7 @@ def api_load():
             "pace_multiplier": round(pace_mult, 2),
             "pace_max": PACE_MAX,
             "avg_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
+            **_usage_forecast(db, reqs_per_min, day_iso),
             "last_429_headers": db.get_setting("last_429_headers") or "",
             "last_429_body": db.get_setting("last_429_body") or "",
             "last_429_at": db.get_setting("last_429_at") or None,
@@ -709,6 +715,30 @@ def api_load():
             "recent": db.recent_poll_log(limit=30),
         }
     )
+
+
+def _usage_forecast(db, reqs_per_min: float, day_iso: str) -> dict:
+    """What the current schedule costs: requests and traffic per day/month.
+
+    Request volume comes from the same per-item intervals the collector uses.
+    Traffic is the measured average response size when there is one — a metered
+    proxy bills for exactly these bytes — and a sample-based estimate before
+    the first poll has been logged."""
+    sizes = db.response_size_stats(day_iso)
+    measured = sizes["avg_bytes"] if sizes["samples"] else None
+    avg_bytes = measured if measured else ASSUMED_RESPONSE_BYTES
+
+    per_day = reqs_per_min * 1440.0
+    bytes_day = per_day * avg_bytes
+    return {
+        "requests_per_day": round(per_day),
+        "requests_per_month": round(per_day * 30),
+        "avg_response_bytes": round(avg_bytes),
+        "response_samples": sizes["samples"],
+        "response_measured": bool(measured),
+        "traffic_day_mb": round(bytes_day / 1_048_576, 1),
+        "traffic_month_mb": round(bytes_day * 30 / 1_048_576, 1),
+    }
 
 
 @app.route("/api/load/proxies", methods=["POST"])

@@ -56,6 +56,8 @@ class CSFloatClient:
         # One budget per outgoing IP: the direct connection plus any proxies.
         self.pool = ProxyPool(list(http.proxies), use_direct=http.use_direct)
         self.last_route: str | None = None
+        # Size of the last successful response, so traffic can be reported.
+        self.last_response_bytes: int | None = None
         # Set when CSFloat complains about one account using too many IPs.
         self.account_ip_block_at: str | None = None
         self.session = requests.Session()
@@ -265,6 +267,7 @@ class CSFloatClient:
             self._capture_rate_headers(resp)
             self._feed_pool(route, resp)
             resp.raise_for_status()
+            self.last_response_bytes = len(resp.content)
             self.pool.record_success(route)
             self._consecutive_429 = 0  # healthy response clears the escalation
             return resp.json()

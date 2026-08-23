@@ -542,6 +542,7 @@ class Collector:
             self.db.log_poll(
                 item_id=item_id, market_hash_name=name, fetched_count=n_records,
                 new_count=0, overlap_count=0, status="ok", note=note,
+                response_bytes=self.client.last_response_bytes,
             )
             self.db.set_last_polled(item_id)
             return
@@ -570,6 +571,7 @@ class Collector:
         self.db.log_poll(
             item_id=item_id, market_hash_name=name, fetched_count=fetched,
             new_count=inserted, overlap_count=overlap, status="ok", note=note,
+            response_bytes=self.client.last_response_bytes,
         )
         self.db.set_last_polled(item_id)
 

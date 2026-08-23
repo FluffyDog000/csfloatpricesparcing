@@ -456,3 +456,51 @@ def test_many_sticky_sessions_become_separate_routes():
 
     # With no fixed route at all, rotating ones still get used.
     assert pool.pick() is not None
+
+
+def test_usage_forecast_uses_measured_response_size_when_available():
+    import webapp
+
+    class FakeDB:
+        def __init__(self, samples, avg):
+            self._stats = {"avg_bytes": avg, "samples": samples}
+
+        def response_size_stats(self, since):
+            return self._stats
+
+    # 1 request/min = 1440/day.
+    est = webapp._usage_forecast(FakeDB(0, None), 1.0, "2026-08-22T00:00:00+00:00")
+    assert est["requests_per_day"] == 1440
+    assert est["requests_per_month"] == 1440 * 30
+    assert est["response_measured"] is False
+    assert est["avg_response_bytes"] == webapp.ASSUMED_RESPONSE_BYTES
+
+    # Once real polls are logged, the estimate gives way to the measurement.
+    real = webapp._usage_forecast(FakeDB(30, 8964.0), 1.0, "2026-08-22T00:00:00+00:00")
+    assert real["response_measured"] is True
+    assert real["avg_response_bytes"] == 8964
+    assert real["response_samples"] == 30
+    assert real["traffic_day_mb"] == round(1440 * 8964 / 1_048_576, 1)
+    assert real["traffic_month_mb"] == round(1440 * 8964 * 30 / 1_048_576, 1)
+
+    # No polls scheduled at all costs nothing.
+    idle = webapp._usage_forecast(FakeDB(5, 8964.0), 0.0, "2026-08-22T00:00:00+00:00")
+    assert idle["requests_per_day"] == 0 and idle["traffic_day_mb"] == 0.0
+
+
+def test_response_size_is_recorded_and_averaged():
+    import tempfile, os
+    from src.db import Database
+
+    db = Database(os.path.join(tempfile.mkdtemp(), "t.db"))
+    since = "2000-01-01T00:00:00+00:00"
+    assert db.response_size_stats(since) == {"avg_bytes": None, "samples": 0}
+
+    for size in (8000, 10000, None):        # a failed poll logs no size
+        db.log_poll(item_id=None, market_hash_name="x", fetched_count=40,
+                    new_count=0, overlap_count=40, status="ok", response_bytes=size)
+
+    stats = db.response_size_stats(since)
+    assert stats["samples"] == 2, "rows without a size must not count"
+    assert stats["avg_bytes"] == 9000
+    db.close()

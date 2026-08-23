@@ -197,6 +197,7 @@ async function refresh() {
     renderBanner(d);
     renderTiles(d);
     renderPace(d);
+    renderUsage(d);
     renderProxies(d);
     document.getElementById("stats-body").innerHTML =
       statsRow("за час", d.stats_hour) + statsRow("за сутки", d.stats_day);
@@ -363,4 +364,54 @@ if (proxiesBox) {
       proxyMsg("Ошибка: " + e.message, true);
     }
   });
+}
+
+// -- what the current schedule costs ----------------------------------------
+
+function fmtSize(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " МБ";
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " КБ";
+  return bytes + " Б";
+}
+
+function fmtMb(mb) {
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + " ГБ" : mb.toFixed(1) + " МБ";
+}
+
+function usageRow(label, value, note) {
+  return `<tr><td>${esc(label)}</td><td>${esc(value)}</td>
+    <td>${note ? esc(note) : ""}</td></tr>`;
+}
+
+function renderUsage(d) {
+  const body = document.getElementById("usage-body");
+  if (!body) return;
+
+  const quota = d.quota_remaining != null && d.quota_limit != null
+    ? `квота даёт ${d.quota_limit} на окно` : "";
+  const perItem = d.avg_interval_minutes
+    ? (d.avg_interval_minutes >= 60
+        ? `каждый предмет раз в ${(d.avg_interval_minutes / 60).toFixed(1)} ч`
+        : `каждый предмет раз в ${Math.round(d.avg_interval_minutes)} мин`)
+    : "";
+
+  body.innerHTML =
+    usageRow("запросов в сутки", d.requests_per_day, perItem) +
+    usageRow("запросов в месяц", d.requests_per_month, quota) +
+    usageRow("средний ответ", fmtSize(d.avg_response_bytes),
+             d.response_measured
+               ? `замерено по ${d.response_samples} опросам за сутки`
+               : "оценка — реальных замеров пока нет") +
+    usageRow("трафик в сутки", fmtMb(d.traffic_day_mb), "") +
+    usageRow("трафик в месяц", fmtMb(d.traffic_month_mb),
+             "столько спишет прокси с тарификацией по трафику");
+
+  const parts = [`${d.active_items} активных предм.`];
+  if (d.quota_factor > 1.05) {
+    parts.push(`растянуто под квоту ×${d.quota_factor.toFixed(1)} — без неё было бы ` +
+               `${Math.round(d.requests_per_day * d.quota_factor)} запр/сут`);
+  } else {
+    parts.push("квота не ограничивает: бот опрашивает так часто, как задано");
+  }
+  document.getElementById("usage-hint").textContent = parts.join("  ·  ");
 }

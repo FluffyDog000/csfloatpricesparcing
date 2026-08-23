@@ -110,6 +110,15 @@ class Database:
                 "ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
             )
 
+        log_cols = {
+            r["name"]
+            for r in self.conn.execute("PRAGMA table_info(poll_log)").fetchall()
+        }
+        if "response_bytes" not in log_cols:
+            # Measured response size, so the dashboard can report real traffic
+            # instead of a guess (it is what a metered proxy bills for).
+            self.conn.execute("ALTER TABLE poll_log ADD COLUMN response_bytes INTEGER")
+
     def close(self) -> None:
         self.conn.close()
 
@@ -354,13 +363,14 @@ class Database:
         overlap_count: int,
         status: str,
         note: str = "",
+        response_bytes: int | None = None,
     ) -> None:
         self.conn.execute(
             """
             INSERT INTO poll_log (
                 item_id, market_hash_name, polled_at, fetched_count,
-                new_count, overlap_count, status, note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                new_count, overlap_count, status, note, response_bytes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
@@ -371,6 +381,7 @@ class Database:
                 overlap_count,
                 status,
                 note,
+                response_bytes,
             ),
         )
         self.conn.commit()
@@ -494,6 +505,15 @@ class Database:
             (since_iso, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def response_size_stats(self, since_iso: str) -> dict[str, Any]:
+        """Average measured response size since a cutoff, for traffic estimates."""
+        row = self.conn.execute(
+            "SELECT AVG(response_bytes) AS avg_bytes, COUNT(response_bytes) AS n "
+            "FROM poll_log WHERE polled_at >= ? AND response_bytes IS NOT NULL",
+            (since_iso,),
+        ).fetchone()
+        return {"avg_bytes": row["avg_bytes"], "samples": row["n"] or 0}
 
     def recent_poll_log(self, limit: int = 30) -> list[dict[str, Any]]:
         rows = self.conn.execute(

@@ -34,6 +34,14 @@
 </section>
 
 <section class="settings-block">
+  <h2>Расход при текущих настройках</h2>
+  <table class="stat usage-table">
+    <tbody id="usage-body"></tbody>
+  </table>
+  <div class="muted" id="usage-hint"></div>
+</section>
+
+<section class="settings-block">
   <h2>Прокси</h2>
   <p class="muted">Квота CSFloat (<code>x-ratelimit-limit</code>, ~500 запросов на окно)
      считается на IP, поэтому каждый прокси добавляет отдельный бюджет.
