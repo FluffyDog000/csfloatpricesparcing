@@ -27,12 +27,14 @@ import requests
 from src.config import load_config
 from src.proxies import mask_proxy, split_proxy_flags
 
-# Several, because any single echo service may be blocked or down.
+# Several, because any single echo service may be blocked or down. The plain
+# one is what PrivateProxy's own docs use to check a session's current IP.
 IP_ECHOES = (
     "https://api.ipify.org?format=json",
     "https://ifconfig.co/json",
     "https://api.myip.com",
 )
+IP_ECHOES_TEXT = ("https://myip.wtf/text",)
 PROBE_ITEM = "AWP | Printstream (Field-Tested)"
 
 
@@ -46,6 +48,15 @@ def exit_ip(proxies, timeout: float) -> str:
             data = resp.json()
             return data.get("ip") or data.get("query") or "?"
         except (requests.RequestException, ValueError) as exc:
+            last = exc
+    for url in IP_ECHOES_TEXT:
+        try:
+            resp = requests.get(url, proxies=proxies, timeout=timeout)
+            resp.raise_for_status()
+            ip = (resp.text or "").strip().splitlines()[0].strip()
+            if ip:
+                return ip
+        except (requests.RequestException, IndexError) as exc:
             last = exc
     raise requests.RequestException(f"ни один из сервисов определения IP не ответил: {last}")
 
