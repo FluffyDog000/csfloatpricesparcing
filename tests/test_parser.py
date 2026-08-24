@@ -796,4 +796,18 @@ def test_db_stats_reports_and_purges(capsys):
     # Running it twice is a no-op, not an error.
     db_stats.purge_raw(conn, path)
     assert "уже пуст" in capsys.readouterr().out
+
+    # The poll journal is unbounded too, and only the last day is ever read.
+    for age in (1, 40, 90):
+        conn.execute(
+            "INSERT INTO poll_log (item_id, market_hash_name, polled_at, "
+            "fetched_count, new_count, overlap_count, status, note) "
+            "VALUES (1, 'x', DATE('now', ?), 40, 1, 39, 'ok', '')", (f"-{age} day",))
+    conn.commit()
+    db_stats.prune_log(conn, path, 30)
+    kept = conn.execute("SELECT COUNT(*) FROM poll_log").fetchone()[0]
+    assert kept == 1, "only rows inside the window survive"
+
+    db_stats.prune_log(conn, path, 30)
+    assert "нет записей старше" in capsys.readouterr().out
     conn.close()

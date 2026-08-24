@@ -69,6 +69,24 @@ def report(conn, path: str) -> None:
     print(f"  на одну продажу: {human(known / total_sales)} "
           f"(из них raw_json {human(raw / total_sales)})")
 
+    # The poll journal grows forever too: one row per request, and the
+    # dashboard only ever reads the last day of it.
+    log_rows = conn.execute("SELECT COUNT(*) FROM poll_log").fetchone()[0]
+    if log_rows:
+        log_bytes = sum(col_bytes(conn, "poll_log", c) for c in
+                        ("market_hash_name", "polled_at", "status", "note",
+                         "fetched_count", "new_count", "overlap_count"))
+        old = conn.execute(
+            "SELECT COUNT(*) FROM poll_log WHERE polled_at < DATE('now', '-30 day')"
+        ).fetchone()[0]
+        print(f"\nЖурнал опросов: {log_rows:,} строк, {human(log_bytes)}"
+              .replace(",", " "))
+        if old:
+            print(f"  старше 30 дней: {old:,} строк "
+                  .replace(",", " ")
+                  + f"(~{human(log_bytes * old / log_rows)}) — "
+                    "чистится '--prune-log 30'")
+
     # Is dedup actually holding? Same sale should never be stored twice.
     dup = conn.execute("""
         SELECT COUNT(*) FROM (
@@ -129,10 +147,35 @@ def purge_raw(conn, path: str) -> None:
           f"(освобождено {human(before - after)})")
 
 
+def prune_log(conn, path: str, days: int) -> None:
+    """Drop poll-log rows older than `days`. The dashboard reads at most the
+    last 24h of it, so anything older is dead weight."""
+    before = os.path.getsize(path)
+    n = conn.execute(
+        "SELECT COUNT(*) FROM poll_log WHERE polled_at < DATE('now', ?)",
+        (f"-{days} day",),
+    ).fetchone()[0]
+    if not n:
+        print(f"В журнале нет записей старше {days} дней — чистить нечего.")
+        return
+    print(f"Удаляю {n:,} записей журнала старше {days} дней...".replace(",", " "))
+    conn.execute("DELETE FROM poll_log WHERE polled_at < DATE('now', ?)",
+                 (f"-{days} day",))
+    conn.commit()
+    conn.execute("VACUUM")
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.commit()
+    after = os.path.getsize(path)
+    print(f"Было {human(before)} -> стало {human(after)} "
+          f"(освобождено {human(before - after)})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Что занимает место в базе")
     ap.add_argument("--purge-raw", action="store_true",
                     help="удалить сохранённые сырые ответы и сжать файл")
+    ap.add_argument("--prune-log", type=int, metavar="ДНЕЙ",
+                    help="удалить записи журнала опросов старше N дней")
     ap.add_argument("--db", help="путь к базе (по умолчанию из конфига)")
     args = ap.parse_args()
 
@@ -143,9 +186,14 @@ def main() -> int:
         return 1
     conn = sqlite3.connect(path)
     try:
+        did = False
         if args.purge_raw:
             purge_raw(conn, path)
-        else:
+            did = True
+        if args.prune_log:
+            prune_log(conn, path, args.prune_log)
+            did = True
+        if not did:
             report(conn, path)
     finally:
         conn.close()
