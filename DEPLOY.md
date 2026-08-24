@@ -143,6 +143,18 @@ WantedBy=multi-user.target
 
 Включить и запустить:
 ```bash
+### Разовые команды на сервере
+
+Сервисы запускаются через окружение проекта, и ручные команды — тоже. В системе
+команды `python` нет, поэтому:
+
+```bash
+cd ~/csfloatpricesparcing
+.venv/bin/python db_stats.py          # что занимает место в базе
+.venv/bin/python check_proxy.py "строка-прокси"
+.venv/bin/python report.py --list
+```
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now csfloat-collector csfloat-web
 sudo systemctl status csfloat-collector csfloat-web   # проверить, что active (running)
