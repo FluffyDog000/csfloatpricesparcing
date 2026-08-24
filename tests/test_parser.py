@@ -712,3 +712,46 @@ def test_manual_poll_is_queued_for_the_collector():
     assert "пауза" in body["note"]
     db.set_setting("cooldown_until", "")
     db.close()
+
+
+def test_raw_json_is_not_stored_by_default():
+    """The full API record per sale was ~70% of the sales table and nothing
+    ever read it back — raw_dumps/ covers debugging the field mapping."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config, ItemConfig
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    name = "Test | Item (Field-Tested)"
+    db.add_item(name)
+    payload = [{"price": 10000 + k, "created_at": f"2026-08-1{k}T10:00:00Z",
+                "id": f"raw{k}",
+                "item": {"float_value": 0.2 + k / 1e6, "paint_seed": k,
+                         "market_hash_name": name, "description": "z" * 400}}
+               for k in range(5)]
+    col.client.fetch_latest_sales = lambda n: payload
+    col.poll_item(ItemConfig(name=name))
+
+    stored = db.conn.execute(
+        "SELECT COUNT(*) FROM sales WHERE raw_json IS NOT NULL").fetchone()[0]
+    total = db.conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
+    assert total == 5, "the sales themselves must still be stored"
+    assert stored == 0, "raw_json must be dropped by default"
+
+    # Still available for debugging when explicitly switched on.
+    db.set_setting("store_raw_json", "1")
+    col.client.fetch_latest_sales = lambda n: [dict(p, id=f"on{i}")
+                                               for i, p in enumerate(payload)]
+    col.poll_item(ItemConfig(name=name))
+    stored = db.conn.execute(
+        "SELECT COUNT(*) FROM sales WHERE raw_json IS NOT NULL").fetchone()[0]
+    assert stored == 5, "the setting must turn it back on"
+    db.close()

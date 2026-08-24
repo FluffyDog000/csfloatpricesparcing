@@ -281,6 +281,11 @@ class Collector:
             log.info("Seeded %d proxy/proxies from .env into the database.",
                      len(env_list))
 
+    def store_raw_json(self) -> bool:
+        """Keep the full API record for every sale? Off by default: it dwarfs
+        the parsed columns and nothing reads it."""
+        return (self.db.get_setting("store_raw_json", "0") or "0") != "0"
+
     def rotating_limit(self) -> int:
         """Requests per 24h allowed through a rotating proxy. Deliberately a
         local cap: a rotating endpoint reports someone else's quota headers."""
@@ -556,6 +561,13 @@ class Collector:
             )
             self.db.set_last_polled(item_id)
             return
+
+        if not self.store_raw_json():
+            # The full API record per sale is ~70% of the sales table and is
+            # never read back — raw_dumps/ already keeps one sample response
+            # per item, which is what the field mapping is debugged against.
+            for sale in sales:
+                sale.raw_json = None
 
         # Deduplication accounting.
         fetched_ids = [s.sale_id for s in sales]
