@@ -325,3 +325,31 @@ document.getElementById("seeds-toggle").addEventListener("click", () => {
 applySeedsCollapse();
 
 startAutoRefresh(refresh, 45000);
+
+// -- poll this item now -----------------------------------------------------
+
+const pollBtn = document.getElementById("poll-now");
+if (pollBtn) {
+  pollBtn.addEventListener("click", async () => {
+    const el = document.getElementById("poll-msg");
+    const token = (() => {
+      try { return localStorage.getItem("csfloat_admin_token") || ""; }
+      catch (e) { return ""; }
+    })();
+    pollBtn.disabled = true;
+    el.textContent = "ставлю в очередь…";
+    el.className = "poll-msg";
+    try {
+      const r = await postJSON("/api/items/poll", { market_hash_name: CFG.item }, token);
+      el.textContent = r.note || "Поставлено в очередь.";
+      // The collector picks the request up within ~5s; give it a moment, then
+      // reload so the new sales actually show up.
+      if (!(r.waiting || []).length) setTimeout(() => location.reload(), 9000);
+    } catch (e) {
+      el.textContent = "Ошибка: " + e.message;
+      el.className = "poll-msg err";
+    } finally {
+      setTimeout(() => { pollBtn.disabled = false; }, 3000);
+    }
+  });
+}

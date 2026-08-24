@@ -669,3 +669,46 @@ def test_raising_the_ceiling_lowers_the_forecast():
         f"a higher ceiling must never mean more requests, got {seen}"
     assert seen[0] > seen[-1], "the ceiling has to actually move the forecast"
     db.close()
+
+
+def test_manual_poll_is_queued_for_the_collector():
+    """The button must not fetch from the web process: only the collector holds
+    the proxy pool, the spacing and the 429 cooldown, so a second fetcher would
+    spend quota none of them account for."""
+    import logging
+    from datetime import datetime, timedelta, timezone
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    name = f"Poll test {uuid.uuid4().hex[:6]}"
+    db.add_item(name)
+    client = webapp.app.test_client()
+
+    r = client.post("/api/items/poll", json={"market_hash_name": name})
+    assert r.status_code == 200 and r.get_json()["queued"] is True
+    queued = [row["market_hash_name"] for row in db.pending_poll_requests()]
+    assert name in queued
+
+    # Clearing is what the collector does once it has polled.
+    row = next(r for r in db.pending_poll_requests() if r["market_hash_name"] == name)
+    db.clear_poll_request(int(row["id"]))
+    assert name not in [r["market_hash_name"] for r in db.pending_poll_requests()]
+
+    # An unknown or paused item is a 404, not a silent no-op.
+    assert client.post("/api/items/poll",
+                       json={"market_hash_name": "no such item"}).status_code == 404
+    db.update_item(name, active=False)
+    assert client.post("/api/items/poll",
+                       json={"market_hash_name": name}).status_code == 404
+    db.update_item(name, active=True)
+
+    # During a 429 pause the request is still accepted, but says when it runs.
+    db.set_setting("cooldown_until",
+                   (datetime.now(timezone.utc) + timedelta(minutes=12)).isoformat())
+    body = client.post("/api/items/poll", json={"market_hash_name": name}).get_json()
+    assert body["waiting"], "a pending pause must be reported, not hidden"
+    assert "пауза" in body["note"]
+    db.set_setting("cooldown_until", "")
+    db.close()

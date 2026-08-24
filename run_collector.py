@@ -38,6 +38,8 @@ RESYNC_SECONDS = 30.0
 # Upper bound on the gap between first polls at startup, so a short item
 # list still starts collecting immediately.
 STARTUP_MAX_STEP = 20.0
+# How often to look for "poll now" requests queued from the dashboard.
+MANUAL_POLL_CHECK_SECONDS = 5.0
 
 
 def run_once(collector: Collector) -> None:
@@ -91,6 +93,7 @@ def run_forever(collector: Collector) -> None:
     last_resync = time.monotonic()
     last_cooldown_log = 0.0
     last_quota_log = 0.0
+    last_manual_check = 0.0
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
@@ -148,6 +151,20 @@ def run_forever(collector: Collector) -> None:
                             cooling / 60.0)
             time.sleep(min(cooling, 5.0))
             continue
+
+        # "Poll now" from the dashboard. Handled after the quota and cooldown
+        # gates above, so a manual request never punches through a rate limit —
+        # it just waits, and the flag stays set until it can run.
+        if time.monotonic() - last_manual_check >= MANUAL_POLL_CHECK_SECONDS:
+            last_manual_check = time.monotonic()
+            for row in collector.db.pending_poll_requests():
+                item = active.get(row["market_hash_name"])
+                if item is None:
+                    collector.db.clear_poll_request(int(row["id"]))
+                    continue
+                log.info("Manual poll requested for '%s'", item.name)
+                collector.db.clear_poll_request(int(row["id"]))
+                collector.poll_item(item)
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()

@@ -466,6 +466,60 @@ def api_add_bulk():
     return jsonify({"ok": True, "added": added, "skipped": skipped})
 
 
+def _cooldown_left(db) -> float:
+    """Seconds remaining on the global 429 pause the collector persisted."""
+    from datetime import datetime, timezone
+    raw = db.get_setting("cooldown_until")
+    if not raw:
+        return 0.0
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        return 0.0
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    return max(0.0, (until - datetime.now(timezone.utc)).total_seconds())
+
+
+def _quota_numbers(db):
+    """(limit, remaining, reset) as last reported by CSFloat."""
+    return (_num_setting(db, "rl_limit"), _num_setting(db, "rl_remaining"),
+            _num_setting(db, "rl_reset"))
+
+
+@app.route("/api/items/poll", methods=["POST"])
+def api_poll_item():
+    """Queue an immediate poll of one item, carried out by the collector.
+
+    The web process deliberately does not fetch it itself: the collector owns
+    the proxy pool, the request spacing and the 429 cooldown, and a second
+    fetcher would spend quota those never see."""
+    _require_admin()
+    name = _body_name()
+    db = get_db()
+    if not db.request_poll(name):
+        abort(404, description="Предмет не найден или снят с опроса.")
+
+    # Say honestly when it will actually happen.
+    waiting = []
+    cooldown_left = _cooldown_left(db)
+    if cooldown_left > 0:
+        waiting.append(f"идёт пауза после 429, осталось {cooldown_left / 60:.0f} мин")
+    _, remaining, _ = _quota_numbers(db)
+    if remaining is not None and remaining <= 0:
+        waiting.append("квота на окно исчерпана")
+
+    log.info("Manual poll queued for '%s'%s", name,
+             f" (ожидает: {'; '.join(waiting)})" if waiting else "")
+    return jsonify({
+        "ok": True,
+        "queued": True,
+        "waiting": waiting,
+        "note": ("Опрос начнётся, когда снимется пауза: " + "; ".join(waiting))
+                if waiting else "Опрос пройдёт в ближайшие ~5 секунд.",
+    })
+
+
 @app.route("/api/items/update", methods=["POST"])
 def api_update_item():
     _require_admin()
@@ -632,13 +686,10 @@ def api_load():
 
     # Global 429 pause, persisted by the collector process.
     cooldown_until = db.get_setting("cooldown_until") or None
-    cooldown_left = 0.0
-    if cooldown_until:
+    cooldown_left = _cooldown_left(db)
+    if cooldown_until and not cooldown_left:
         try:
-            until = datetime.fromisoformat(cooldown_until)
-            if until.tzinfo is None:
-                until = until.replace(tzinfo=timezone.utc)
-            cooldown_left = max(0.0, (until - now).total_seconds())
+            datetime.fromisoformat(cooldown_until)
         except ValueError:
             cooldown_until = None
 

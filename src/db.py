@@ -110,6 +110,11 @@ class Database:
                 "ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
             )
 
+        if "poll_requested_at" not in cols:
+            # Set by the dashboard's "poll now" button; the collector clears it
+            # once the item has actually been polled.
+            self.conn.execute("ALTER TABLE items ADD COLUMN poll_requested_at TEXT")
+
         log_cols = {
             r["name"]
             for r in self.conn.execute("PRAGMA table_info(poll_log)").fetchall()
@@ -256,6 +261,35 @@ class Database:
 
     def items_count(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"])
+
+    def request_poll(self, market_hash_name: str) -> bool:
+        """Queue an out-of-band poll for one item (the dashboard's button).
+
+        A flag in the DB rather than a request from the web process: only the
+        collector holds the proxy pool, the spacing and the 429 cooldown, so it
+        is the only place a request can be made without double-spending quota."""
+        cur = self.conn.execute(
+            "UPDATE items SET poll_requested_at = ? "
+            "WHERE market_hash_name = ? AND active = 1",
+            (utcnow_iso(), market_hash_name),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def pending_poll_requests(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, market_hash_name, pattern_sensitive, interval_min_minutes, "
+            "interval_max_minutes, poll_requested_at FROM items "
+            "WHERE poll_requested_at IS NOT NULL AND active = 1 "
+            "ORDER BY poll_requested_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_poll_request(self, item_id: int) -> None:
+        self.conn.execute(
+            "UPDATE items SET poll_requested_at = NULL WHERE id = ?", (item_id,)
+        )
+        self.conn.commit()
 
     def get_active_items(self) -> list[dict[str, Any]]:
         """Active items for the collector to poll (source of truth = DB)."""

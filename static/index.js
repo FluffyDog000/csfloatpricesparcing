@@ -173,6 +173,7 @@ function cardControls(it) {
         ${it.pattern_sensitive ? "🎨 паттерн: вкл" : "🎨 паттерн: выкл"}</button>
       <button class="cbtn" data-act="toggle-hidden" data-name="${n}">
         ${it.hidden ? "👁 показать" : "🙈 скрыть"}</button>
+      <button class="cbtn" data-act="poll" data-name="${n}">⟳ спарсить</button>
       <button class="cbtn" data-act="folder" data-name="${n}">📁 переместить</button>
       <button class="cbtn danger" data-act="delete" data-name="${n}">🗑 удалить</button>
     </div>`;
@@ -357,6 +358,9 @@ async function doAction(act, name) {
       await postJSON("/api/items/update", { market_hash_name: name, hidden: !it.hidden }, token());
       msg(`«${name}»: ${!it.hidden ? "скрыт (парсинг продолжается)" : "показан"}`);
       await load();
+    } else if (act === "poll") {
+      const r = await postJSON("/api/items/poll", { market_hash_name: name }, token());
+      msg(`«${name}»: ${r.note || "поставлен в очередь на опрос"}`);
     } else if (act === "folder") {
       const existing = folderNamesSorted(foldersMap(allItems)).filter((f) => f !== OTHER).join(", ");
       const f = prompt(
