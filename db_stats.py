@@ -120,6 +120,10 @@ def purge_raw(conn, path: str) -> None:
     conn.commit()
     print("Сжимаю файл (VACUUM), это может занять минуту...")
     conn.execute("VACUUM")
+    # In WAL mode the main file is not truncated until the log is checkpointed,
+    # so measuring straight after VACUUM reports the old size.
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.commit()
     after = os.path.getsize(path)
     print(f"Было {human(before)} -> стало {human(after)} "
           f"(освобождено {human(before - after)})")
@@ -132,7 +136,8 @@ def main() -> int:
     ap.add_argument("--db", help="путь к базе (по умолчанию из конфига)")
     args = ap.parse_args()
 
-    path = args.db or load_config().db_path
+    # load_config() hands back a Path; everything below wants a str.
+    path = str(args.db or load_config().db_path)
     if not os.path.exists(path):
         print(f"База не найдена: {path}")
         return 1

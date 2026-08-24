@@ -755,3 +755,45 @@ def test_raw_json_is_not_stored_by_default():
         "SELECT COUNT(*) FROM sales WHERE raw_json IS NOT NULL").fetchone()[0]
     assert stored == 5, "the setting must turn it back on"
     db.close()
+
+
+def test_db_stats_reports_and_purges(capsys):
+    """Both bugs this caught were in the plumbing, not the SQL: a Path where a
+    str was expected, and a size read before WAL was checkpointed."""
+    import os, sqlite3, tempfile, json
+    import db_stats
+    from src.db import Database
+    from src.models import Sale
+
+    path = os.path.join(tempfile.mkdtemp(), "stats.db")
+    db = Database(path)
+    iid = db.add_item("Stats | Item (FT)")
+    db.insert_sales([
+        Sale(sale_id=f"s{k}", item_id=iid, market_hash_name="Stats | Item (FT)",
+             price_cents=10000 + k, price=100.0, float_value=0.2, paint_seed=k,
+             paint_index=None, sold_at=f"2026-08-1{k}T10:00:00+00:00",
+             sold_at_estimated=False, stickers=None,
+             raw_json=json.dumps({"blob": "x" * 2000}),
+             scraped_at="2026-08-19T10:00:00+00:00")
+        for k in range(9)])
+    db.close()
+
+    conn = sqlite3.connect(path)
+    db_stats.report(conn, path)
+    out = capsys.readouterr().out
+    assert "raw_json" in out and "Дедупликация" in out
+    assert "повторов нет" in out, "distinct sales must not look like duplicates"
+
+    before = os.path.getsize(path)
+    db_stats.purge_raw(conn, path)
+    after = os.path.getsize(path)
+    assert after < before, "purge must actually shrink the file, not just report it"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM sales WHERE raw_json IS NOT NULL").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0] == 9, \
+        "the sales themselves must survive"
+
+    # Running it twice is a no-op, not an error.
+    db_stats.purge_raw(conn, path)
+    assert "уже пуст" in capsys.readouterr().out
+    conn.close()
