@@ -811,3 +811,42 @@ def test_db_stats_reports_and_purges(capsys):
     db_stats.prune_log(conn, path, 30)
     assert "нет записей старше" in capsys.readouterr().out
     conn.close()
+
+
+def test_items_summary_counts_recent_windows():
+    """All-time totals mostly measure when an item was added; a recent window
+    is what tells you whether it actually trades."""
+    import os, tempfile
+    from datetime import datetime, timedelta, timezone
+    from src.db import Database
+    from src.models import Sale
+
+    db = Database(os.path.join(tempfile.mkdtemp(), "t.db"))
+    now = datetime.now(timezone.utc)
+    old_id = db.add_item("Old and stale")
+    new_id = db.add_item("New and brisk")
+
+    def sale(iid, name, k, days_ago):
+        return Sale(sale_id=f"{name}-{k}", item_id=iid, market_hash_name=name,
+                    price_cents=10000, price=100.0, float_value=0.2, paint_seed=k,
+                    paint_index=None,
+                    sold_at=(now - timedelta(days=days_ago)).isoformat(),
+                    sold_at_estimated=False, stickers=None, raw_json=None,
+                    scraped_at=now.isoformat())
+
+    db.insert_sales([sale(old_id, "Old and stale", k, 60) for k in range(300)])
+    db.insert_sales([sale(old_id, "Old and stale", 900 + k, 2) for k in range(3)])
+    db.insert_sales([sale(new_id, "New and brisk", k, 1) for k in range(80)])
+
+    rows = {r["market_hash_name"]: r for r in db.items_summary()}
+    old, new = rows["Old and stale"], rows["New and brisk"]
+
+    assert old["total_sales"] == 303 and new["total_sales"] == 80
+    assert old["sales_7d"] == 3 and new["sales_7d"] == 80
+    assert old["sales_30d"] == 3, "sales older than the window must not count"
+    assert new["sales_30d"] == 80
+
+    # The whole point: the ranking flips depending on the window.
+    assert old["total_sales"] > new["total_sales"]
+    assert new["sales_7d"] > old["sales_7d"]
+    db.close()

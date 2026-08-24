@@ -60,14 +60,30 @@ function filteredItems(list) {
   });
 }
 
+// Sales counts sort on several windows: the all-time total mostly reflects when
+// an item was added, so a recent window is the honest measure of how briskly it
+// actually trades.
+const SALES_FIELD = {
+  "sales7": "sales_7d", "sales30": "sales_30d", "sales": "total_sales",
+};
+
 function sortItems(list) {
   const by = document.getElementById("sort-by").value;
   const arr = list.slice();
   const p = (x) => (x.avg_price === null || x.avg_price === undefined ? -Infinity : x.avg_price);
-  if (by === "price-desc") arr.sort((a, b) => p(b) - p(a));
-  else if (by === "price-asc") arr.sort((a, b) => p(a) - p(b));
-  else if (by === "sales-desc") arr.sort((a, b) => b.total_sales - a.total_sales);
-  else arr.sort((a, b) => a.market_hash_name.localeCompare(b.market_hash_name));
+  if (by === "price-desc") { arr.sort((a, b) => p(b) - p(a)); return arr; }
+  if (by === "price-asc") { arr.sort((a, b) => p(a) - p(b)); return arr; }
+
+  const [kind, dir] = by.split("-");
+  const field = SALES_FIELD[kind];
+  if (field) {
+    const n = (x) => x[field] ?? 0;
+    // Ties broken by name so the order is stable between refreshes.
+    arr.sort((a, b) => (dir === "asc" ? n(a) - n(b) : n(b) - n(a))
+      || a.market_hash_name.localeCompare(b.market_hash_name));
+    return arr;
+  }
+  arr.sort((a, b) => a.market_hash_name.localeCompare(b.market_hash_name));
   return arr;
 }
 
@@ -155,7 +171,8 @@ function cardMain(it) {
       <div>
         <div class="name">${escapeHtml(it.market_hash_name)} ${inactive} ${pat} ${hid}</div>
         <div class="meta">
-          продаж: <b>${it.total_sales}</b><br>
+          продаж: <b>${it.total_sales}</b>
+          <span class="muted">· 7д: ${it.sales_7d ?? 0} · 30д: ${it.sales_30d ?? 0}</span><br>
           avg: <b>${money(it.avg_price)}</b>
           &nbsp; min: ${money(it.min_price)} &nbsp; max: ${money(it.max_price)}
         </div>

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -460,8 +460,15 @@ class Database:
     # -- web dashboard helpers ----------------------------------------------
 
     def items_summary(self, active_only: bool = False) -> list[dict[str, Any]]:
-        """One row per item with a rollup for the item cards."""
+        """One row per item with a rollup for the item cards.
+
+        Recent windows as well as the all-time count: an item added last week
+        has few stored sales however briskly it trades, so the total says more
+        about when it was added than about how liquid it is."""
         where = "WHERE i.active = 1" if active_only else ""
+        now = datetime.now(timezone.utc)
+        cut7 = (now - timedelta(days=7)).replace(microsecond=0).isoformat()
+        cut30 = (now - timedelta(days=30)).replace(microsecond=0).isoformat()
         q = f"""
             SELECT
                 i.id                       AS item_id,
@@ -473,6 +480,8 @@ class Database:
                 i.icon_url                 AS icon_url,
                 i.last_polled_at           AS last_polled_at,
                 COUNT(s.sale_id)           AS total_sales,
+                SUM(CASE WHEN s.sold_at >= :cut7 THEN 1 ELSE 0 END)  AS sales_7d,
+                SUM(CASE WHEN s.sold_at >= :cut30 THEN 1 ELSE 0 END) AS sales_30d,
                 AVG(s.price)               AS avg_price,
                 MIN(s.price)               AS min_price,
                 MAX(s.price)               AS max_price,
@@ -484,7 +493,7 @@ class Database:
             ORDER BY i.market_hash_name
         """
         out = []
-        for r in self.conn.execute(q).fetchall():
+        for r in self.conn.execute(q, {"cut7": cut7, "cut30": cut30}).fetchall():
             d = dict(r)
             d["avg_price"] = round(d["avg_price"], 2) if d["avg_price"] is not None else None
             out.append(d)
