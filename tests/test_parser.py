@@ -850,3 +850,50 @@ def test_items_summary_counts_recent_windows():
     assert old["total_sales"] > new["total_sales"]
     assert new["sales_7d"] > old["sales_7d"]
     db.close()
+
+
+def test_dead_stop_is_not_reported_as_a_rate_limit_pause():
+    """Every route parked with no direct connection is a full stop needing a
+    setting changed — not a 429 backoff that will pass on its own. Calling it
+    "пауза из-за лимита CSFloat, подряд 429: 1" points at the wrong fix."""
+    import json, logging
+    from datetime import datetime, timedelta, timezone
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    db.add_item(f"Blocked test {uuid.uuid4().hex[:6]}")
+    client = webapp.app.test_client()
+    later = (datetime.now(timezone.utc) + timedelta(minutes=242)).isoformat()
+
+    def state_with(direct_available, proxies_available):
+        routes = [{"key": "direct", "direct": True, "rotating": False,
+                   "available": direct_available, "parked_sec": 0, "cooldown_sec": 0}] \
+            if direct_available is not None else []
+        routes += [{"key": f"http://gate#{i}", "direct": False, "rotating": True,
+                    "available": proxies_available,
+                    "parked_sec": 0 if proxies_available else 14564,
+                    "cooldown_sec": 0} for i in range(20)]
+        db.set_setting("proxy_state", json.dumps(routes))
+        db.set_setting("cooldown_until", "" if proxies_available else later)
+        return client.get("/api/load").get_json()
+
+    # Proxies parked, no direct route at all: dead stop, and the message must
+    # name the switch that fixes it.
+    body = state_with(None, False)
+    assert body["state"] == "blocked"
+    assert "свой IP" in body["state_text"]
+    assert body["routes_usable"] == 0 and body["has_direct"] is False
+
+    # Everything healthy: no pause verdict at all.
+    body = state_with(True, True)
+    assert body["state"] != "blocked"
+    assert body["routes_usable"] == 21 and body["has_direct"] is True
+
+    # Proxies parked but direct still working is NOT a dead stop.
+    body = state_with(True, False)
+    assert body["state"] != "blocked", "one live route means collection continues"
+    db.set_setting("proxy_state", "[]")
+    db.set_setting("cooldown_until", "")
+    db.close()

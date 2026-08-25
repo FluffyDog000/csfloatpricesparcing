@@ -47,11 +47,22 @@ function renderTiles(d) {
          d.stale_minutes != null && d.stale_minutes > 60 ? "bad" : "") +
     tile("пауза (кулдаун)",
          d.cooldown_remaining_sec > 0 ? fmtLeft(d.cooldown_remaining_sec) : "нет",
-         d.cooldown_remaining_sec > 0
-           ? `до ${timeFmt(d.cooldown_until)} · подряд 429: ${d.cooldown_consecutive}`
-           : "опрос идёт без ограничений",
-         d.cooldown_remaining_sec > 0 ? "warn" : "good", "tile-cooldown") +
+         pauseReason(d), d.cooldown_remaining_sec > 0 ? "warn" : "good",
+         "tile-cooldown") +
     quotaTile(d);
+}
+
+// A pause caused by every route being parked is not a 429 backoff waiting to
+// expire, and saying "429 подряд: 1" under a four-hour stop sends the user
+// looking at the wrong thing.
+function pauseReason(d) {
+  if (!(d.cooldown_remaining_sec > 0)) return "опрос идёт без ограничений";
+  if (d.routes_total && !d.routes_usable) {
+    return d.has_direct
+      ? "все маршруты в карантине — ждём выхода"
+      : "все прокси в карантине, свой IP выключен — включи его";
+  }
+  return `до ${timeFmt(d.cooldown_until)} · подряд 429: ${d.cooldown_consecutive}`;
 }
 
 // CSFloat's own quota (x-ratelimit-*): the real constraint on a big item list.
@@ -78,10 +89,10 @@ function fmtLeft(sec) {
 }
 
 const STATE_CLASS = { ok: "good", cooldown: "warn", limited: "warn",
-                      auth: "bad", stale: "bad", idle: "" };
+                      auth: "bad", stale: "bad", blocked: "bad", idle: "" };
 
 const STATE_ICON = { ok: "✅", cooldown: "⏸", limited: "⚠️", auth: "🔑",
-                     stale: "⚠️", idle: "💤" };
+                     stale: "⚠️", blocked: "⛔", idle: "💤" };
 
 function renderBanner(d, textOverride) {
   const el = document.getElementById("state-banner");

@@ -706,9 +706,27 @@ def api_load():
         except ValueError:
             pass
 
+    # Why is nothing being polled? A pause with every route parked and no
+    # direct connection is a dead stop, not a rate limit waiting to pass — and
+    # it needs a different action from the user.
+    routes = json.loads(db.get_setting("proxy_state") or "[]")
+    usable = [r for r in routes if r.get("available")]
+    has_direct = any(r.get("direct") for r in routes)
+    all_parked = bool(routes) and not usable
+
     # One-line health verdict for the dashboard.
     if stats_hour["auth_error"]:
         state, state_text = "auth", "Ошибка авторизации — обнови cookie в .env"
+    elif all_parked and not has_direct:
+        state, state_text = "blocked", (
+            "Сбор остановлен: все прокси в карантине, а свой IP сервера выключен. "
+            "Включи «использовать и собственный IP сервера» в блоке «Прокси» — "
+            "иначе запросы делать не с чего.")
+    elif all_parked:
+        # Direct is in the pool but unavailable too — its own quota or 429.
+        state, state_text = "blocked", (
+            "Нет доступных маршрутов: прокси в карантине, а у IP сервера "
+            f"кончилась квота. Осталось {cooldown_left / 60:.0f} мин.")
     elif cooldown_left > 0:
         state, state_text = "cooldown", (
             f"Пауза из-за лимита CSFloat, осталось {cooldown_left / 60:.1f} мин")
@@ -735,7 +753,7 @@ def api_load():
             "config_interval_min": config.polling.interval_min_minutes,
             "config_interval_max": config.polling.interval_max_minutes,
             "config_spacing": config.polling.min_seconds_between_requests,
-            "routes": json.loads(db.get_setting("proxy_state") or "[]"),
+            "routes": routes,
             "proxies_text": db.get_setting("proxies") or "",
             "use_direct": (db.get_setting("use_direct", "1") or "1") != "0",
             "rotating_daily_limit": int(db.get_setting("rotating_daily_limit")
@@ -759,6 +777,9 @@ def api_load():
             "cooldown_consecutive": int(db.get_setting("cooldown_consecutive") or 0),
             "state": state,
             "state_text": state_text,
+            "routes_total": len(routes),
+            "routes_usable": len(usable),
+            "has_direct": has_direct,
             "stale_minutes": stale_min,
             "last_update": last_ok,
             "stats_hour": stats_hour,
