@@ -57,6 +57,7 @@ def run_forever(collector: Collector) -> None:
     collector.restore_cooldown_from_db()
     collector.seed_proxies_from_env()
     collector.sync_proxies()
+    collector.restore_account_block()
     alerts = AlertService(collector.config, collector.db)
 
     heap: list[tuple[float, int, str]] = []

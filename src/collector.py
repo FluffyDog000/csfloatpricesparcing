@@ -12,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
-from .csfloat_client import AuthError, CSFloatClient, EdgeBlocked, RateLimited
+from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
+                             EdgeBlocked, RateLimited)
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
@@ -310,6 +311,33 @@ class Collector:
         if changed:
             self.restore_rotating_usage()
         return changed
+
+    def restore_account_block(self) -> float:
+        """Re-arm the rotating-route quarantine after a restart.
+
+        The park lives in memory (a monotonic deadline), so a plain
+        `systemctl restart` — which is exactly what a routine update does —
+        silently released it and sent the bot straight back to the behaviour
+        CSFloat had just complained about. Returns the seconds re-armed."""
+        raw = self.db.get_setting("account_ip_block_at")
+        if not raw:
+            return 0.0
+        try:
+            started = datetime.fromisoformat(raw)
+        except ValueError:
+            return 0.0
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        remaining = ACCOUNT_BLOCK_SECONDS - elapsed
+        if remaining <= 0:
+            return 0.0
+        parked = self.client.pool.park_rotating(remaining)
+        if parked:
+            log.warning("Restored the account-IP quarantine after a restart: "
+                        "%d rotating route(s) held for another %.1f h",
+                        parked, remaining / 3600.0)
+        return remaining
 
     def restore_rotating_usage(self) -> None:
         """Re-apply the spent local budget of rotating routes, so a restart (or

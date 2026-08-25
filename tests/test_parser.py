@@ -897,3 +897,57 @@ def test_dead_stop_is_not_reported_as_a_rate_limit_pause():
     db.set_setting("proxy_state", "[]")
     db.set_setting("cooldown_until", "")
     db.close()
+
+
+def test_account_quarantine_survives_a_restart():
+    """The park is an in-memory deadline, so `systemctl restart` — what every
+    routine update does — released it and sent the bot straight back to the
+    behaviour CSFloat had just complained about."""
+    import os, tempfile, logging, time
+    from datetime import datetime, timedelta, timezone
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    os.environ.pop("CSFLOAT_PROXIES", None)
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    db.set_setting("proxies", "\n".join(
+        f"acct-sid-{i}-ttl-90:pw:gate.example.com:8888 #rotating" for i in range(5)))
+    db.set_setting("use_direct", "0")
+
+    def restarted():
+        col = Collector(cfg, Database(cfg.db_path),
+                        CSFloatClient(cfg.http, cfg.polling))
+        col.sync_proxies()
+        return col
+
+    def free(col):
+        now = time.monotonic()
+        return sum(1 for r in col.client.pool.routes.values()
+                   if r.available(15, now))
+
+    col = restarted()
+    assert free(col) == 5
+    db.set_setting("account_ip_block_at",
+                   (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat())
+    col.client.pool.park_rotating(6 * 3600)
+    assert free(col) == 0
+
+    fresh = restarted()
+    assert free(fresh) == 5, "a restart starts with an unparked pool"
+    remaining = fresh.restore_account_block()
+    assert 3.5 * 3600 < remaining < 4.5 * 3600, "only the unserved time is re-armed"
+    assert free(fresh) == 0, "the quarantine must be back in force"
+
+    # Once the window has passed it must not be re-applied forever.
+    db.set_setting("account_ip_block_at",
+                   (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat())
+    expired = restarted()
+    assert expired.restore_account_block() == 0.0
+    assert free(expired) == 5
+    db.close()
