@@ -5,13 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}CSFloat Sales{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script>window.CFG_RATE = {{ cny_rate | tojson }};</script>
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="{{ url_for('index') }}">CSFloat Sales Tracker</a>
     <div class="topbar-right">
+      <button class="cur-btn" id="currency-toggle" hidden></button>
       <span class="status" id="status">—</span>
       <span class="timer" id="refresh-timer" title="До следующего автообновления страницы"></span>
+      <a class="navlink" href="{{ url_for('calc_page') }}">🧮 Калькулятор</a>
       <a class="navlink" href="{{ url_for('load_page') }}">📊 Нагрузка</a>
       <a class="navlink" href="{{ url_for('settings_page') }}">⚙ Настройки</a>
       {% if auth_enabled %}<a class="navlink" href="{{ url_for('logout') }}">Выйти</a>{% endif %}

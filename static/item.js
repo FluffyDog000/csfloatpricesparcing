@@ -353,3 +353,7 @@ if (pollBtn) {
     }
   });
 }
+
+// Currency switch: re-render every table with the new formatting.
+// The overall line, both tables and the latest-sales panel all show money.
+initCurrencyToggle("currency-toggle", () => { refresh(); refreshLatest(); });

@@ -951,3 +951,64 @@ def test_account_quarantine_survives_a_restart():
     assert expired.restore_account_block() == 0.0
     assert free(expired) == 5
     db.close()
+
+
+def test_cny_rate_is_found_in_whatever_shape_the_api_uses():
+    """The rate endpoint is undocumented, so extraction is deliberately shape
+    agnostic — but it must refuse a number that cannot be a USD/CNY rate."""
+    from src.rates import extract_cny_rate
+
+    assert extract_cny_rate({"CNY": 7.12}) == 7.12
+    assert extract_cny_rate({"data": {"rates": {"EUR": 0.92, "CNY": 7.09}}}) == 7.09
+    assert extract_cny_rate({"usd_cny": "7.1543"}) == 7.1543
+    assert extract_cny_rate([{"currency": "CNY", "value": "7.05"}]) == 7.05
+    # A currency list where the code is a value, not a key.
+    assert extract_cny_rate(
+        {"rates": [{"code": "EUR", "rate": 0.9}, {"code": "CNY", "rate": 7.2}]}) == 7.2
+
+    # Quoted the other way round (USD per CNY) — inverted, not rejected.
+    assert extract_cny_rate({"cny": 0.1408}) == 7.1023
+
+    # Nothing usable must never yield a wrong number.
+    assert extract_cny_rate({"EUR": 0.92, "GBP": 0.79}) is None
+    assert extract_cny_rate({"rates": [{"code": "EUR", "rate": 0.9}]}) is None, \
+        "another currency's rate must not be mistaken for CNY"
+    assert extract_cny_rate({"CNY": 999}) is None, "an absurd rate is a parse error"
+    assert extract_cny_rate({}) is None
+    assert extract_cny_rate(None) is None
+
+
+def test_manual_rate_is_validated():
+    from src.rates import validate_rate
+
+    assert validate_rate("7.15")[0] == 7.15
+    assert validate_rate(7.2)[0] == 7.2
+    for bad in ("abc", 100, -1, None, ""):
+        rate, why = validate_rate(bad)
+        assert rate is None and why, f"{bad!r} must be refused with a reason"
+
+
+def test_rate_api_round_trip():
+    import logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    client = webapp.app.test_client()
+    db = webapp.Database(webapp.config.db_path)
+    db.set_setting("usd_cny_rate", "")
+    db.set_setting("rate_source", "auto")
+
+    assert client.get("/api/rate").get_json()["rate"] is None
+
+    assert client.post("/api/rate", json={"rate": "7.25", "source": "manual"}
+                       ).status_code == 200
+    body = client.get("/api/rate").get_json()
+    assert body["rate"] == 7.25 and body["source"] == "manual"
+
+    # A refused rate must not overwrite the stored one.
+    assert client.post("/api/rate", json={"rate": "999"}).status_code == 400
+    assert client.get("/api/rate").get_json()["rate"] == 7.25
+
+    db.set_setting("usd_cny_rate", "")
+    db.set_setting("rate_source", "auto")
+    db.close()

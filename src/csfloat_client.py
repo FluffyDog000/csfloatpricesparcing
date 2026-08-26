@@ -227,6 +227,28 @@ class CSFloatClient:
                 time.sleep(wait)
             self._last_request_ts = time.monotonic()
 
+    def fetch_json(self, url: str) -> object:
+        """One-off GET for a small side endpoint (currently the FX rate).
+
+        Goes through the pool and the request spacing like any other call, so
+        it cannot burst past a rate limit — but it deliberately does not retry
+        or enter a cooldown: nothing here is worth delaying the sales polling
+        for."""
+        route = self.pool.pick()
+        if route is None:
+            raise RateLimited("no route available for a side request")
+        self._respect_spacing()
+        resp = self.session.get(url, timeout=self.http.timeout_seconds,
+                                proxies=route.proxies())
+        self._capture_rate_headers(resp)
+        self._feed_pool(route, resp)
+        resp.raise_for_status()
+        if self._edge_block(resp):
+            self.pool.record_failure(route, "edge block on a side request")
+            raise EdgeBlocked(f"Cloudflare challenge for {url}")
+        self.pool.record_success(route)
+        return resp.json()
+
     def sales_url(self, market_hash_name: str) -> str:
         # market_hash_name contains spaces, "|", "★" etc. — encode safely.
         encoded = quote(market_hash_name, safe="")

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Калькулятор{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">← к предметам</a>
+<h1>Калькулятор прибыли</h1>
+
+<section class="settings-block calc">
+  <div class="calc-grid">
+    <label>цена покупки
+      <div class="calc-field">
+        <input type="number" id="buy" class="input" step="0.01" min="0" placeholder="0.00">
+        <select id="buy-cur" class="select cur-select">
+          <option value="usd">$ USD</option>
+          <option value="cny">¥ CNY</option>
+        </select>
+      </div>
+    </label>
+
+    <label>цена продажи
+      <div class="calc-field">
+        <input type="number" id="sell" class="input" step="0.01" min="0" placeholder="0.00">
+        <select id="sell-cur" class="select cur-select">
+          <option value="usd">$ USD</option>
+          <option value="cny">¥ CNY</option>
+        </select>
+      </div>
+    </label>
+
+    <label>комиссия при продаже
+      <div class="calc-field">
+        <input type="number" id="fee" class="input" step="0.1" min="0" max="100" value="2">
+        <span class="unit">%</span>
+      </div>
+    </label>
+
+    <label>показывать результат в
+      <select id="out-cur" class="select">
+        <option value="usd">$ USD</option>
+        <option value="cny">¥ CNY</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="calc-hint muted" id="rate-hint"></div>
+</section>
+
+<section class="settings-block" id="result-block">
+  <table class="stat calc-result">
+    <tbody id="calc-result"></tbody>
+  </table>
+</section>
+
+<section class="settings-block">
+  <h2>Курс USD → CNY</h2>
+  <div class="row">
+    <label>курс
+      <input type="number" id="rate-input" class="input num-input" step="0.0001"
+             min="3" max="15"></label>
+    <label class="chk"><input type="checkbox" id="rate-manual">
+      задавать вручную (не обновлять автоматически)</label>
+    <button class="btn btn-primary" id="save-rate">Сохранить</button>
+  </div>
+  <div class="muted" id="rate-status"></div>
+  <div class="settings-msg" id="rate-msg"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
+<script src="{{ url_for('static', filename='calc.js') }}"></script>
+{% endblock %}

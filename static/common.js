@@ -50,9 +50,48 @@ async function copyText(text) {
   }
 }
 
+// Currency display. Prices are collected and stored in USD; CNY is a view of
+// them, so the conversion lives here at the single formatting point rather
+// than in each page's render code.
+const CNY_RATE = (window.CFG_RATE && Number(window.CFG_RATE)) || null;
+
+function currency() {
+  if (!CNY_RATE) return "usd";           // no rate -> nothing to switch to
+  try { return localStorage.getItem("csfloat_currency") === "cny" ? "cny" : "usd"; }
+  catch (e) { return "usd"; }
+}
+
+function setCurrency(code) {
+  try { localStorage.setItem("csfloat_currency", code === "cny" ? "cny" : "usd"); }
+  catch (e) { /* private mode: the page still works, it just won't remember */ }
+}
+
 function money(v) {
   if (v === null || v === undefined) return "—";
-  return "$" + Number(v).toFixed(2);
+  const n = Number(v);
+  return currency() === "cny"
+    ? "¥" + (n * CNY_RATE).toFixed(2)
+    : "$" + n.toFixed(2);
+}
+
+// Wire up a "$ / ¥" button. Hidden entirely when no rate is known, so the UI
+// never offers a conversion it cannot do.
+function initCurrencyToggle(id, onChange) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  if (!CNY_RATE) { btn.hidden = true; return; }
+  const paint = () => {
+    btn.textContent = currency() === "cny" ? "¥ CNY" : "$ USD";
+    btn.title = currency() === "cny"
+      ? `Показать в USD (курс ${CNY_RATE})`
+      : `Показать в CNY (курс ${CNY_RATE})`;
+  };
+  paint();
+  btn.addEventListener("click", () => {
+    setCurrency(currency() === "cny" ? "usd" : "cny");
+    paint();
+    if (onChange) onChange();
+  });
 }
 
 function floatFmt(v) {

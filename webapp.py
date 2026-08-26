@@ -32,9 +32,10 @@ from werkzeug.utils import secure_filename
 from src.backup import bump_generation, restore
 from src.backup_service import export_db
 from src.config import load_config, load_items
-from src.db import Database
+from src.db import Database, utcnow_iso
 from src.logging_setup import setup_logging
 from src.proxies import ROTATING_DEFAULT_LIMIT
+from src.rates import DEFAULT_RATE_URL
 
 # Until real responses are measured, size a full 40-sale page from an
 # observed sample. Replaced by the measured average as soon as one poll
@@ -179,9 +180,55 @@ def logout():
     return redirect(url_for("login") if AUTH_ENABLED else url_for("index"))
 
 
+def _cny_rate(db) -> float | None:
+    """Stored USD->CNY rate, or None when we have never got one. Every caller
+    must handle None: no rate simply means prices stay in USD."""
+    raw = db.get_setting("usd_cny_rate")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/api/rate")
+def api_rate():
+    db = get_db()
+    return jsonify({
+        "rate": _cny_rate(db),
+        "updated_at": db.get_setting("rate_updated_at") or None,
+        "source": db.get_setting("rate_source", "auto"),
+        "error": db.get_setting("rate_error") or "",
+        "url": db.get_setting("rate_url") or DEFAULT_RATE_URL,
+    })
+
+
+@app.route("/api/rate", methods=["POST"])
+def api_set_rate():
+    """Set the rate by hand, or point auto mode at a different endpoint."""
+    _require_admin()
+    from src.rates import validate_rate
+
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    if "rate" in data and str(data["rate"]).strip():
+        rate, why = validate_rate(data["rate"])
+        if rate is None:
+            abort(400, description=why)
+        db.set_setting("usd_cny_rate", f"{rate:.4f}")
+        db.set_setting("rate_updated_at", utcnow_iso())
+        db.set_setting("rate_error", "")
+    if "source" in data:
+        db.set_setting("rate_source",
+                       "manual" if data["source"] == "manual" else "auto")
+    if "url" in data:
+        db.set_setting("rate_url", str(data["url"]).strip() or DEFAULT_RATE_URL)
+    return jsonify({"ok": True, "rate": _cny_rate(db),
+                    "source": db.get_setting("rate_source", "auto")})
+
+
 @app.context_processor
 def _inject_globals():
-    return {"auth_enabled": AUTH_ENABLED}
+    return {"auth_enabled": AUTH_ENABLED, "cny_rate": _cny_rate(get_db())}
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +644,11 @@ def api_delete_item():
 @app.route("/load")
 def load_page():
     return render_template("load.html")
+
+
+@app.route("/calc")
+def calc_page():
+    return render_template("calc.html")
 
 
 def _num_setting(db, key):

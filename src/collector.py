@@ -17,6 +17,7 @@ from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
+from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
     PACE_MAX,
@@ -286,6 +287,52 @@ class Collector:
         """Keep the full API record for every sale? Off by default: it dwarfs
         the parsed columns and nothing reads it."""
         return (self.db.get_setting("store_raw_json", "0") or "0") != "0"
+
+    # -- USD -> CNY rate (display only; prices are stored in USD) ------------
+
+    def refresh_cny_rate(self) -> float | None:
+        """Fetch the USD->CNY rate at most twice a day, if auto mode is on.
+
+        A display convenience, so it must never cost the collection anything:
+        it is skipped while a cooldown or quota pause is in force, and a
+        failure is logged once rather than retried."""
+        if (self.db.get_setting("rate_source", "auto") or "auto") != "auto":
+            return None
+        last = self.db.get_setting("rate_updated_at")
+        if last:
+            try:
+                seen = datetime.fromisoformat(last)
+                if seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - seen).total_seconds() < REFRESH_SECONDS:
+                    return None
+            except ValueError:
+                pass
+        if self.client.cooldown_remaining() > 0 or self.quota_pause_seconds() > 0:
+            return None
+
+        url = self.db.get_setting("rate_url") or DEFAULT_RATE_URL
+        try:
+            payload = self.client.fetch_json(url)
+        except Exception as exc:  # noqa: BLE001 - never break polling over this
+            log.warning("Could not fetch the USD/CNY rate from %s: %s", url, exc)
+            self.db.set_setting("rate_error", str(exc)[:200])
+            # Back off a full cycle instead of retrying every 30 seconds.
+            self.db.set_setting("rate_updated_at", utcnow_iso())
+            return None
+
+        rate = extract_cny_rate(payload)
+        if rate is None:
+            log.warning("No usable CNY rate in the response from %s", url)
+            self.db.set_setting("rate_error", "в ответе нет курса CNY")
+            self.db.set_setting("rate_updated_at", utcnow_iso())
+            return None
+
+        self.db.set_setting("usd_cny_rate", f"{rate:.4f}")
+        self.db.set_setting("rate_updated_at", utcnow_iso())
+        self.db.set_setting("rate_error", "")
+        log.info("USD/CNY rate updated: %.4f", rate)
+        return rate
 
     def rotating_limit(self) -> int:
         """Requests per 24h allowed through a rotating proxy. Deliberately a

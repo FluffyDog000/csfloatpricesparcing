@@ -119,6 +119,7 @@ def run_forever(collector: Collector) -> None:
             # makes successful polls rare.
             collector.maybe_speed_up()
             collector.sync_proxies()          # proxies edited in the dashboard
+            collector.refresh_cny_rate()      # display-only, twice a day at most
             # Keep the dashboard honest about the live pool even during a long
             # quiet stretch between polls.
             collector.store_rate_state()

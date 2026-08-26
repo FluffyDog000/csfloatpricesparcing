@@ -452,3 +452,5 @@ document.getElementById("sort-by").addEventListener("change", render);
 document.getElementById("show-hidden").addEventListener("change", render);
 
 startAutoRefresh(load, 60000);
+
+initCurrencyToggle("currency-toggle", render);
