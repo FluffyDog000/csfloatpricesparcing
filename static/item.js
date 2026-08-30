@@ -357,3 +357,65 @@ if (pollBtn) {
 // Currency switch: re-render every table with the new formatting.
 // The overall line, both tables and the latest-sales panel all show money.
 initCurrencyToggle("currency-toggle", () => { refresh(); refreshLatest(); });
+
+// -- buy orders -------------------------------------------------------------
+// Fetched only on demand: orders are keyed by listing, so each refresh costs
+// two requests, and nothing here is worth spending the polling budget on.
+
+function orderFilter(o) {
+  if (o.float_min !== null || o.float_max !== null) {
+    const lo = o.float_min !== null ? Number(o.float_min).toFixed(4) : "0";
+    const hi = o.float_max !== null ? Number(o.float_max).toFixed(4) : "1";
+    return `<span class="scoped">float ${lo}–${hi}</span>`;
+  }
+  if (o.paint_seed !== null && o.paint_seed !== undefined) {
+    return `<span class="scoped">seed ${o.paint_seed}</span>`;
+  }
+  return '<span class="muted">любой</span>';
+}
+
+async function loadOrders() {
+  const body = document.getElementById("orders-body");
+  const hint = document.getElementById("orders-hint");
+  try {
+    const d = await getJSON("/api/orders?item=" + encodeURIComponent(CFG.item));
+    if (!d.orders.length) {
+      body.innerHTML = '<tr><td colspan="3" class="muted">стакан ещё не загружен</td></tr>';
+      hint.textContent = d.error || "Нажми 📥 в заголовке, чтобы загрузить.";
+      document.getElementById("orders-meta").textContent = "";
+      return;
+    }
+    body.innerHTML = d.orders.map((o) =>
+      `<tr><td>${money(o.price)}</td><td class="num">${o.qty}</td>
+       <td>${orderFilter(o)}</td></tr>`).join("");
+    document.getElementById("orders-meta").textContent = `(${d.orders.length})`;
+    hint.textContent = d.fetched_at ? `обновлено ${timeFmt(d.fetched_at)}` : "";
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="3" class="muted">Ошибка: ${esc(e.message)}</td></tr>`;
+  }
+}
+
+const ordersBtn = document.getElementById("load-orders");
+if (ordersBtn) {
+  ordersBtn.addEventListener("click", async () => {
+    const hint = document.getElementById("orders-hint");
+    const token = (() => {
+      try { return localStorage.getItem("csfloat_admin_token") || ""; }
+      catch (e) { return ""; }
+    })();
+    ordersBtn.disabled = true;
+    hint.textContent = "запрашиваю…";
+    try {
+      const r = await postJSON("/api/items/orders", { market_hash_name: CFG.item }, token);
+      hint.textContent = r.note;
+      // The collector picks it up within ~5s; look again once it has.
+      if (!(r.waiting || []).length) setTimeout(loadOrders, 8000);
+    } catch (e) {
+      hint.textContent = "Ошибка: " + e.message;
+    } finally {
+      setTimeout(() => { ordersBtn.disabled = false; }, 3000);
+    }
+  });
+}
+
+loadOrders();

@@ -9,6 +9,7 @@ import logging
 import random
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
@@ -17,6 +18,8 @@ from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
+from .orders import (DEFAULT_LIMIT, LISTINGS_PATH, ORDERS_PATH,
+                     extract_listing_id, parse_orders)
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
@@ -287,6 +290,55 @@ class Collector:
         """Keep the full API record for every sale? Off by default: it dwarfs
         the parsed columns and nothing reads it."""
         return (self.db.get_setting("store_raw_json", "0") or "0") != "0"
+
+    # -- buy orders (on demand from the dashboard) ---------------------------
+
+    def resolve_listing_id(self, name: str, item_id: int,
+                           cached: str | None) -> str | None:
+        """A listing id for this item, reusing the cached one when we have it.
+
+        Buy orders are keyed by listing, so every fetch needs one. Resolving it
+        costs a request, hence the cache; a stale id shows up as a failed order
+        fetch, which clears it and re-resolves next time."""
+        if cached:
+            return cached
+        url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
+               f"?market_hash_name={quote(name, safe='')}&limit=1")
+        payload = self.client.fetch_json(url)
+        listing_id = extract_listing_id(payload)
+        if listing_id:
+            self.db.set_listing_id(item_id, listing_id)
+        return listing_id
+
+    def fetch_buy_orders(self, name: str, item_id: int,
+                         cached_listing: str | None = None) -> int | None:
+        """Refresh one item's order book. Returns the number of orders stored,
+        or None when it could not be fetched."""
+        try:
+            listing_id = self.resolve_listing_id(name, item_id, cached_listing)
+            if not listing_id:
+                log.warning("No active listing for '%s' — no orders to read", name)
+                self.db.set_setting("orders_error", f"{name}: нет активных лотов")
+                return None
+
+            url = (f"{self.config.http.base_url}"
+                   f"{ORDERS_PATH.format(listing_id=listing_id)}"
+                   f"?limit={DEFAULT_LIMIT}")
+            payload = self.client.fetch_json(url)
+        except Exception as exc:  # noqa: BLE001 - a button press must not kill polling
+            log.warning("Buy orders for '%s' failed: %s", name, exc)
+            # A listing that has sold gives a 404; drop it so the next attempt
+            # resolves a fresh one instead of failing forever.
+            if cached_listing:
+                self.db.set_listing_id(item_id, None)
+            self.db.set_setting("orders_error", f"{name}: {exc}"[:200])
+            return None
+
+        orders = parse_orders(payload)
+        self.db.replace_buy_orders(item_id, orders)
+        self.db.set_setting("orders_error", "")
+        log.info("'%s': %d buy order(s) stored", name, len(orders))
+        return len(orders)
 
     # -- USD -> CNY rate (display only; prices are stored in USD) ------------
 

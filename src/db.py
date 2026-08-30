@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS settings (
     value               TEXT
 );
 
+CREATE TABLE IF NOT EXISTS buy_orders (
+    item_id             INTEGER NOT NULL REFERENCES items(id),
+    price               REAL    NOT NULL,   -- USD
+    qty                 INTEGER NOT NULL DEFAULT 1,
+    float_min           REAL,               -- set for float-scoped orders
+    float_max           REAL,
+    paint_seed          INTEGER,
+    position            INTEGER NOT NULL,   -- rank in the book, best bid = 0
+    fetched_at          TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_item ON buy_orders(item_id);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -109,6 +122,14 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
             )
+
+        if "orders_requested_at" not in cols:
+            # Set by the dashboard's order button; cleared once fetched.
+            self.conn.execute("ALTER TABLE items ADD COLUMN orders_requested_at TEXT")
+        if "listing_id" not in cols:
+            # Cached id of one of the item's listings: buy orders are keyed by
+            # listing, so a fetch needs one and re-resolving costs a request.
+            self.conn.execute("ALTER TABLE items ADD COLUMN listing_id TEXT")
 
         if "poll_requested_at" not in cols:
             # Set by the dashboard's "poll now" button; the collector clears it
@@ -290,6 +311,54 @@ class Database:
             "UPDATE items SET poll_requested_at = NULL WHERE id = ?", (item_id,)
         )
         self.conn.commit()
+
+    # -- buy orders (snapshot per item, replaced on each fetch) --------------
+
+    def request_orders(self, market_hash_name: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE items SET orders_requested_at = ? WHERE market_hash_name = ?",
+            (utcnow_iso(), market_hash_name),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def pending_order_requests(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id, market_hash_name, listing_id FROM items "
+            "WHERE orders_requested_at IS NOT NULL ORDER BY orders_requested_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_order_request(self, item_id: int) -> None:
+        self.conn.execute(
+            "UPDATE items SET orders_requested_at = NULL WHERE id = ?", (item_id,))
+        self.conn.commit()
+
+    def set_listing_id(self, item_id: int, listing_id: str | None) -> None:
+        self.conn.execute("UPDATE items SET listing_id = ? WHERE id = ?",
+                          (listing_id, item_id))
+        self.conn.commit()
+
+    def replace_buy_orders(self, item_id: int, orders: list[dict[str, Any]]) -> int:
+        """Store the current book, dropping the previous snapshot."""
+        now = utcnow_iso()
+        self.conn.execute("DELETE FROM buy_orders WHERE item_id = ?", (item_id,))
+        self.conn.executemany(
+            "INSERT INTO buy_orders (item_id, price, qty, float_min, float_max, "
+            "paint_seed, position, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(item_id, o["price"], o.get("qty") or 1, o.get("float_min"),
+              o.get("float_max"), o.get("paint_seed"), i, now)
+             for i, o in enumerate(orders)],
+        )
+        self.conn.commit()
+        return len(orders)
+
+    def buy_orders(self, item_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT price, qty, float_min, float_max, paint_seed, fetched_at "
+            "FROM buy_orders WHERE item_id = ? ORDER BY position", (item_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def get_active_items(self) -> list[dict[str, Any]]:
         """Active items for the collector to poll (source of truth = DB)."""

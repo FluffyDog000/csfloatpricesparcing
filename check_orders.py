@@ -24,39 +24,14 @@ import requests
 from src.config import load_config
 from src.csfloat_client import CSFloatClient
 
-ORDERS_PATH = "/api/v1/listings/{listing_id}/buy-orders"
+from src.orders import (ORDERS_PATH, first, price_to_dollars, records,
+                        PRICE_PATHS, QTY_PATHS, FLOAT_MIN_PATHS,
+                        FLOAT_MAX_PATHS, SEED_PATHS)
 
 
-def records(payload: Any) -> list[dict]:
-    """Ордера могут прийти списком или завёрнутыми в объект."""
-    if isinstance(payload, list):
-        return [r for r in payload if isinstance(r, dict)]
-    if isinstance(payload, dict):
-        for key in ("data", "orders", "buy_orders", "results"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [r for r in value if isinstance(r, dict)]
-    return []
-
-
-def first(record: dict, *paths: str):
-    """Значение по первому подходящему пути вида 'a.b.c'."""
-    for path in paths:
-        node: Any = record
-        for part in path.split("."):
-            if not isinstance(node, dict) or part not in node:
-                node = None
-                break
-            node = node[part]
-        if node is not None:
-            return node
-    return None
-
-
-def money(cents: Any) -> str:
-    if isinstance(cents, (int, float)):
-        return f"${cents / 100:.2f}" if cents > 1000 else f"${cents:.2f}"
-    return "—"
+def money(value: Any) -> str:
+    dollars = price_to_dollars(value)
+    return f"${dollars:.2f}" if dollars is not None else "—"
 
 
 def describe(payload: Any, limit_asked: int) -> None:
@@ -76,13 +51,11 @@ def describe(payload: Any, limit_asked: int) -> None:
     print("-" * 62)
     scoped = 0
     for r in rows:
-        price = first(r, "price", "market_price", "value")
-        qty = first(r, "qty", "quantity", "count", "amount")
-        lo = first(r, "expression.float_value.min", "min_float", "float_min",
-                   "expression.min_float")
-        hi = first(r, "expression.float_value.max", "max_float", "float_max",
-                   "expression.max_float")
-        seed = first(r, "expression.paint_seed", "paint_seed", "seed")
+        price = first(r, *PRICE_PATHS)
+        qty = first(r, *QTY_PATHS)
+        lo = first(r, *FLOAT_MIN_PATHS)
+        hi = first(r, *FLOAT_MAX_PATHS)
+        seed = first(r, *SEED_PATHS)
         bits = []
         if lo is not None or hi is not None:
             bits.append(f"float {lo if lo is not None else '—'}–{hi if hi is not None else '—'}")

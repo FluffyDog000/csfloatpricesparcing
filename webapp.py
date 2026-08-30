@@ -567,6 +567,42 @@ def api_poll_item():
     })
 
 
+@app.route("/api/items/orders", methods=["POST"])
+def api_request_orders():
+    """Queue a buy-order fetch. Same reasoning as the poll button: the
+    collector owns the routes and the rate limits, so it makes the request."""
+    _require_admin()
+    name = _body_name()
+    db = get_db()
+    if not db.request_orders(name):
+        abort(404, description="Предмет не найден.")
+    waiting = []
+    if _cooldown_left(db) > 0:
+        waiting.append("идёт пауза после 429")
+    log.info("Buy-order fetch queued for '%s'", name)
+    return jsonify({
+        "ok": True, "waiting": waiting,
+        "note": ("Стакан обновится, когда снимется пауза." if waiting
+                 else "Стакан обновится в ближайшие ~5 секунд."),
+    })
+
+
+@app.route("/api/orders")
+def api_orders():
+    """The stored order-book snapshot for one item."""
+    db = get_db()
+    name = request.args.get("item", "")
+    item_id = db.get_item_id(name)
+    if item_id is None:
+        abort(404, description="Предмет не найден.")
+    orders = db.buy_orders(item_id)
+    return jsonify({
+        "orders": orders,
+        "fetched_at": orders[0]["fetched_at"] if orders else None,
+        "error": db.get_setting("orders_error") or "",
+    })
+
+
 @app.route("/api/items/update", methods=["POST"])
 def api_update_item():
     _require_admin()

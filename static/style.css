@@ -202,6 +202,10 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .usage-table td:nth-child(3) { color: var(--muted); font-size: 12px; }
 .poll-msg { font-size: 12px; color: var(--good); margin-top: 6px; min-height: 15px; }
 .poll-msg.err { color: var(--bad); }
+.orders td:first-child { font-family: var(--mono); font-weight: 600; }
+.orders .scoped { color: var(--accent); font-size: 11px; }
+.orders-hint { font-size: 11px; margin: 6px 0 18px; min-height: 14px; }
+
 /* Калькулятор */
 .calc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
              gap: 16px; }

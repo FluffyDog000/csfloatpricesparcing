@@ -168,6 +168,13 @@ def run_forever(collector: Collector) -> None:
                 collector.db.clear_poll_request(int(row["id"]))
                 collector.poll_item(item)
 
+            # Buy-order requests, same gating: on demand, never on a schedule.
+            for row in collector.db.pending_order_requests():
+                collector.db.clear_order_request(int(row["id"]))
+                log.info("Buy orders requested for '%s'", row["market_hash_name"])
+                collector.fetch_buy_orders(row["market_hash_name"], int(row["id"]),
+                                           row.get("listing_id"))
+
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()
         if delay > 0:

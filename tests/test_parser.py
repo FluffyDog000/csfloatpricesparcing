@@ -1032,3 +1032,106 @@ def test_buy_order_shapes_are_parsed():
     assert co.first({"min_float": 0.2}, "expression.float_value.min",
                     "min_float") == 0.2
     assert co.first({"price": 1}, "nope.deeper") is None
+
+
+def test_buy_orders_are_parsed_and_stored_as_a_snapshot():
+    """Orders are a "what is bid right now" view, not a history: each fetch
+    replaces the previous book rather than appending to it."""
+    import os, tempfile
+    from src.db import Database
+    from src.orders import parse_orders
+
+    payload = {"data": [
+        {"price": 30300, "qty": 1},
+        {"price": 28200, "qty": 1,
+         "expression": {"float_value": {"min": 0.15, "max": 0.157}}},
+        {"market_price": 26700, "quantity": 2, "paint_seed": 387},
+    ]}
+    orders = parse_orders(payload)
+    assert [o["price"] for o in orders] == [303.0, 282.0, 267.0], "best bid first"
+    assert orders[1]["float_min"] == 0.15 and orders[1]["float_max"] == 0.157
+    assert orders[2]["qty"] == 2 and orders[2]["paint_seed"] == 387
+
+    db = Database(os.path.join(tempfile.mkdtemp(), "t.db"))
+    item_id = db.add_item("Gloves")
+    assert db.replace_buy_orders(item_id, orders) == 3
+    stored = db.buy_orders(item_id)
+    assert [o["price"] for o in stored] == [303.0, 282.0, 267.0], "order preserved"
+
+    db.replace_buy_orders(item_id, [{"price": 300.0, "qty": 1}])
+    assert len(db.buy_orders(item_id)) == 1, "a fetch replaces the old snapshot"
+    db.close()
+
+
+def test_order_fetch_failure_clears_a_stale_listing_id():
+    """Orders hang off a listing, and listings sell. A cached id that has gone
+    404 must be dropped, or every later fetch fails on the same dead id."""
+    import os, tempfile, logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    db.set_listing_id(item_id, "sold-listing")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    def gone(url):
+        raise requests.HTTPError("404 Not Found")
+
+    col.client.fetch_json = gone
+    assert col.fetch_buy_orders("Gloves", item_id, "sold-listing") is None
+    cached = db.conn.execute("SELECT listing_id FROM items WHERE id = ?",
+                             (item_id,)).fetchone()[0]
+    assert cached is None, "a dead listing id must not be kept"
+    assert "404" in (db.get_setting("orders_error") or "")
+
+    # An item with no active listing has no book, and says so.
+    col.client.fetch_json = lambda url: {"data": []}
+    assert col.fetch_buy_orders("Gloves", item_id, None) is None
+    assert "нет активных лотов" in db.get_setting("orders_error")
+    db.close()
+
+
+def test_order_fetch_uses_two_requests_then_one():
+    """Resolving the listing costs a request; caching it means later refreshes
+    cost only the order fetch itself."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    calls = []
+
+    def fake(url):
+        calls.append(url)
+        if "/buy-orders" in url:
+            return {"data": [{"price": 30300, "qty": 1}]}
+        return {"data": [{"id": "listing-1"}]}
+
+    col.client.fetch_json = fake
+    assert col.fetch_buy_orders("Gloves", item_id, None) == 1
+    assert len(calls) == 2 and "market_hash_name" in calls[0]
+
+    calls.clear()
+    cached = db.conn.execute("SELECT listing_id FROM items WHERE id = ?",
+                             (item_id,)).fetchone()[0]
+    assert cached == "listing-1"
+    assert col.fetch_buy_orders("Gloves", item_id, cached) == 1
+    assert len(calls) == 1, "the cached listing id saves a request"
+    db.close()
