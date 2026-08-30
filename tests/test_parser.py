@@ -1012,3 +1012,23 @@ def test_rate_api_round_trip():
     db.set_setting("usd_cny_rate", "")
     db.set_setting("rate_source", "auto")
     db.close()
+
+
+def test_buy_order_shapes_are_parsed():
+    """The orders endpoint is undocumented, so the reader accepts the shapes an
+    API might plausibly use rather than depending on one."""
+    import check_orders as co
+
+    flat = [{"price": 30300, "qty": 1},
+            {"price": 28200, "qty": 1,
+             "expression": {"float_value": {"min": 0.15, "max": 0.157}}}]
+    assert len(co.records(flat)) == 2
+    assert len(co.records({"data": flat})) == 2
+    assert len(co.records({"orders": flat})) == 2
+    assert co.records({"foo": "bar"}) == []
+
+    # Float-scoped orders must be readable under either naming.
+    assert co.first(flat[1], "expression.float_value.min") == 0.15
+    assert co.first({"min_float": 0.2}, "expression.float_value.min",
+                    "min_float") == 0.2
+    assert co.first({"price": 1}, "nope.deeper") is None
