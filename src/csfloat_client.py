@@ -227,7 +227,7 @@ class CSFloatClient:
                 time.sleep(wait)
             self._last_request_ts = time.monotonic()
 
-    def fetch_json(self, url: str) -> object:
+    def fetch_json(self, url: str, headers: dict[str, str] | None = None) -> object:
         """One-off GET for a small side endpoint (currently the FX rate).
 
         Goes through the pool and the request spacing like any other call, and
@@ -239,7 +239,7 @@ class CSFloatClient:
             raise RateLimited("no route available for a side request")
         self._respect_spacing()
         resp = self.session.get(url, timeout=self.http.timeout_seconds,
-                                proxies=route.proxies())
+                                proxies=route.proxies(), headers=headers)
         self._capture_rate_headers(resp)
         self._feed_pool(route, resp)
 
@@ -260,10 +260,15 @@ class CSFloatClient:
             raise RateLimited(
                 f"429 on a side request; polling paused for {wait / 60:.1f} min")
 
-        resp.raise_for_status()
+        # Check who answered BEFORE raising: a 403 from Cloudflare means the
+        # exit IP was screened and another route may well work, while
+        # raise_for_status would just surface it as an opaque HTTP error.
         if self._edge_block(resp):
             self.pool.record_failure(route, "edge block on a side request")
-            raise EdgeBlocked(f"Cloudflare challenge for {url}")
+            raise EdgeBlocked(
+                f"HTTP {resp.status_code}: Cloudflare screened the exit IP")
+
+        resp.raise_for_status()
         self.pool.record_success(route)
         return resp.json()
 

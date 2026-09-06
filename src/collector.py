@@ -319,6 +319,10 @@ class Collector:
         self.db.set_setting("orders_error", f"{name}: {text}"[:200] if text else "")
         self.db.set_setting("orders_error_at", utcnow_iso() if text else "")
 
+    def _listings_headers(self) -> dict[str, str] | None:
+        key = self.config.http.api_key
+        return {"Authorization": key} if key else None
+
     def sweep_buy_orders(self, name: str, item_id: int) -> dict:
         """Read the whole order book by walking the item's float range.
 
@@ -330,7 +334,10 @@ class Collector:
         try:
             url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
                    f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
-            payload = self.client.fetch_json(url)
+            # /api/v1/listings is the documented API and authenticates with the
+            # API key, not the browser session the sales endpoint uses. Sending
+            # only the cookie gets a flat 403.
+            payload = self.client.fetch_json(url, headers=self._listings_headers())
             result["requests"] += 1
         except RateLimited as exc:
             result["error"] = "лимит CSFloat — попробуй позже"
@@ -339,7 +346,11 @@ class Collector:
             self._note_orders_error(name, result["error"])
             return result
         except Exception as exc:  # noqa: BLE001
-            result["error"] = f"список лотов: {exc}"[:200]
+            hint = ""
+            if "403" in str(exc) and not self.config.http.api_key:
+                hint = (" — этот эндпоинт требует ключ API, задай CSFLOAT_API_KEY "
+                        "в .env (кука от него не подходит)")
+            result["error"] = f"список лотов: {exc}"[:160] + hint
             self._note_orders_error(name, result["error"])
             return result
 

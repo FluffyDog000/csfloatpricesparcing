@@ -1083,7 +1083,7 @@ def test_order_fetch_failure_clears_a_stale_listing_id():
     db.set_listing_id(item_id, "sold-listing")
     col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
 
-    def gone(url):
+    def gone(url, headers=None):
         raise requests.HTTPError("404 Not Found")
 
     col.client.fetch_json = gone
@@ -1119,7 +1119,7 @@ def test_order_fetch_uses_two_requests_then_one():
 
     calls = []
 
-    def fake(url):
+    def fake(url, headers=None):
         calls.append(url)
         if "/buy-orders" in url:
             return {"data": [{"price": 30300, "qty": 1}]}
@@ -1214,7 +1214,7 @@ def test_a_failed_band_keeps_the_bands_already_collected():
     listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.01}}
                          for i in range(4)]}
 
-    def flaky(url):
+    def flaky(url, headers=None):
         if "/buy-orders" in url:
             listing = url.split("/listings/")[1].split("/")[0]
             if listing == "L1":
@@ -1230,7 +1230,7 @@ def test_a_failed_band_keeps_the_bands_already_collected():
 
     # If the listings lookup itself fails there is nothing to sweep, and the
     # previous snapshot must be left alone rather than wiped.
-    def dead(url):
+    def dead(url, headers=None):
         raise requests.HTTPError("403 Forbidden")
 
     col.client.fetch_json = dead
@@ -1262,7 +1262,7 @@ def test_a_rate_limit_stops_the_sweep_instead_of_deepening_it():
                          for i in range(6)]}
     calls = []
 
-    def limited(url):
+    def limited(url, headers=None):
         calls.append(url)
         if "/buy-orders" in url:
             listing = url.split("/listings/")[1].split("/")[0]
@@ -1282,7 +1282,7 @@ def test_a_rate_limit_stops_the_sweep_instead_of_deepening_it():
     # A limit on the very first request must not wipe the previous snapshot.
     calls.clear()
 
-    def dead(url):
+    def dead(url, headers=None):
         calls.append(url)
         raise RateLimited("429")
 
@@ -1570,3 +1570,84 @@ def test_quarantine_can_be_lifted_from_the_dashboard():
     db.set_setting("proxies", "")
     db.set_setting("use_direct", "1")
     db.close()
+
+
+def test_an_edge_403_is_told_apart_from_a_real_one_on_side_requests():
+    """fetch_json raised for status before checking who answered, so a
+    Cloudflare 403 — a screened exit IP another route could get past —
+    surfaced as an opaque HTTP error and never faulted the route."""
+    import json, logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, EdgeBlocked
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["a:p:g1:1 #rotating", "a:p:g2:2 #rotating"],
+                        use_direct=False)
+    client._respect_spacing = lambda: None
+
+    client.session.get = lambda url, **kw: _StubResp(
+        403, "<html>Attention Required! | Cloudflare</html>",
+        {"Content-Type": "text/html"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/listings?x=1")
+        assert False, "a screened IP must be reported as such"
+    except EdgeBlocked:
+        pass
+
+    # CSFloat's own 403 (JSON) is an access problem, not a proxy problem.
+    client.session.get = lambda url, **kw: _StubResp(
+        403, '{"error": "forbidden"}', {"Content-Type": "application/json"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/listings?x=1")
+        assert False
+    except EdgeBlocked:
+        assert False, "an API refusal must not be blamed on the exit IP"
+    except requests.HTTPError:
+        pass
+
+
+def test_the_listings_lookup_sends_the_api_key():
+    """/api/v1/listings is the documented API and authenticates with the API
+    key, not the browser session the sales endpoint uses — sending only the
+    cookie gets a flat 403 with nothing explaining why."""
+    import os, tempfile, logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    seen = {}
+
+    def run(api_key):
+        os.environ["CSFLOAT_API_KEY"] = api_key
+        cfg = load_config()
+        cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+        db = Database(cfg.db_path)
+        item_id = db.add_item("Gloves")
+        col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+        def fake(url, headers=None):
+            seen["headers"] = headers
+            raise requests.HTTPError("403 Client Error: Forbidden for url: ...")
+
+        col.client.fetch_json = fake
+        result = col.sweep_buy_orders("Gloves", item_id)
+        db.close()
+        return result
+
+    result = run("test-api-key")
+    assert seen["headers"] == {"Authorization": "test-api-key"}
+    assert "CSFLOAT_API_KEY" not in result["error"], \
+        "no point suggesting a key that is already set"
+
+    result = run("")
+    assert seen["headers"] is None
+    assert "CSFLOAT_API_KEY" in result["error"], \
+        "a 403 with no key must name the likely cause"
+    os.environ.pop("CSFLOAT_API_KEY", None)
