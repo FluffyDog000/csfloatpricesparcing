@@ -1237,3 +1237,79 @@ def test_a_failed_band_keeps_the_bands_already_collected():
     assert result["orders"] == 0 and result["requests"] == 0
     assert len(db.buy_orders(item_id)) == 3, "an unreachable sweep keeps the old book"
     db.close()
+
+
+def test_a_rate_limit_stops_the_sweep_instead_of_deepening_it():
+    """A sweep fires up to 26 requests in a row. Once one draws a 429 every
+    remaining band would draw one too, so it must stop — and keep whatever it
+    collected rather than blanking the panel."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient, RateLimited
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.02}}
+                         for i in range(6)]}
+    calls = []
+
+    def limited(url):
+        calls.append(url)
+        if "/buy-orders" in url:
+            listing = url.split("/listings/")[1].split("/")[0]
+            if listing in ("L0", "L1"):
+                return {"data": [{"price": 20000 + int(listing[1]) * 100, "qty": 1}]}
+            raise RateLimited("429 on a side request")
+        return listings
+
+    col.client.fetch_json = limited
+    result = col.sweep_buy_orders("Gloves", item_id)
+
+    assert result["rate_limited"] is True
+    assert result["bands"] == 2, "only the bands read before the limit count"
+    assert len(calls) == 4, "the remaining bands must not be requested"
+    assert len(db.buy_orders(item_id)) == 2, "what was collected is kept"
+
+    # A limit on the very first request must not wipe the previous snapshot.
+    calls.clear()
+
+    def dead(url):
+        calls.append(url)
+        raise RateLimited("429")
+
+    col.client.fetch_json = dead
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert result["orders"] == 0 and len(calls) == 1
+    assert len(db.buy_orders(item_id)) == 2, "the old book survives a failed sweep"
+    db.close()
+
+
+def test_side_requests_arm_the_same_cooldown_as_a_poll():
+    """The limit is on the account and the IP, not on the endpoint: a 429 from
+    the rate or orders lookup has to back the collector off like any other."""
+    import logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, RateLimited
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client._respect_spacing = lambda: None
+    client.session.get = lambda url, **kw: _StubResp(
+        429, '{"error": "rate limited"}', {"Content-Type": "application/json"})
+
+    assert client.cooldown_remaining() == 0
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/anything")
+        assert False, "a 429 must be raised, not swallowed"
+    except RateLimited:
+        pass
+    assert client.cooldown_remaining() > 0, "the cooldown must be armed"

@@ -577,13 +577,14 @@ def api_request_orders():
     if not db.request_orders(name):
         abort(404, description="Предмет не найден.")
     waiting = []
-    if _cooldown_left(db) > 0:
-        waiting.append("идёт пауза после 429")
+    left = _cooldown_left(db)
+    if left > 0:
+        waiting.append(f"идёт пауза после 429, осталось {left / 60:.0f} мин")
     log.info("Buy-order fetch queued for '%s'", name)
     return jsonify({
         "ok": True, "waiting": waiting,
-        "note": ("Стакан обновится, когда снимется пауза." if waiting
-                 else "Обхожу лоты по диапазонам флота — до минуты."),
+        "note": (f"Обход начнётся, когда снимется пауза: {'; '.join(waiting)}"
+                 if waiting else "Обхожу лоты по диапазонам флота — до минуты."),
     })
 
 

@@ -324,6 +324,12 @@ class Collector:
                    f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
             payload = self.client.fetch_json(url)
             result["requests"] += 1
+        except RateLimited as exc:
+            result["error"] = "лимит CSFloat — попробуй позже"
+            result["rate_limited"] = True
+            log.warning("Order sweep for '%s' hit the rate limit: %s", name, exc)
+            self.db.set_setting("orders_error", f"{name}: {result['error']}")
+            return result
         except Exception as exc:  # noqa: BLE001
             result["error"] = f"список лотов: {exc}"[:200]
             self.db.set_setting("orders_error", f"{name}: {result['error']}")
@@ -344,6 +350,15 @@ class Collector:
                 batches.append(parse_orders(self.client.fetch_json(url)))
                 result["requests"] += 1
                 result["bands"] += 1
+            except RateLimited as exc:
+                # Every remaining band would hit the same limit; stopping keeps
+                # what was collected and stops digging the hole deeper.
+                log.warning("Order sweep for '%s' stopped at band %s: %s",
+                            name, step.get("band"), exc)
+                result["error"] = (f"лимит CSFloat после {result['bands']} полос "
+                                   "— часть стакана могла не попасть")
+                result["rate_limited"] = True
+                break
             except Exception as exc:  # noqa: BLE001
                 # One sold listing must not lose the bands already collected.
                 log.warning("Band %.2f of '%s' failed: %s", step.get("band") or -1,
@@ -351,6 +366,10 @@ class Collector:
                 result["error"] = str(exc)[:120]
 
         orders = merge_orders(batches)
+        if not orders and result.get("rate_limited"):
+            # Nothing arrived before the limit; keep the previous snapshot
+            # rather than blanking the panel.
+            return result
         self.db.replace_buy_orders(item_id, orders)
         # Keep one listing id for the cheap single-listing refresh.
         self.db.set_listing_id(item_id, plan[0]["id"])

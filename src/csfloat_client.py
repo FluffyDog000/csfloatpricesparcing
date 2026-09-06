@@ -230,10 +230,10 @@ class CSFloatClient:
     def fetch_json(self, url: str) -> object:
         """One-off GET for a small side endpoint (currently the FX rate).
 
-        Goes through the pool and the request spacing like any other call, so
-        it cannot burst past a rate limit — but it deliberately does not retry
-        or enter a cooldown: nothing here is worth delaying the sales polling
-        for."""
+        Goes through the pool and the request spacing like any other call, and
+        a 429 arms the same cooldown a sales poll would — the limit belongs to
+        the account, not to the endpoint. It does not retry, though: nothing
+        here is worth delaying the sales polling for."""
         route = self.pool.pick()
         if route is None:
             raise RateLimited("no route available for a side request")
@@ -242,6 +242,24 @@ class CSFloatClient:
                                 proxies=route.proxies())
         self._capture_rate_headers(resp)
         self._feed_pool(route, resp)
+
+        if resp.status_code == 429:
+            # A 429 counts the same whichever endpoint drew it: the limit is on
+            # the account and the IP, not on the path. Skipping the backoff here
+            # let a sweep keep firing into a limit it had already hit.
+            self._handle_account_ip_complaint(resp)
+            retry_after = None
+            hdr = resp.headers.get("Retry-After")
+            if hdr:
+                try:
+                    retry_after = float(hdr)
+                except ValueError:
+                    retry_after = None
+            wait = self._enter_cooldown(retry_after)
+            self.pool.record_429(route, wait)
+            raise RateLimited(
+                f"429 on a side request; polling paused for {wait / 60:.1f} min")
+
         resp.raise_for_status()
         if self._edge_block(resp):
             self.pool.record_failure(route, "edge block on a side request")
