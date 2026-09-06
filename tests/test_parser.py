@@ -1651,3 +1651,44 @@ def test_the_listings_lookup_sends_the_api_key():
     assert "CSFLOAT_API_KEY" in result["error"], \
         "a 403 with no key must name the likely cause"
     os.environ.pop("CSFLOAT_API_KEY", None)
+
+
+def test_no_usable_route_is_not_reported_as_a_csfloat_limit():
+    """Every route parked is our own state, not CSFloat refusing anything.
+    Calling it "лимит CSFloat" sends the user to wait out a limit that was
+    never hit, when what they need is to enable a route."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient, NoRouteAvailable, RateLimited
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    col.client.pool.replace([f"a:p:g:{i} #rotating" for i in range(12)],
+                            use_direct=False)
+    col.client.pool.park_rotating(6 * 3600)
+
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert "нет доступных маршрутов" in result["error"]
+    assert "лимит CSFloat" not in result["error"]
+    assert "мин" in result["error"], "say when a route frees up"
+
+    # An actual 429 still reads as CSFloat's limit.
+    col.client.pool.unpark_rotating()
+
+    def limited(url, headers=None):
+        raise RateLimited("429 on a side request")
+
+    col.client.fetch_json = limited
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert result["error"] == "лимит CSFloat — попробуй позже"
+
+    # NoRouteAvailable still backs callers off like any rate limit.
+    assert issubclass(NoRouteAvailable, RateLimited)
+    db.close()

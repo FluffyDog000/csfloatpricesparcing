@@ -38,6 +38,15 @@ class RateLimited(Exception):
     """Raised when 429 persists past the configured retry budget."""
 
 
+class NoRouteAvailable(RateLimited):
+    """No route can be used right now — every one is parked, cooling down or
+    out of quota.
+
+    A subclass of RateLimited so existing handlers still back off, but named
+    apart because the cause is ours, not CSFloat's: reporting it as "лимит
+    CSFloat" sends the user to wait on a limit that was never hit."""
+
+
 class EdgeBlocked(Exception):
     """Raised when Cloudflare screened the exit IP on every route we tried.
 
@@ -236,7 +245,10 @@ class CSFloatClient:
         here is worth delaying the sales polling for."""
         route = self.pool.pick()
         if route is None:
-            raise RateLimited("no route available for a side request")
+            wait = self.pool.wait_seconds()
+            raise NoRouteAvailable(
+                f"нет доступных маршрутов, ближайший освободится через "
+                f"{wait / 60:.0f} мин" if wait > 0 else "нет доступных маршрутов")
         self._respect_spacing()
         resp = self.session.get(url, timeout=self.http.timeout_seconds,
                                 proxies=route.proxies(), headers=headers)

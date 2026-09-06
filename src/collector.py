@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
-                             EdgeBlocked, RateLimited)
+                             EdgeBlocked, NoRouteAvailable, RateLimited)
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
@@ -339,6 +339,14 @@ class Collector:
             # only the cookie gets a flat 403.
             payload = self.client.fetch_json(url, headers=self._listings_headers())
             result["requests"] += 1
+        except NoRouteAvailable as exc:
+            # Our own pool, not CSFloat: saying "лимит CSFloat" here sends the
+            # user to wait out a limit that was never hit.
+            result["error"] = str(exc)
+            result["rate_limited"] = True
+            log.warning("Order sweep for '%s' had no usable route: %s", name, exc)
+            self._note_orders_error(name, result["error"])
+            return result
         except RateLimited as exc:
             result["error"] = "лимит CSFloat — попробуй позже"
             result["rate_limited"] = True
@@ -374,7 +382,9 @@ class Collector:
                 # what was collected and stops digging the hole deeper.
                 log.warning("Order sweep for '%s' stopped at band %s: %s",
                             name, step.get("band"), exc)
-                result["error"] = (f"лимит CSFloat после {result['bands']} полос "
+                cause = ("нет доступных маршрутов"
+                         if isinstance(exc, NoRouteAvailable) else "лимит CSFloat")
+                result["error"] = (f"{cause} после {result['bands']} полос "
                                    "— часть стакана могла не попасть")
                 result["rate_limited"] = True
                 break
