@@ -567,6 +567,31 @@ def api_poll_item():
     })
 
 
+def _why_waiting(db) -> list[str]:
+    """Why a queued request is not running yet.
+
+    The collector holds manual requests behind the same quota and cooldown
+    gates as scheduled polls, so "queued" can mean "waiting hours". Without a
+    reason the panel looks like a broken collector."""
+    reasons = []
+    left = _cooldown_left(db)
+    if left > 0:
+        reasons.append(f"пауза после 429, осталось {left / 60:.0f} мин")
+    _, remaining, reset = _quota_numbers(db)
+    if remaining is not None and remaining <= 0:
+        if reset:
+            from datetime import datetime, timezone
+            mins = (datetime.fromtimestamp(reset, timezone.utc)
+                    - datetime.now(timezone.utc)).total_seconds() / 60
+            if mins > 0:
+                reasons.append(f"квота исчерпана, сброс через {mins:.0f} мин")
+            else:
+                reasons.append("квота исчерпана")
+        else:
+            reasons.append("квота исчерпана")
+    return reasons
+
+
 @app.route("/api/items/orders", methods=["POST"])
 def api_request_orders():
     """Queue a buy-order fetch. Same reasoning as the poll button: the
@@ -580,11 +605,9 @@ def api_request_orders():
     # queued makes an old error look like the new one's result.
     db.set_setting("orders_error", "")
     db.set_setting("orders_error_at", "")
-    waiting = []
-    left = _cooldown_left(db)
-    if left > 0:
-        waiting.append(f"идёт пауза после 429, осталось {left / 60:.0f} мин")
-    log.info("Buy-order fetch queued for '%s'", name)
+    waiting = _why_waiting(db)
+    log.info("Buy-order fetch queued for '%s'%s", name,
+             f" (ожидает: {'; '.join(waiting)})" if waiting else "")
     return jsonify({
         "ok": True, "waiting": waiting,
         "note": (f"Обход начнётся, когда снимется пауза: {'; '.join(waiting)}"
@@ -622,6 +645,7 @@ def api_orders():
         "error": db.get_setting("orders_error") or "",
         "error_at": db.get_setting("orders_error_at") or None,
         "queued_at": queued,
+        "waiting": _why_waiting(db),
         "bands": summary.get("bands"),
         "requests": summary.get("requests"),
     })

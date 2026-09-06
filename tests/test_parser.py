@@ -1370,3 +1370,42 @@ def test_a_queued_order_request_is_visible():
     body = client.get(f"/api/orders?item={name}").get_json()
     assert body["queued_at"] is None and len(body["orders"]) == 1
     db.close()
+
+
+def test_a_queue_waiting_on_the_quota_says_so():
+    """Manual requests sit behind the same quota and cooldown gates as polls,
+    so "queued" can mean hours. Reporting that as a possibly-dead collector
+    sends the user to restart a service that is working correctly."""
+    import time
+    from datetime import datetime, timedelta, timezone
+    import logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    name = f"Wait test {uuid.uuid4().hex[:6]}"
+    db.add_item(name)
+    client = webapp.app.test_client()
+    client.post("/api/items/orders", json={"market_hash_name": name})
+
+    db.set_setting("rl_remaining", ""), db.set_setting("cooldown_until", "")
+    assert client.get(f"/api/orders?item={name}").get_json()["waiting"] == []
+
+    db.set_setting("rl_remaining", "0")
+    db.set_setting("rl_reset", str(int(time.time()) + 3600))
+    waiting = client.get(f"/api/orders?item={name}").get_json()["waiting"]
+    assert len(waiting) == 1 and "квота" in waiting[0] and "60" in waiting[0]
+
+    db.set_setting("cooldown_until",
+                   (datetime.now(timezone.utc) + timedelta(minutes=8)).isoformat())
+    waiting = client.get(f"/api/orders?item={name}").get_json()["waiting"]
+    assert len(waiting) == 2, "both gates must be reported, not just the first"
+
+    # The button says the same thing, so the two never disagree.
+    note = client.post("/api/items/orders",
+                       json={"market_hash_name": name}).get_json()["note"]
+    assert "квота" in note and "429" in note
+
+    db.set_setting("rl_remaining", ""), db.set_setting("cooldown_until", "")
+    db.close()
