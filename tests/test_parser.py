@@ -1455,3 +1455,29 @@ def test_quarantine_covers_proxies_added_while_it_runs():
     # The server's own IP is unaffected — collection continues on it.
     assert col.client.pool.pick().key == "direct"
     db.close()
+
+
+def test_quota_totals_distinguish_held_from_spendable():
+    """Parked routes keep their budget, so summing every route reported 8500
+    left while nothing could be sent — and the remainder was measured against
+    one IP's 500, printing "8500 из 500 на окно"."""
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool([f"a:p:gate:{10020 + i} #rotating" for i in range(17)],
+                     use_direct=True, rotating_limit=500)
+    pool.routes["direct"].limit = 500
+    pool.routes["direct"].remaining = 0
+
+    assert pool.total_remaining() == 8500
+    assert pool.total_limit() == 9000, "the ceiling must be summed like the rest"
+    assert pool.usable_remaining() == 8500
+
+    pool.park_rotating(6 * 3600)
+    assert pool.total_remaining() == 8500, "a parked route still holds its budget"
+    assert pool.usable_remaining() == 0, "but none of it can be spent"
+
+    # A pool of one keeps reporting that one route's own numbers.
+    single = ProxyPool([], use_direct=True)
+    single.routes["direct"].limit = 500
+    single.routes["direct"].remaining = 424
+    assert single.total_remaining() == 424 and single.total_limit() == 500

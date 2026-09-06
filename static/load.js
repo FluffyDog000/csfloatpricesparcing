@@ -70,11 +70,18 @@ function quotaTile(d) {
   if (d.quota_limit == null && d.quota_remaining == null) {
     return tile("квота CSFloat", "—", "пока не видели заголовков лимита");
   }
-  const left = d.quota_remaining;
+  // What can be spent now, not what the routes nominally hold: a parked route
+  // keeps its budget, so the total reads as "plenty left" while nothing moves.
+  const usable = d.quota_usable;
+  const left = usable != null && d.routes_total > 1 ? usable : d.quota_remaining;
   const lim = d.quota_limit;
   const pct = lim ? left / lim : null;
   const cls = pct == null ? "" : pct <= 0.05 ? "bad" : pct <= 0.25 ? "warn" : "good";
   let sub = lim ? `из ${lim} на окно` : "";
+  if (usable != null && d.quota_remaining != null && usable < d.quota_remaining) {
+    sub = `доступно сейчас · ${d.quota_remaining} числится за маршрутами` +
+          (d.routes_usable === 0 ? ", но все они в карантине" : "");
+  }
   if (d.quota_reset) {
     const resetMs = d.quota_reset * 1000;
     const mins = Math.max(0, Math.round((resetMs - Date.now()) / 60000));

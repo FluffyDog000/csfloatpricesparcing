@@ -251,6 +251,30 @@ class ProxyPool:
         known = [n for n in known if n is not None]
         return sum(known) if known else None
 
+    def total_limit(self) -> int | None:
+        """Sum of the routes' quota ceilings, to pair with total_remaining.
+
+        Reporting a summed remaining against a single IP's limit produced
+        nonsense on the dashboard — "8500 из 500 на окно"."""
+        known = []
+        for r in self.routes.values():
+            value = r.window_limit if r.rotating else r.limit
+            if value is not None:
+                known.append(value)
+        return sum(known) if known else None
+
+    def usable_remaining(self) -> int:
+        """Quota that can actually be spent right now — parked routes hold
+        budget nobody can use, and summing it reads as "plenty left"."""
+        now = time.monotonic()
+        total = 0
+        for r in self.routes.values():
+            if not r.available(self.reserve, now):
+                continue
+            left = r.effective_remaining()
+            total += left if left is not None else 0
+        return total
+
     def earliest_reset(self) -> int | None:
         resets = [r.effective_reset() for r in self.routes.values()]
         resets = [n for n in resets if n]

@@ -897,6 +897,7 @@ def api_load():
             "account_ip_block_at": db.get_setting("account_ip_block_at") or None,
             "quota_limit": _num_setting(db, "rl_limit"),
             "quota_remaining": _num_setting(db, "rl_remaining"),
+            "quota_usable": _num_setting(db, "rl_usable"),
             "quota_reset": _num_setting(db, "rl_reset"),
             "quota_factor": float(db.get_setting("quota_factor") or 1.0),
             "adaptive_enabled": adaptive_on,

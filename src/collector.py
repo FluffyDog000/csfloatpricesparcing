@@ -552,8 +552,14 @@ class Collector:
                 self.db.set_setting("account_ip_block_at", blocked)
             total = pool.total_remaining()
             if total is not None and len(pool.routes) > 1:
-                # With several routes the usable budget is their sum.
+                # With several routes the budget is their sum — and the ceiling
+                # has to be summed too, or the dashboard reports a remainder
+                # larger than the limit it is measured against.
                 self.db.set_setting("rl_remaining", str(total))
+                limit = pool.total_limit()
+                if limit is not None:
+                    self.db.set_setting("rl_limit", str(limit))
+                self.db.set_setting("rl_usable", str(pool.usable_remaining()))
                 reset = pool.earliest_reset()
                 if reset:
                     self.db.set_setting("rl_reset", str(reset))
