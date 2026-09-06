@@ -495,6 +495,22 @@ class Collector:
             self.restore_account_block()
         return changed
 
+    def apply_quarantine_clear(self) -> int:
+        """Honour a "lift the quarantine" request made from the dashboard.
+
+        The park lives in the collector's memory, so the web process can only
+        ask; this applies it and drops the marker that would otherwise re-arm
+        the quarantine on the next restart or proxy edit."""
+        if not self.db.get_setting("quarantine_clear_requested"):
+            return 0
+        lifted = self.client.pool.unpark_rotating()
+        self.db.set_setting("account_ip_block_at", "")
+        self.db.set_setting("quarantine_clear_requested", "")
+        self.client.account_ip_block_at = None
+        log.warning("Quarantine cleared from the dashboard; %d rotating route(s) "
+                    "back in rotation", lifted)
+        return lifted
+
     def restore_account_block(self) -> float:
         """Re-arm the rotating-route quarantine after a restart.
 

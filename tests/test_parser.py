@@ -1516,3 +1516,57 @@ def test_pause_reflects_parked_routes_not_just_the_429_timer():
 
     db.set_setting("proxy_state", "[]")
     db.close()
+
+
+def test_quarantine_can_be_lifted_from_the_dashboard():
+    """The park is the bot's own caution, not a block by CSFloat — the routes
+    themselves were never refused. Swapping providers is a legitimate reason to
+    overrule it, so there has to be a way that isn't editing the database."""
+    import os, tempfile, logging, time
+    from datetime import datetime, timezone
+    logging.disable(logging.WARNING)
+    import webapp
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    db = webapp.Database(webapp.config.db_path)
+    db.set_setting("proxies", "\n".join(
+        f"a:p:gate:{10025 + i} #rotating" for i in range(12)))
+    db.set_setting("use_direct", "0")
+    client = webapp.app.test_client()
+
+    cfg = load_config()
+    cfg.db_path = webapp.config.db_path
+    col = Collector(cfg, Database(cfg.db_path), CSFloatClient(cfg.http, cfg.polling))
+    col.sync_proxies()
+
+    def free():
+        now = time.monotonic()
+        return sum(1 for r in col.client.pool.routes.values()
+                   if r.available(15, now))
+
+    db.set_setting("account_ip_block_at", datetime.now(timezone.utc).isoformat())
+    col.client.pool.park_rotating(6 * 3600)
+    assert free() == 0
+
+    # The web can only ask; the collector owns the pool.
+    assert client.post("/api/load/quarantine", json={}).status_code == 200
+    assert db.get_setting("quarantine_clear_requested")
+    assert col.apply_quarantine_clear() == 12
+    assert free() == 12
+
+    # The marker is gone, so a restart or proxy edit will not re-arm it.
+    assert not db.get_setting("account_ip_block_at")
+    col.sync_proxies()
+    assert col.restore_account_block() == 0.0
+    assert free() == 12, "a lifted quarantine must stay lifted"
+
+    # Asking again when there is nothing to lift is a no-op, not an error.
+    body = client.post("/api/load/quarantine", json={}).get_json()
+    assert body["ok"] and "нет" in body["note"]
+
+    db.set_setting("proxies", "")
+    db.set_setting("use_direct", "1")
+    db.close()

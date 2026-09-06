@@ -365,6 +365,35 @@ function renderProxies(d) {
   } else {
     warn.hidden = true;
   }
+  // The quarantine is our own caution, not a block by CSFloat, so offer a way
+  // out — with the consequence stated rather than buried.
+  const row = document.getElementById("quarantine-row");
+  if (row) {
+    row.hidden = !d.account_ip_block_at;
+    const btn = document.getElementById("clear-quarantine");
+    if (btn) btn.textContent = d.quarantine_clearing
+      ? "снимаю…" : "Снять карантин сейчас";
+  }
+}
+
+const quarantineBtn = document.getElementById("clear-quarantine");
+if (quarantineBtn) {
+  quarantineBtn.addEventListener("click", async () => {
+    if (!confirm(
+      "Снять карантин с ротационных маршрутов?\n\n" +
+      "Сами прокси никто не блокировал — паузу поставил бот после жалобы " +
+      "CSFloat на то, что с аккаунта идут запросы со слишком многих IP.\n\n" +
+      "Если сразу выйти на все маршруты, жалоба, скорее всего, повторится, " +
+      "и следующее ограничение может быть жёстче. Безопаснее сначала " +
+      "сократить список до 5–6 сессий.")) return;
+    try {
+      const r = await postJSON("/api/load/quarantine", {}, token());
+      proxyMsg(r.note);
+      refresh();
+    } catch (e) {
+      proxyMsg("Ошибка: " + e.message, true);
+    }
+  });
 }
 
 const proxiesBox = document.getElementById("proxies-text");

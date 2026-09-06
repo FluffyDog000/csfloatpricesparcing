@@ -904,6 +904,7 @@ def api_load():
             "rotating_daily_limit": int(db.get_setting("rotating_daily_limit")
                                         or ROTATING_DEFAULT_LIMIT),
             "account_ip_block_at": db.get_setting("account_ip_block_at") or None,
+            "quarantine_clearing": bool(db.get_setting("quarantine_clear_requested")),
             "quota_limit": _num_setting(db, "rl_limit"),
             "quota_remaining": _num_setting(db, "rl_remaining"),
             "quota_usable": _num_setting(db, "rl_usable"),
@@ -1017,6 +1018,26 @@ def api_set_proxies():
     log.info("Proxy list updated via web: %d proxy/proxies, direct=%s",
              count, db.get_setting("use_direct"))
     return jsonify({"ok": True, "count": count})
+
+
+@app.route("/api/load/quarantine", methods=["POST"])
+def api_clear_quarantine():
+    """Lift the account-IP quarantine early.
+
+    The park is the bot's own caution, not a block by CSFloat, so the operator
+    can overrule it — the routes themselves were never refused. Applied by the
+    collector, which owns the pool."""
+    _require_admin()
+    db = get_db()
+    if not db.get_setting("account_ip_block_at"):
+        return jsonify({"ok": True, "note": "Карантина сейчас нет."})
+    db.set_setting("quarantine_clear_requested", utcnow_iso())
+    log.warning("Quarantine clear requested from the dashboard")
+    return jsonify({
+        "ok": True,
+        "note": "Карантин снимется в течение ~30 секунд. Следи за «429 за час» — "
+                "если жалоба повторится, маршруты снова встанут на 6 часов.",
+    })
 
 
 @app.route("/api/load/settings", methods=["POST"])

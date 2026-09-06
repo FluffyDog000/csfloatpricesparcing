@@ -118,6 +118,7 @@ def run_forever(collector: Collector) -> None:
             # successful poll deadlocks: a large multiplier is exactly what
             # makes successful polls rare.
             collector.maybe_speed_up()
+            collector.apply_quarantine_clear()   # operator lifted it in the UI
             collector.sync_proxies()          # proxies edited in the dashboard
             collector.refresh_cny_rate()      # display-only, twice a day at most
             # Keep the dashboard honest about the live pool even during a long

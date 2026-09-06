@@ -240,6 +240,21 @@ class ProxyPool:
                       "rotating route(s) for %.1f h", parked, seconds / 3600.0)
         return parked
 
+    def unpark_rotating(self) -> int:
+        """Lift the account-IP quarantine early, at the operator's decision.
+
+        Only clears the park this pool applied — a route in a cooldown from its
+        own 429, or with its quota spent, stays unavailable on its own terms."""
+        lifted = 0
+        for r in self.routes.values():
+            if r.rotating and r.parked_until > time.monotonic():
+                r.parked_until = 0.0
+                lifted += 1
+        if lifted:
+            log.warning("Account-IP quarantine lifted manually for %d route(s)",
+                        lifted)
+        return lifted
+
     def has_rotating(self) -> bool:
         return any(r.rotating for r in self.routes.values())
 
