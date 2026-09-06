@@ -939,10 +939,11 @@ def test_account_quarantine_survives_a_restart():
     assert free(col) == 0
 
     fresh = restarted()
-    assert free(fresh) == 5, "a restart starts with an unparked pool"
+    # sync_proxies re-arms it as the pool is built; calling it explicitly at
+    # startup is idempotent and reports how much of the window is left.
     remaining = fresh.restore_account_block()
     assert 3.5 * 3600 < remaining < 4.5 * 3600, "only the unserved time is re-armed"
-    assert free(fresh) == 0, "the quarantine must be back in force"
+    assert free(fresh) == 0, "the quarantine must survive the restart"
 
     # Once the window has passed it must not be re-applied forever.
     db.set_setting("account_ip_block_at",
@@ -1408,4 +1409,49 @@ def test_a_queue_waiting_on_the_quota_says_so():
     assert "квота" in note and "429" in note
 
     db.set_setting("rl_remaining", ""), db.set_setting("cooldown_until", "")
+    db.close()
+
+
+def test_quarantine_covers_proxies_added_while_it_runs():
+    """Editing the proxy list during a quarantine silently lifted it: replace()
+    builds fresh route state, so newly pasted sessions started unparked and
+    went straight back to the behaviour CSFloat had just complained about."""
+    import os, tempfile, logging, time
+    from datetime import datetime, timezone
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    os.environ.pop("CSFLOAT_PROXIES", None)
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    db.set_setting("proxies", "\n".join(
+        f"a:p:old.gate.com:{1000 + i} #rotating" for i in range(3)))
+    db.set_setting("use_direct", "1")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    col.sync_proxies()
+
+    def free_rotating():
+        now = time.monotonic()
+        return sum(1 for r in col.client.pool.routes.values()
+                   if r.rotating and r.available(15, now))
+
+    assert free_rotating() == 3
+
+    db.set_setting("account_ip_block_at", datetime.now(timezone.utc).isoformat())
+    col.client.pool.park_rotating(6 * 3600)
+    assert free_rotating() == 0
+
+    # The user pastes a fresh batch from another provider mid-quarantine.
+    db.set_setting("proxies", "\n".join(
+        f"api:k:gate.node-proxy.com:{10020 + i} #rotating" for i in range(17)))
+    assert col.sync_proxies() is True
+    assert free_rotating() == 0, "new sessions must inherit the quarantine"
+
+    # The server's own IP is unaffected — collection continues on it.
+    assert col.client.pool.pick().key == "direct"
     db.close()

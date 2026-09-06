@@ -488,6 +488,11 @@ class Collector:
                                            rotating_limit=self.rotating_limit())
         if changed:
             self.restore_rotating_usage()
+            # A quarantine in force has to cover routes added while it runs.
+            # Without this, adding sessions during one silently lifted it: the
+            # new routes started clean and went straight back to the behaviour
+            # CSFloat had just complained about.
+            self.restore_account_block()
         return changed
 
     def restore_account_block(self) -> float:
