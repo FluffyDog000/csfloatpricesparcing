@@ -1341,3 +1341,32 @@ def test_a_stale_order_error_cannot_pass_for_a_fresh_one():
     body = client.get(f"/api/orders?item={name}").get_json()
     assert not body["error"] and not body["error_at"]
     db.close()
+
+
+def test_a_queued_order_request_is_visible():
+    """A request the collector never picks up produced no orders, no error and
+    no explanation — identical to never having asked. The queue itself has to
+    be visible, or a stopped collector is silent."""
+    import logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    name = f"Queue test {uuid.uuid4().hex[:6]}"
+    item_id = db.add_item(name)
+    client = webapp.app.test_client()
+
+    assert client.get(f"/api/orders?item={name}").get_json()["queued_at"] is None
+
+    client.post("/api/items/orders", json={"market_hash_name": name})
+    body = client.get(f"/api/orders?item={name}").get_json()
+    assert body["queued_at"], "a pending request must be reported"
+    assert not body["error"], "queued is not an error state"
+
+    # Once the collector has done the work the queue clears.
+    db.clear_order_request(item_id)
+    db.replace_buy_orders(item_id, [{"price": 303.0, "qty": 1}])
+    body = client.get(f"/api/orders?item={name}").get_json()
+    assert body["queued_at"] is None and len(body["orders"]) == 1
+    db.close()

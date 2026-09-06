@@ -379,6 +379,20 @@ async function loadOrders() {
   const hint = document.getElementById("orders-hint");
   try {
     const d = await getJSON("/api/orders?item=" + encodeURIComponent(CFG.item));
+    // Still queued: say so, and after a couple of minutes say it is stuck —
+    // the collector picks these up every five seconds when it is running.
+    if (d.queued_at) {
+      const waited = (Date.now() - new Date(d.queued_at).getTime()) / 1000;
+      hint.textContent = waited > 120
+        ? `⚠ в очереди с ${timeFmt(d.queued_at)} и не выполняется — проверь, ` +
+          "запущен ли сборщик (systemctl status csfloat-collector)"
+        : `в очереди с ${timeFmt(d.queued_at)}, обхожу лоты…`;
+      if (!d.orders.length) {
+        body.innerHTML = '<tr><td colspan="3" class="muted">ожидание сборщика…</td></tr>';
+        document.getElementById("orders-meta").textContent = "";
+        return;
+      }
+    }
     if (!d.orders.length) {
       body.innerHTML = '<tr><td colspan="3" class="muted">стакан ещё не загружен</td></tr>';
       hint.textContent = d.error

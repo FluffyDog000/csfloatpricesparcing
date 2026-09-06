@@ -601,6 +601,12 @@ def api_orders():
     if item_id is None:
         abort(404, description="Предмет не найден.")
     orders = db.buy_orders(item_id)
+    # A queued request that never runs used to look identical to "nothing was
+    # ever asked for": no orders, no error, no explanation. Surfacing the queue
+    # makes a collector that is down or stuck visible instead of silent.
+    queued = db.conn.execute(
+        "SELECT orders_requested_at FROM items WHERE id = ?", (item_id,)
+    ).fetchone()["orders_requested_at"]
     # The sweep summary belongs to whichever item was swept last; only show it
     # when that is this item, or the panel would report someone else's numbers.
     summary = {}
@@ -615,6 +621,7 @@ def api_orders():
         "fetched_at": orders[0]["fetched_at"] if orders else None,
         "error": db.get_setting("orders_error") or "",
         "error_at": db.get_setting("orders_error_at") or None,
+        "queued_at": queued,
         "bands": summary.get("bands"),
         "requests": summary.get("requests"),
     })
