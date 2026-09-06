@@ -850,6 +850,15 @@ def api_load():
     has_direct = any(r.get("direct") for r in routes)
     all_parked = bool(routes) and not usable
 
+    # With every route parked the 429 cooldown may well have expired, yet
+    # nothing can be sent until the first route comes back. Reporting "пауза:
+    # нет" next to a banner saying collection has stopped is not a pause the
+    # user can act on — the real wait is whichever route frees up first.
+    if all_parked:
+        waits = [max(r.get("parked_sec") or 0, r.get("cooldown_sec") or 0)
+                 for r in routes]
+        cooldown_left = max(cooldown_left, min(waits) if waits else 0)
+
     # One-line health verdict for the dashboard.
     if stats_hour["auth_error"]:
         state, state_text = "auth", "Ошибка авторизации — обнови cookie в .env"

@@ -1481,3 +1481,38 @@ def test_quota_totals_distinguish_held_from_spendable():
     single.routes["direct"].limit = 500
     single.routes["direct"].remaining = 424
     assert single.total_remaining() == 424 and single.total_limit() == 500
+
+
+def test_pause_reflects_parked_routes_not_just_the_429_timer():
+    """The 429 cooldown expires while quarantined routes stay parked for
+    hours, so the tile read "пауза: нет" beside a banner saying collection had
+    stopped. The pause the user cares about is when anything can be sent."""
+    import json, logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    db.add_item(f"Pause test {uuid.uuid4().hex[:6]}")
+    client = webapp.app.test_client()
+    db.set_setting("cooldown_until", "")          # the 429 timer has run out
+
+    def routes(parked_sec, available):
+        return json.dumps([
+            {"key": f"http://gate:{10025 + i}", "direct": False, "rotating": True,
+             "available": available, "parked_sec": parked_sec, "cooldown_sec": 0}
+            for i in range(12)])
+
+    db.set_setting("proxy_state", routes(20500, False))
+    body = client.get("/api/load").get_json()
+    assert body["state"] == "blocked"
+    assert body["cooldown_remaining_sec"] > 20000, \
+        "the wait must come from the parked routes"
+
+    # One usable route and the pause is over, whatever the routes hold.
+    db.set_setting("proxy_state", routes(0, True))
+    body = client.get("/api/load").get_json()
+    assert body["cooldown_remaining_sec"] == 0 and body["state"] != "blocked"
+
+    db.set_setting("proxy_state", "[]")
+    db.close()
