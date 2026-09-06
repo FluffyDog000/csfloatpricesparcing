@@ -576,6 +576,10 @@ def api_request_orders():
     db = get_db()
     if not db.request_orders(name):
         abort(404, description="Предмет не найден.")
+    # Clear the previous failure: leaving it visible while the new attempt is
+    # queued makes an old error look like the new one's result.
+    db.set_setting("orders_error", "")
+    db.set_setting("orders_error_at", "")
     waiting = []
     left = _cooldown_left(db)
     if left > 0:
@@ -610,6 +614,7 @@ def api_orders():
         "orders": orders,
         "fetched_at": orders[0]["fetched_at"] if orders else None,
         "error": db.get_setting("orders_error") or "",
+        "error_at": db.get_setting("orders_error_at") or None,
         "bands": summary.get("bands"),
         "requests": summary.get("requests"),
     })

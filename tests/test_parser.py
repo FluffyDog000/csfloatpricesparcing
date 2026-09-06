@@ -1313,3 +1313,31 @@ def test_side_requests_arm_the_same_cooldown_as_a_poll():
     except RateLimited:
         pass
     assert client.cooldown_remaining() > 0, "the cooldown must be armed"
+
+
+def test_a_stale_order_error_cannot_pass_for_a_fresh_one():
+    """The panel reads the last failure from settings, which persists until a
+    successful fetch — so an old 429 kept being shown as the new attempt's
+    result, and the same complaint came back twice."""
+    import logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    name = f"Stale test {uuid.uuid4().hex[:6]}"
+    db.add_item(name)
+    client = webapp.app.test_client()
+
+    db.set_setting("orders_error", f"{name}: старая ошибка")
+    db.set_setting("orders_error_at", "2026-09-05T10:00:00+00:00")
+    body = client.get(f"/api/orders?item={name}").get_json()
+    assert body["error_at"] == "2026-09-05T10:00:00+00:00", \
+        "an error must carry when it happened"
+
+    # Queueing a new attempt clears the old failure.
+    assert client.post("/api/items/orders",
+                       json={"market_hash_name": name}).status_code == 200
+    body = client.get(f"/api/orders?item={name}").get_json()
+    assert not body["error"] and not body["error_at"]
+    db.close()

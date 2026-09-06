@@ -381,7 +381,9 @@ async function loadOrders() {
     const d = await getJSON("/api/orders?item=" + encodeURIComponent(CFG.item));
     if (!d.orders.length) {
       body.innerHTML = '<tr><td colspan="3" class="muted">стакан ещё не загружен</td></tr>';
-      hint.textContent = d.error || "Нажми 📥 в заголовке, чтобы загрузить.";
+      hint.textContent = d.error
+        ? `⚠ ${d.error}` + (d.error_at ? ` (${timeFmt(d.error_at)})` : "")
+        : "Нажми 📥 в заголовке, чтобы загрузить.";
       document.getElementById("orders-meta").textContent = "";
       return;
     }
@@ -392,7 +394,9 @@ async function loadOrders() {
     const parts = [];
     if (d.fetched_at) parts.push(`обновлено ${timeFmt(d.fetched_at)}`);
     if (d.bands) parts.push(`просмотрено полос флота: ${d.bands} (${d.requests} запр.)`);
-    if (d.error) parts.push(`⚠ ${d.error}`);
+    if (d.error) {
+      parts.push(`⚠ ${d.error}` + (d.error_at ? ` (${timeFmt(d.error_at)})` : ""));
+    }
     hint.textContent = parts.join(" · ");
   } catch (e) {
     body.innerHTML = `<tr><td colspan="3" class="muted">Ошибка: ${esc(e.message)}</td></tr>`;

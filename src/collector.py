@@ -311,6 +311,14 @@ class Collector:
             self.db.set_listing_id(item_id, listing_id)
         return listing_id
 
+    def _note_orders_error(self, name: str, text: str) -> None:
+        """Record why an order fetch failed, with when.
+
+        Without a timestamp a stale message reads as a fresh one: the panel
+        kept showing an old 429 while the new attempt was still queued."""
+        self.db.set_setting("orders_error", f"{name}: {text}"[:200] if text else "")
+        self.db.set_setting("orders_error_at", utcnow_iso() if text else "")
+
     def sweep_buy_orders(self, name: str, item_id: int) -> dict:
         """Read the whole order book by walking the item's float range.
 
@@ -328,17 +336,17 @@ class Collector:
             result["error"] = "лимит CSFloat — попробуй позже"
             result["rate_limited"] = True
             log.warning("Order sweep for '%s' hit the rate limit: %s", name, exc)
-            self.db.set_setting("orders_error", f"{name}: {result['error']}")
+            self._note_orders_error(name, result["error"])
             return result
         except Exception as exc:  # noqa: BLE001
             result["error"] = f"список лотов: {exc}"[:200]
-            self.db.set_setting("orders_error", f"{name}: {result['error']}")
+            self._note_orders_error(name, result["error"])
             return result
 
         plan = plan_bands(extract_listings(payload))
         if not plan:
             result["error"] = "нет активных лотов"
-            self.db.set_setting("orders_error", f"{name}: нет активных лотов")
+            self._note_orders_error(name, "нет активных лотов")
             return result
 
         batches: list[list[dict]] = []
@@ -373,7 +381,7 @@ class Collector:
         self.db.replace_buy_orders(item_id, orders)
         # Keep one listing id for the cheap single-listing refresh.
         self.db.set_listing_id(item_id, plan[0]["id"])
-        self.db.set_setting("orders_error", result["error"] or "")
+        self._note_orders_error(name, result["error"] or "")
         result["orders"] = len(orders)
         self.db.set_setting("orders_summary", json.dumps(
             {"item": name, "at": utcnow_iso(), **result}, ensure_ascii=False))
@@ -389,7 +397,7 @@ class Collector:
             listing_id = self.resolve_listing_id(name, item_id, cached_listing)
             if not listing_id:
                 log.warning("No active listing for '%s' — no orders to read", name)
-                self.db.set_setting("orders_error", f"{name}: нет активных лотов")
+                self._note_orders_error(name, "нет активных лотов")
                 return None
 
             url = (f"{self.config.http.base_url}"
@@ -402,12 +410,12 @@ class Collector:
             # resolves a fresh one instead of failing forever.
             if cached_listing:
                 self.db.set_listing_id(item_id, None)
-            self.db.set_setting("orders_error", f"{name}: {exc}"[:200])
+            self._note_orders_error(name, str(exc))
             return None
 
         orders = parse_orders(payload)
         self.db.replace_buy_orders(item_id, orders)
-        self.db.set_setting("orders_error", "")
+        self._note_orders_error(name, "")
         log.info("'%s': %d buy order(s) stored", name, len(orders))
         return len(orders)
 
