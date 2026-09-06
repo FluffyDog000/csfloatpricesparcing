@@ -1135,3 +1135,105 @@ def test_order_fetch_uses_two_requests_then_one():
     assert col.fetch_buy_orders("Gloves", item_id, cached) == 1
     assert len(calls) == 1, "the cached listing id saves a request"
     db.close()
+
+
+def test_band_plan_covers_the_float_range_once_per_band():
+    """A listing shows only the orders matching its own float, so the book is
+    assembled from listings spread across the range — one per band is enough,
+    and bands with no listing must cost nothing."""
+    from src.orders import MAX_BANDS, extract_listings, plan_bands
+
+    listings = extract_listings({"data": [
+        {"id": "a", "item": {"float_value": 0.1557}},
+        {"id": "b", "item": {"float_value": 0.1502}},   # same band, lower float
+        {"id": "c", "item": {"float_value": 0.2701}},
+        {"id": "d", "item": {"float_value": 0.3616}},
+        {"id": "e"},                                     # float unknown
+    ]})
+    assert len(listings) == 5
+
+    plan = plan_bands(listings)
+    assert [p["id"] for p in plan] == ["b", "c", "d"], \
+        "one listing per band, the lowest float in each"
+    assert len(plan) == 3, "empty bands must not be queried"
+
+    # An item whose listings carry no float still gets one attempt.
+    assert len(plan_bands([{"id": "x", "float": None}])) == 1
+    assert plan_bands([]) == []
+
+    # A dense book cannot turn into an unbounded number of requests.
+    dense = [{"id": f"L{i}", "float": 0.15 + i * 0.01} for i in range(100)]
+    assert len(plan_bands(dense)) == MAX_BANDS
+
+
+def test_orders_seen_from_several_bands_are_merged_not_doubled():
+    """An unrestricted order appears on every listing swept, so the same bid
+    arrives many times; counting it once per band would inflate the book."""
+    from src.orders import merge_orders
+
+    unrestricted = {"price": 174.0, "qty": 2, "float_min": None,
+                    "float_max": None, "paint_seed": None}
+    scoped = {"price": 282.0, "qty": 1, "float_min": 0.15, "float_max": 0.157,
+              "paint_seed": None}
+    other = {"price": 160.0, "qty": 1, "float_min": None, "float_max": None,
+             "paint_seed": None}
+
+    merged = merge_orders([[unrestricted, scoped], [dict(unrestricted), other]])
+    assert [o["price"] for o in merged] == [282.0, 174.0, 160.0], "best bid first"
+    assert len(merged) == 3, "the repeated order must appear once"
+    assert next(o for o in merged if o["price"] == 174.0)["qty"] == 2, \
+        "quantity is the order's own, not a sum over bands"
+
+    # Same price, different float scope = genuinely different orders.
+    a = {"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.16,
+         "paint_seed": None}
+    b = {"price": 100.0, "qty": 1, "float_min": 0.20, "float_max": 0.25,
+         "paint_seed": None}
+    assert len(merge_orders([[a], [b]])) == 2
+
+
+def test_a_failed_band_keeps_the_bands_already_collected():
+    """Listings sell mid-sweep. Losing the whole book because one of eight
+    lookups 404s would make the feature useless on liquid items."""
+    import os, tempfile, logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.01}}
+                         for i in range(4)]}
+
+    def flaky(url):
+        if "/buy-orders" in url:
+            listing = url.split("/listings/")[1].split("/")[0]
+            if listing == "L1":
+                raise requests.HTTPError("404 Not Found")
+            return {"data": [{"price": 20000 + int(listing[1]) * 100, "qty": 1}]}
+        return listings
+
+    col.client.fetch_json = flaky
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert result["bands"] == 3, "the surviving bands still count"
+    assert result["orders"] == 3 and len(db.buy_orders(item_id)) == 3
+    assert "404" in (result["error"] or "")
+
+    # If the listings lookup itself fails there is nothing to sweep, and the
+    # previous snapshot must be left alone rather than wiped.
+    def dead(url):
+        raise requests.HTTPError("403 Forbidden")
+
+    col.client.fetch_json = dead
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert result["orders"] == 0 and result["requests"] == 0
+    assert len(db.buy_orders(item_id)) == 3, "an unreachable sweep keeps the old book"
+    db.close()

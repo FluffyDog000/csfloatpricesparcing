@@ -583,7 +583,7 @@ def api_request_orders():
     return jsonify({
         "ok": True, "waiting": waiting,
         "note": ("Стакан обновится, когда снимется пауза." if waiting
-                 else "Стакан обновится в ближайшие ~5 секунд."),
+                 else "Обхожу лоты по диапазонам флота — до минуты."),
     })
 
 
@@ -596,10 +596,21 @@ def api_orders():
     if item_id is None:
         abort(404, description="Предмет не найден.")
     orders = db.buy_orders(item_id)
+    # The sweep summary belongs to whichever item was swept last; only show it
+    # when that is this item, or the panel would report someone else's numbers.
+    summary = {}
+    try:
+        stored = json.loads(db.get_setting("orders_summary") or "{}")
+        if stored.get("item") == name:
+            summary = stored
+    except ValueError:
+        pass
     return jsonify({
         "orders": orders,
         "fetched_at": orders[0]["fetched_at"] if orders else None,
         "error": db.get_setting("orders_error") or "",
+        "bands": summary.get("bands"),
+        "requests": summary.get("requests"),
     })
 
 

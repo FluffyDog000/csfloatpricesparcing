@@ -13,6 +13,7 @@ Orders are stored as a snapshot per item, replaced on each fetch — this is a
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 log = logging.getLogger("csfloat.orders")
@@ -20,6 +21,17 @@ log = logging.getLogger("csfloat.orders")
 LISTINGS_PATH = "/api/v1/listings"
 ORDERS_PATH = "/api/v1/listings/{listing_id}/buy-orders"
 DEFAULT_LIMIT = 10
+
+# A listing's orders are the ones that match ITS float, so the book of an item
+# is only visible by asking several listings spread across the float range.
+# Bands are derived from the listings that actually exist rather than from a
+# fixed grid: an empty band would cost a request and return nothing.
+BAND_STEP = 0.01
+MAX_BANDS = 25              # ceiling on requests for one sweep
+LISTINGS_PAGE = 50          # listings to pull in the single lookup request
+
+LISTING_FLOAT_PATHS = ("item.float_value", "float_value", "item.float")
+LISTING_ID_PATHS = ("id", "listing_id")
 
 # Candidate paths per field: the endpoint is undocumented, so read defensively
 # rather than depend on one shape (same approach as the sales parser).
@@ -96,6 +108,86 @@ def parse_orders(payload: Any) -> list[dict]:
             "paint_seed": _to_int(first(record, *SEED_PATHS)),
         })
     out.sort(key=lambda r: r["price"], reverse=True)
+    return out
+
+
+def extract_listings(payload: Any) -> list[dict]:
+    """[{id, float}] from a /listings response, floats where known."""
+    rows = payload if isinstance(payload, list) else None
+    if rows is None and isinstance(payload, dict):
+        for key in ("data", "listings", "results"):
+            if isinstance(payload.get(key), list):
+                rows = payload[key]
+                break
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        listing_id = first(row, *LISTING_ID_PATHS)
+        if listing_id in (None, ""):
+            continue
+        out.append({"id": str(listing_id),
+                    "float": _to_float(first(row, *LISTING_FLOAT_PATHS))})
+    return out
+
+
+def plan_bands(listings: list[dict], step: float = BAND_STEP,
+               max_bands: int = MAX_BANDS) -> list[dict]:
+    """Pick one listing per float band — the sweep's request plan.
+
+    One listing per band is enough: every order whose range covers that band
+    shows up on any listing inside it. Listings with an unknown float still get
+    queried once, since they may be the only way into their part of the range.
+    """
+    by_band: dict[int, dict] = {}
+    unknown: list[dict] = []
+    for listing in listings:
+        value = listing.get("float")
+        if value is None:
+            unknown.append(listing)
+            continue
+        # Round before flooring: 0.17 is stored as 0.16999…, so a plain
+        # int(value / step) drops it into the band below and the listing is
+        # lost to whichever neighbour shares that band.
+        band = math.floor(round(value / step, 6))
+        # Keep the lowest float in each band: low-float orders are the narrow,
+        # high-value ones, so they are the ones worth not missing.
+        if band not in by_band or value < by_band[band]["float"]:
+            by_band[band] = listing
+
+    plan = [dict(listing, band=round(band * step, 6))
+            for band, listing in sorted(by_band.items())]
+    if not plan and unknown:
+        plan = [dict(unknown[0], band=None)]
+    return plan[:max_bands]
+
+
+def order_key(order: dict) -> tuple:
+    """Identity of an order for de-duplication across bands.
+
+    The same order surfaces on every listing its range covers, so a sweep sees
+    it many times. Without an id from the API, price plus filters identifies it:
+    two bids that agree on all of those are indistinguishable anyway."""
+    return (order.get("id") or "", order["price"], order.get("float_min"),
+            order.get("float_max"), order.get("paint_seed"))
+
+
+def merge_orders(batches: list[list[dict]]) -> list[dict]:
+    """Combine the per-band results into one book, best bid first."""
+    seen: dict[tuple, dict] = {}
+    for batch in batches:
+        for order in batch:
+            key = order_key(order)
+            existing = seen.get(key)
+            if existing is None:
+                seen[key] = dict(order)
+            else:
+                # Same order seen from another band; keep the larger quantity
+                # rather than adding, which would count it twice.
+                existing["qty"] = max(existing.get("qty") or 1,
+                                      order.get("qty") or 1)
+    out = list(seen.values())
+    out.sort(key=lambda o: o["price"], reverse=True)
     return out
 
 

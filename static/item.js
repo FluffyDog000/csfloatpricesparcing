@@ -389,7 +389,11 @@ async function loadOrders() {
       `<tr><td>${money(o.price)}</td><td class="num">${o.qty}</td>
        <td>${orderFilter(o)}</td></tr>`).join("");
     document.getElementById("orders-meta").textContent = `(${d.orders.length})`;
-    hint.textContent = d.fetched_at ? `обновлено ${timeFmt(d.fetched_at)}` : "";
+    const parts = [];
+    if (d.fetched_at) parts.push(`обновлено ${timeFmt(d.fetched_at)}`);
+    if (d.bands) parts.push(`просмотрено полос флота: ${d.bands} (${d.requests} запр.)`);
+    if (d.error) parts.push(`⚠ ${d.error}`);
+    hint.textContent = parts.join(" · ");
   } catch (e) {
     body.innerHTML = `<tr><td colspan="3" class="muted">Ошибка: ${esc(e.message)}</td></tr>`;
   }
@@ -408,8 +412,12 @@ if (ordersBtn) {
     try {
       const r = await postJSON("/api/items/orders", { market_hash_name: CFG.item }, token);
       hint.textContent = r.note;
-      // The collector picks it up within ~5s; look again once it has.
-      if (!(r.waiting || []).length) setTimeout(loadOrders, 8000);
+      // A sweep walks several listings with the usual spacing between
+      // requests, so it takes appreciably longer than a single fetch.
+      if (!(r.waiting || []).length) {
+        setTimeout(loadOrders, 12000);
+        setTimeout(loadOrders, 30000);
+      }
     } catch (e) {
       hint.textContent = "Ошибка: " + e.message;
     } finally {

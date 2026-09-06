@@ -18,8 +18,9 @@ from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
-from .orders import (DEFAULT_LIMIT, LISTINGS_PATH, ORDERS_PATH,
-                     extract_listing_id, parse_orders)
+from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
+                     ORDERS_PATH, extract_listing_id, extract_listings,
+                     merge_orders, parse_orders, plan_bands)
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
@@ -309,6 +310,57 @@ class Collector:
         if listing_id:
             self.db.set_listing_id(item_id, listing_id)
         return listing_id
+
+    def sweep_buy_orders(self, name: str, item_id: int) -> dict:
+        """Read the whole order book by walking the item's float range.
+
+        A listing only shows the orders that match its own float, so the book
+        is assembled from several listings spread across the range. Bands come
+        from the listings that exist, so an item with three lots costs four
+        requests rather than the twenty-four a fixed grid would."""
+        result = {"orders": 0, "bands": 0, "requests": 0, "error": None}
+        try:
+            url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
+                   f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
+            payload = self.client.fetch_json(url)
+            result["requests"] += 1
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = f"список лотов: {exc}"[:200]
+            self.db.set_setting("orders_error", f"{name}: {result['error']}")
+            return result
+
+        plan = plan_bands(extract_listings(payload))
+        if not plan:
+            result["error"] = "нет активных лотов"
+            self.db.set_setting("orders_error", f"{name}: нет активных лотов")
+            return result
+
+        batches: list[list[dict]] = []
+        for step in plan:
+            try:
+                url = (f"{self.config.http.base_url}"
+                       f"{ORDERS_PATH.format(listing_id=step['id'])}"
+                       f"?limit={DEFAULT_LIMIT}")
+                batches.append(parse_orders(self.client.fetch_json(url)))
+                result["requests"] += 1
+                result["bands"] += 1
+            except Exception as exc:  # noqa: BLE001
+                # One sold listing must not lose the bands already collected.
+                log.warning("Band %.2f of '%s' failed: %s", step.get("band") or -1,
+                            name, exc)
+                result["error"] = str(exc)[:120]
+
+        orders = merge_orders(batches)
+        self.db.replace_buy_orders(item_id, orders)
+        # Keep one listing id for the cheap single-listing refresh.
+        self.db.set_listing_id(item_id, plan[0]["id"])
+        self.db.set_setting("orders_error", result["error"] or "")
+        result["orders"] = len(orders)
+        self.db.set_setting("orders_summary", json.dumps(
+            {"item": name, "at": utcnow_iso(), **result}, ensure_ascii=False))
+        log.info("'%s': swept %d band(s) in %d request(s) -> %d order(s)",
+                 name, result["bands"], result["requests"], len(orders))
+        return result
 
     def fetch_buy_orders(self, name: str, item_id: int,
                          cached_listing: str | None = None) -> int | None:

@@ -172,8 +172,7 @@ def run_forever(collector: Collector) -> None:
             for row in collector.db.pending_order_requests():
                 collector.db.clear_order_request(int(row["id"]))
                 log.info("Buy orders requested for '%s'", row["market_hash_name"])
-                collector.fetch_buy_orders(row["market_hash_name"], int(row["id"]),
-                                           row.get("listing_id"))
+                collector.sweep_buy_orders(row["market_hash_name"], int(row["id"]))
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()
