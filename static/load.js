@@ -452,7 +452,12 @@ function renderUsage(d) {
              "столько спишет прокси с тарификацией по трафику");
 
   const parts = [`${d.active_items} активных предм.`];
-  if (d.quota_factor > 1.05) {
+  if (d.routes_total && !d.routes_usable) {
+    // The quota looks untouched because parked routes still report their
+    // budget — but none of it can be spent, so saying it is fine is a lie.
+    parts.push("⛔ сейчас нет доступных маршрутов — запросы не идут, " +
+               "цифры ниже это план, а не факт");
+  } else if (d.quota_factor > 1.05) {
     parts.push(`растянуто под квоту ×${d.quota_factor.toFixed(1)} — без неё было бы ` +
                `${Math.round(d.requests_per_day * d.quota_factor)} запр/сут`);
   } else {
