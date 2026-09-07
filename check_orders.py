@@ -74,6 +74,36 @@ def describe(payload: Any, limit_asked: int) -> None:
         print("Ответ короче limit — похоже, это все ордера этого лота.")
 
 
+def show_failure(resp) -> None:
+    """Print who actually refused.
+
+    A bare status cannot tell CSFloat rejecting a credential from Cloudflare
+    rejecting the exit IP, and those need opposite fixes — the body and a
+    couple of headers settle it."""
+    if resp is None:
+        print("   (ответ недоступен — запрос не дошёл до сервера)")
+        return
+    ctype = resp.headers.get("Content-Type", "—")
+    print(f"   статус       : {resp.status_code}")
+    print(f"   content-type : {ctype}")
+    for key in ("cf-ray", "cf-mitigated", "server", "x-ratelimit-remaining"):
+        if key in resp.headers:
+            print(f"   {key:<13}: {resp.headers[key]}")
+    try:
+        body = (resp.text or "").strip()[:300]
+    except Exception:  # noqa: BLE001
+        body = ""
+    print(f"   тело         : {body or '(пусто)'}")
+
+    html = body.lstrip().lower().startswith(("<!doctype", "<html"))
+    if html or "cf-mitigated" in resp.headers:
+        print("\n   ВЕРДИКТ: отказывает Cloudflare — выходной IP не проходит.")
+        print("   Лечится сменой прокси/IP, кука тут ни при чём.")
+    elif resp.status_code in (401, 403):
+        print("\n   ВЕРДИКТ: отказывает сам CSFloat — дело в учётных данных.")
+        print("   Проверь CSFLOAT_COOKIE в .env (нужна свежая сессия).")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Buy Orders одного лота CSFloat")
     ap.add_argument("listing_id", help="id лота из адреса csfloat.com/item/<id>")
@@ -93,11 +123,9 @@ def main() -> int:
     print(f"GET {url}")
     try:
         payload = client.fetch_json(url)
-    except requests.HTTPError as exc:
-        print(f"❌ {exc}")
-        return 1
     except Exception as exc:  # noqa: BLE001
         print(f"❌ {type(exc).__name__}: {exc}")
+        show_failure(getattr(exc, "response", None))
         return 1
 
     if args.raw:

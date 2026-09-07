@@ -1791,3 +1791,60 @@ def test_side_requests_report_an_auth_refusal_as_such():
         assert "401" in str(exc)
     except EdgeBlocked:
         assert False, "CSFloat's own refusal is not an exit-IP block"
+
+
+def test_failure_diagnosis_names_who_refused(capsys):
+    """403 alone cannot tell CSFloat rejecting a credential from Cloudflare
+    rejecting the exit IP, and the two need opposite fixes — a fresh cookie
+    versus a different proxy."""
+    import check_orders
+
+    class Resp:
+        def __init__(self, code, body, headers):
+            self.status_code, self._body, self.headers = code, body, headers
+
+        @property
+        def text(self):
+            return self._body
+
+    check_orders.show_failure(Resp(
+        403, "<!DOCTYPE html><html>Attention Required! | Cloudflare</html>",
+        {"Content-Type": "text/html", "cf-ray": "9abc", "server": "cloudflare"}))
+    out = capsys.readouterr().out
+    assert "Cloudflare" in out and "выходной IP" in out
+    assert "cf-ray" in out, "show the header that proves it"
+
+    check_orders.show_failure(Resp(
+        403, '{"error": "forbidden"}', {"Content-Type": "application/json"}))
+    out = capsys.readouterr().out
+    assert "CSFLOAT_COOKIE" in out
+    assert "Cloudflare" not in out, "a JSON refusal is not an edge block"
+
+    check_orders.show_failure(None)
+    assert "не дошёл" in capsys.readouterr().out
+
+
+def test_auth_and_edge_errors_carry_the_response():
+    """Diagnostics need the body, not just the status."""
+    import logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, AuthError, EdgeBlocked
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client._respect_spacing = lambda: None
+
+    client.session.get = lambda url, **kw: _StubResp(
+        403, '{"error": "forbidden"}', {"Content-Type": "application/json"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/x")
+    except AuthError as exc:
+        assert exc.response is not None and exc.response.status_code == 403
+
+    client.session.get = lambda url, **kw: _StubResp(
+        403, "<html>Just a moment</html>", {"Content-Type": "text/html"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/x")
+    except EdgeBlocked as exc:
+        assert exc.response is not None

@@ -31,7 +31,15 @@ COOLDOWN_MAX_SECONDS = 900.0
 
 
 class AuthError(Exception):
-    """Raised on 401/403 — the session cookie/token needs manual refresh."""
+    """Raised on 401/403 — the session cookie/token needs manual refresh.
+
+    Carries the response when there is one, so a diagnostic caller can show
+    who actually refused: the status alone does not distinguish CSFloat
+    rejecting a credential from an edge rejecting the IP."""
+
+    def __init__(self, message: str, response=None):
+        super().__init__(message)
+        self.response = response
 
 
 class RateLimited(Exception):
@@ -52,6 +60,10 @@ class EdgeBlocked(Exception):
 
     Distinct from AuthError on purpose: the cookie is fine, the IP is not, so
     the fix is a different proxy rather than a fresh session."""
+
+    def __init__(self, message: str, response=None):
+        super().__init__(message)
+        self.response = response
 
 
 class CSFloatClient:
@@ -278,7 +290,7 @@ class CSFloatClient:
         if self._edge_block(resp):
             self.pool.record_failure(route, "edge block on a side request")
             raise EdgeBlocked(
-                f"HTTP {resp.status_code}: Cloudflare screened the exit IP")
+                f"HTTP {resp.status_code}: Cloudflare screened the exit IP", resp)
 
         if resp.status_code in (401, 403):
             # CSFloat itself refusing the credentials, not the edge refusing
@@ -286,7 +298,7 @@ class CSFloatClient:
             # says nothing about which credential is at fault.
             raise AuthError(
                 f"HTTP {resp.status_code} — CSFloat не принял учётные данные "
-                f"для {url.split('?')[0]}")
+                f"для {url.split('?')[0]}", resp)
 
         resp.raise_for_status()
         self.pool.record_success(route)
