@@ -1597,7 +1597,9 @@ def test_an_edge_403_is_told_apart_from_a_real_one_on_side_requests():
     except EdgeBlocked:
         pass
 
-    # CSFloat's own 403 (JSON) is an access problem, not a proxy problem.
+    # CSFloat's own 403 (JSON) is an access problem, not a proxy problem, and
+    # is reported as one rather than as a bare HTTP failure.
+    from src.csfloat_client import AuthError
     client.session.get = lambda url, **kw: _StubResp(
         403, '{"error": "forbidden"}', {"Content-Type": "application/json"})
     try:
@@ -1605,7 +1607,7 @@ def test_an_edge_403_is_told_apart_from_a_real_one_on_side_requests():
         assert False
     except EdgeBlocked:
         assert False, "an API refusal must not be blamed on the exit IP"
-    except requests.HTTPError:
+    except AuthError:
         pass
 
 
@@ -1731,3 +1733,61 @@ def test_queue_reason_reads_the_routes_the_collector_gates_on():
 
     db.set_setting("proxy_state", "[]")
     db.close()
+
+
+def test_an_auth_refusal_stops_the_sweep_and_names_the_credential():
+    """Credentials are not per-band, so a 401 on the first listing means every
+    remaining one answers the same — walking all eight burns requests to learn
+    nothing. And "401 Client Error" does not say which credential to fix."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient, AuthError
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    calls = []
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.01}}
+                         for i in range(8)]}
+
+    def refused(url, headers=None):
+        calls.append(url)
+        if "/buy-orders" in url:
+            raise AuthError("HTTP 401 — CSFloat не принял учётные данные")
+        return listings
+
+    col.client.fetch_json = refused
+    result = col.sweep_buy_orders("Gloves", item_id)
+
+    assert len(calls) == 2, "stop after the first refusal, not after all eight"
+    assert "CSFLOAT_COOKIE" in result["error"], "name the credential to fix"
+
+
+def test_side_requests_report_an_auth_refusal_as_such():
+    """fetch_json let 401/403 fall through to raise_for_status, so CSFloat
+    refusing the credentials looked like any other HTTP failure."""
+    import logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, AuthError, EdgeBlocked
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client._respect_spacing = lambda: None
+
+    client.session.get = lambda url, **kw: _StubResp(
+        401, '{"error": "unauthorized"}', {"Content-Type": "application/json"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/listings/1/buy-orders")
+        assert False, "a refusal must be raised as an auth problem"
+    except AuthError as exc:
+        assert "401" in str(exc)
+    except EdgeBlocked:
+        assert False, "CSFloat's own refusal is not an exit-IP block"

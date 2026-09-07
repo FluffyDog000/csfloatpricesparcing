@@ -377,6 +377,14 @@ class Collector:
                 batches.append(parse_orders(self.client.fetch_json(url)))
                 result["requests"] += 1
                 result["bands"] += 1
+            except AuthError as exc:
+                # Credentials are not per-band; every remaining one answers the
+                # same. Stop and say which credential to fix.
+                log.warning("Order sweep for '%s' refused: %s", name, exc)
+                result["error"] = (
+                    "CSFloat не принял доступ к ордерам — обнови CSFLOAT_COOKIE "
+                    "в .env (кука истекает; она нужна именно для ордеров)")
+                break
             except RateLimited as exc:
                 # Every remaining band would hit the same limit; stopping keeps
                 # what was collected and stops digging the hole deeper.

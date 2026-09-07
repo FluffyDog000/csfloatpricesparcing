@@ -280,6 +280,14 @@ class CSFloatClient:
             raise EdgeBlocked(
                 f"HTTP {resp.status_code}: Cloudflare screened the exit IP")
 
+        if resp.status_code in (401, 403):
+            # CSFloat itself refusing the credentials, not the edge refusing
+            # the IP: retrying elsewhere cannot help, and the raw HTTPError
+            # says nothing about which credential is at fault.
+            raise AuthError(
+                f"HTTP {resp.status_code} — CSFloat не принял учётные данные "
+                f"для {url.split('?')[0]}")
+
         resp.raise_for_status()
         self.pool.record_success(route)
         return resp.json()
