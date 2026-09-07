@@ -572,8 +572,25 @@ def _why_waiting(db) -> list[str]:
 
     The collector holds manual requests behind the same quota and cooldown
     gates as scheduled polls, so "queued" can mean "waiting hours". Without a
-    reason the panel looks like a broken collector."""
+    reason the panel looks like a broken collector.
+
+    The collector gates on the live pool, not on the stored 429 timer, so the
+    parked-route case has to be read from the routes too — otherwise a request
+    blocked for hours reports no reason at all and reads as "просто долго"."""
     reasons = []
+    try:
+        routes = json.loads(db.get_setting("proxy_state") or "[]")
+    except ValueError:
+        routes = []
+    if routes and not any(r.get("available") for r in routes):
+        waits = [max(r.get("parked_sec") or 0, r.get("cooldown_sec") or 0)
+                 for r in routes]
+        soonest = min(waits) if waits else 0
+        has_direct = any(r.get("direct") for r in routes)
+        reasons.append(
+            (f"нет доступных маршрутов, ближайший через {soonest / 60:.0f} мин"
+             if soonest else "нет доступных маршрутов")
+            + ("" if has_direct else " (свой IP сервера выключен)"))
     left = _cooldown_left(db)
     if left > 0:
         reasons.append(f"пауза после 429, осталось {left / 60:.0f} мин")

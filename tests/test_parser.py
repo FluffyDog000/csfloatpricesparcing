@@ -1692,3 +1692,42 @@ def test_no_usable_route_is_not_reported_as_a_csfloat_limit():
     # NoRouteAvailable still backs callers off like any rate limit.
     assert issubclass(NoRouteAvailable, RateLimited)
     db.close()
+
+
+def test_queue_reason_reads_the_routes_the_collector_gates_on():
+    """The collector gates on the live pool; the panel read only the stored 429
+    timer. With every route parked and that timer expired, a request blocked
+    for hours reported no reason and read as "просто долго парсит"."""
+    import json, logging
+    import webapp
+    logging.disable(logging.WARNING)
+
+    db = webapp.Database(webapp.config.db_path)
+    import uuid
+    name = f"Reason test {uuid.uuid4().hex[:6]}"
+    db.add_item(name)
+    client = webapp.app.test_client()
+    client.post("/api/items/orders", json={"market_hash_name": name})
+    db.set_setting("cooldown_until", "")     # the 429 timer says nothing
+    db.set_setting("rl_remaining", "")
+
+    def routes(available, direct):
+        out = [{"key": "direct", "direct": True, "rotating": False,
+                "available": available, "parked_sec": 0, "cooldown_sec": 0}] \
+            if direct else []
+        out += [{"key": f"g{i}", "direct": False, "rotating": True,
+                 "available": available, "parked_sec": 0 if available else 20500,
+                 "cooldown_sec": 0} for i in range(12)]
+        return json.dumps(out)
+
+    db.set_setting("proxy_state", routes(True, True))
+    assert client.get(f"/api/orders?item={name}").get_json()["waiting"] == []
+
+    db.set_setting("proxy_state", routes(False, False))
+    waiting = client.get(f"/api/orders?item={name}").get_json()["waiting"]
+    assert waiting and "нет доступных маршрутов" in waiting[0]
+    assert "свой IP" in waiting[0], "name the switch that fixes it"
+    assert "мин" in waiting[0], "say when a route comes back"
+
+    db.set_setting("proxy_state", "[]")
+    db.close()
