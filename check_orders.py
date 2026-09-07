@@ -117,6 +117,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=10,
                     help="сколько запросить (по умолчанию 10, как в интерфейсе)")
     ap.add_argument("--raw", action="store_true", help="показать весь JSON")
+    ap.add_argument("--proxy", metavar="СТРОКА",
+                    help="проверить через конкретный прокси, минуя пул "
+                         "(так можно тестировать маршрут в карантине)")
     args = ap.parse_args()
 
     config = load_config()
@@ -128,12 +131,38 @@ def main() -> int:
     url = (config.http.base_url + ORDERS_PATH.format(listing_id=args.listing_id)
            + f"?limit={args.limit}")
     print(f"GET {url}")
-    try:
-        payload = client.fetch_json(url)
-    except Exception as exc:  # noqa: BLE001
-        print(f"❌ {type(exc).__name__}: {exc}")
-        show_failure(getattr(exc, "response", None))
-        return 1
+
+    if args.proxy:
+        # Straight through the named proxy: the pool would refuse a quarantined
+        # route, and this is exactly the route we want to test.
+        from src.proxies import mask_proxy, split_proxy_flags
+        proxy_url, _ = split_proxy_flags(args.proxy)
+        print(f"через {mask_proxy(proxy_url)}")
+        try:
+            resp = client.session.get(
+                url, timeout=config.http.timeout_seconds,
+                proxies={"http": proxy_url, "https": proxy_url})
+        except requests.RequestException as exc:
+            print(f"❌ прокси не отвечает: {exc}")
+            return 1
+        if resp.status_code != 200:
+            print(f"❌ HTTP {resp.status_code}")
+            show_failure(resp)
+            return 1
+        try:
+            payload = resp.json()
+        except ValueError:
+            print("❌ ответ не JSON")
+            show_failure(resp)
+            return 1
+        print("✅ этот прокси ордера отдаёт")
+    else:
+        try:
+            payload = client.fetch_json(url)
+        except Exception as exc:  # noqa: BLE001
+            print(f"❌ {type(exc).__name__}: {exc}")
+            show_failure(getattr(exc, "response", None))
+            return 1
 
     if args.raw:
         print(json.dumps(payload, ensure_ascii=False, indent=2)[:6000])
