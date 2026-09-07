@@ -52,7 +52,7 @@ from src.report import (
 )
 
 config = load_config()
-setup_logging(config.log_path)
+setup_logging(config.web_log_path)
 log = logging.getLogger("csfloat.web")
 
 app = Flask(__name__)

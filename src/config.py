@@ -124,6 +124,7 @@ class AppConfig:
     telegram: TelegramConfig
     db_path: Path
     log_path: Path
+    web_log_path: Path
     raw_dump_dir: Path
     backups_dir: Path
     _raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -208,6 +209,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         ),
         db_path=_abs(_env("CSFLOAT_DB_PATH", "data/csfloat_sales.db")),
         log_path=_abs(_env("CSFLOAT_LOG_PATH", "logs/collector.log")),
+        # Separate file for the dashboard: its request lines drown the
+        # collector's in a shared log, which is where you look to see what the
+        # bot is actually doing.
+        web_log_path=_abs(_env("CSFLOAT_WEB_LOG_PATH", "logs/web.log")),
         raw_dump_dir=_abs(_env("CSFLOAT_RAW_DUMP_DIR", "raw_dumps")),
         backups_dir=_abs(_env("CSFLOAT_BACKUPS_DIR", "data/backups")),
         _raw=cfg,
