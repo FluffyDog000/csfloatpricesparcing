@@ -55,6 +55,18 @@ class NoRouteAvailable(RateLimited):
     CSFloat" sends the user to wait on a limit that was never hit."""
 
 
+class VpnBlocked(Exception):
+    """CSFloat refuses to serve this endpoint from a VPN or datacenter IP.
+
+    Neither a credential problem nor a rate limit: buy orders are only visible
+    from a residential-looking address, so no cookie and no waiting will help —
+    only a different kind of IP."""
+
+    def __init__(self, message: str, response=None):
+        super().__init__(message)
+        self.response = response
+
+
 class EdgeBlocked(Exception):
     """Raised when Cloudflare screened the exit IP on every route we tried.
 
@@ -157,6 +169,18 @@ class CSFloatClient:
             or "attention required" in body
             or "cloudflare" in body
         )
+
+    def _vpn_refusal(self, resp) -> bool:
+        """True for CSFloat's "Disable your VPN to view buy orders" (code 170).
+
+        It arrives as a JSON 403, so it reads as a credential refusal unless
+        the body is inspected — but the cookie is fine and the address is the
+        problem."""
+        try:
+            body = (resp.text or "")[:300].lower()
+        except Exception:  # noqa: BLE001
+            return False
+        return "disable your vpn" in body or '"code": 170' in body
 
     def _account_ip_complaint(self, resp) -> bool:
         """True when the body is CSFloat's account-level 'too many requests from
@@ -291,6 +315,11 @@ class CSFloatClient:
             self.pool.record_failure(route, "edge block on a side request")
             raise EdgeBlocked(
                 f"HTTP {resp.status_code}: Cloudflare screened the exit IP", resp)
+
+        if resp.status_code in (401, 403) and self._vpn_refusal(resp):
+            raise VpnBlocked(
+                "CSFloat не отдаёт эти данные с IP датацентра или VPN "
+                "(«Disable your VPN»)", resp)
 
         if resp.status_code in (401, 403):
             # CSFloat itself refusing the credentials, not the edge refusing

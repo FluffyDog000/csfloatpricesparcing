@@ -1848,3 +1848,54 @@ def test_auth_and_edge_errors_carry_the_response():
         client.fetch_json("https://csfloat.com/api/v1/x")
     except EdgeBlocked as exc:
         assert exc.response is not None
+
+
+def test_a_vpn_refusal_is_not_a_credential_problem():
+    """CSFloat answers buy orders from a datacenter IP with a JSON 403 —
+    {"message": "Disable your VPN to view buy orders", "code": 170}. It reads
+    as a credential refusal unless the body is inspected, sending the user to
+    replace a cookie that was never the problem."""
+    import os, tempfile, logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient, AuthError, VpnBlocked
+    from src.collector import Collector
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client._respect_spacing = lambda: None
+    client.session.get = lambda url, **kw: _StubResp(
+        403, '{"message": "Disable your VPN to view buy orders", "code": 170}',
+        {"Content-Type": "application/json"})
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/listings/1/buy-orders")
+        assert False, "the refusal must be raised"
+    except VpnBlocked as exc:
+        assert exc.response is not None
+    except AuthError:
+        assert False, "the cookie is fine; the address is the problem"
+
+    # The sweep stops at the first band: every other one answers identically.
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    calls = []
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.01}}
+                         for i in range(8)]}
+
+    def refused(url, headers=None):
+        calls.append(url)
+        if "/buy-orders" in url:
+            raise VpnBlocked("datacenter IP")
+        return listings
+
+    col.client.fetch_json = refused
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert len(calls) == 2, "one band is enough to learn the address is refused"
+    assert "резидентский" in result["error"]
+    assert "CSFLOAT_COOKIE" not in result["error"], "do not blame the cookie"
+    db.close()

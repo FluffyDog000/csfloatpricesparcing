@@ -14,7 +14,8 @@ from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
-                             EdgeBlocked, NoRouteAvailable, RateLimited)
+                             EdgeBlocked, NoRouteAvailable, RateLimited,
+                             VpnBlocked)
 from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
@@ -377,6 +378,15 @@ class Collector:
                 batches.append(parse_orders(self.client.fetch_json(url)))
                 result["requests"] += 1
                 result["bands"] += 1
+            except VpnBlocked as exc:
+                # Every band answers the same from this IP; only a residential
+                # address changes anything.
+                log.warning("Order sweep for '%s' refused as VPN traffic: %s",
+                            name, exc)
+                result["error"] = (
+                    "CSFloat не показывает ордера с IP датацентра/VPN. Нужен "
+                    "резидентский прокси — с IP сервера они недоступны в принципе")
+                break
             except AuthError as exc:
                 # Credentials are not per-band; every remaining one answers the
                 # same. Stop and say which credential to fix.

@@ -95,6 +95,13 @@ def show_failure(resp) -> None:
         body = ""
     print(f"   тело         : {body or '(пусто)'}")
 
+    lowered = body.lower()
+    if "disable your vpn" in lowered or '"code": 170' in lowered:
+        print("\n   ВЕРДИКТ: CSFloat не отдаёт ордера с IP датацентра или VPN.")
+        print("   Кука и лимиты ни при чём — нужен резидентский прокси.")
+        print("   С IP сервера этот эндпоинт недоступен в принципе.")
+        return
+
     html = body.lstrip().lower().startswith(("<!doctype", "<html"))
     if html or "cf-mitigated" in resp.headers:
         print("\n   ВЕРДИКТ: отказывает Cloudflare — выходной IP не проходит.")
