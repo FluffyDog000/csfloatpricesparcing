@@ -1899,3 +1899,23 @@ def test_a_vpn_refusal_is_not_a_credential_problem():
     assert "резидентский" in result["error"]
     assert "CSFLOAT_COOKIE" not in result["error"], "do not blame the cookie"
     db.close()
+
+
+def test_order_prices_are_cents_like_everywhere_else():
+    """CSFloat quotes integer cents, as the sales parser already assumes. A
+    magnitude guess ("under 1000 is already dollars") printed a $3 order as
+    $300 next to genuine $246 bids — a number a trader would act on."""
+    from src.orders import parse_orders, price_to_dollars
+
+    assert price_to_dollars(24600) == 246.0
+    assert price_to_dollars(1480) == 14.8
+    assert price_to_dollars(300) == 3.0, "a cheap order must not inflate 100x"
+    assert price_to_dollars(999) == 9.99
+    assert price_to_dollars(50) == 0.50
+    # A fractional value is already dollars; cents are always whole.
+    assert price_to_dollars(123.45) == 123.45
+    assert price_to_dollars(None) is None
+
+    book = parse_orders({"data": [
+        {"price": 24600, "qty": 1}, {"price": 300, "qty": 3}]})
+    assert [o["price"] for o in book] == [246.0, 3.0]

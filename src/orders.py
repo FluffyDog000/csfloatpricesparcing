@@ -85,12 +85,19 @@ def _to_int(value: Any) -> int | None:
 
 
 def price_to_dollars(value: Any) -> float | None:
-    """CSFloat quotes money in cents. A bare 303 could be either, so treat a
-    value that looks like cents as cents and leave small numbers alone."""
+    """CSFloat quotes money in integer USD cents — the same convention the
+    sales parser uses.
+
+    An earlier magnitude guess ("under 1000 must already be dollars") turned a
+    $3 order into $300 and sat it beside genuine $246 bids, which is exactly
+    the kind of number a trader acts on. Only a fractional value is read as
+    dollars, since cents are always whole."""
     number = _to_float(value)
     if number is None:
         return None
-    return round(number / 100.0, 2) if number >= 1000 else round(number, 2)
+    if number != int(number):        # 123.45 is already dollars
+        return round(number, 2)
+    return round(number / 100.0, 2)
 
 
 def parse_orders(payload: Any) -> list[dict]:
