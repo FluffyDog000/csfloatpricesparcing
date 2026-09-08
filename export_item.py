@@ -11,6 +11,7 @@
 
 Usage:
     python export_item.py "Broken Fang Gloves | Jade"   # хватает куска названия
+    python export_item.py Jade --pick 1                 # выбрать из списка по номеру
     python export_item.py "Jade" --days 90              # только последние 90 дней
     python export_item.py "Jade" --no-telegram          # только файл на диске
     python export_item.py --list                        # что вообще есть в базе
@@ -44,8 +45,12 @@ def slugify(name: str) -> str:
     return slug or "item"
 
 
-def find_item(conn: sqlite3.Connection, needle: str) -> dict:
-    """Точное совпадение, иначе поиск по куску названия (без учёта регистра)."""
+def find_item(conn: sqlite3.Connection, needle: str, pick: int | None = None) -> dict:
+    """Точное совпадение, иначе поиск по куску названия (без учёта регистра).
+
+    Когда подходит несколько, скрипт печатает пронумерованный список: набирать
+    с телефона "Jade --pick 1" куда проще, чем название со скобками и кавычками.
+    """
     rows = [dict(r) for r in conn.execute(
         "SELECT id, market_hash_name, added_at, active, last_polled_at, "
         "pattern_sensitive, listing_id FROM items WHERE market_hash_name = ?",
@@ -64,9 +69,14 @@ def find_item(conn: sqlite3.Connection, needle: str) -> dict:
     if not rows:
         raise SystemExit(f"Предмет не найден: {needle!r}. Список: python export_item.py --list")
     if len(rows) > 1:
-        print(f"Под '{needle}' подходит несколько предметов — уточни:", file=sys.stderr)
-        for r in rows[:20]:
-            print(f"  {r['market_hash_name']}", file=sys.stderr)
+        if pick is not None:
+            if not 1 <= pick <= len(rows):
+                raise SystemExit(f"--pick {pick}: есть только варианты 1..{len(rows)}")
+            return rows[pick - 1]
+        print(f"Под '{needle}' подходит несколько предметов — уточни "
+              "или повтори с --pick N:", file=sys.stderr)
+        for i, r in enumerate(rows[:20], 1):
+            print(f"  {i}. {r['market_hash_name']}", file=sys.stderr)
         raise SystemExit(2)
     return rows[0]
 
@@ -121,6 +131,8 @@ def collect(conn: sqlite3.Connection, item: dict, days: int | None) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Выгрузка одного предмета в файл/Telegram")
     ap.add_argument("name", nargs="?", help="название или его часть")
+    ap.add_argument("--pick", type=int, metavar="N",
+                    help="если подходит несколько — взять N-й из списка")
     ap.add_argument("--days", type=int, help="только продажи за последние N дней")
     ap.add_argument("--out", help="куда положить файл (по умолчанию data/exports/)")
     ap.add_argument("--no-telegram", action="store_true", help="не отправлять в бота")
@@ -147,7 +159,7 @@ def main() -> int:
         if not args.name:
             ap.error("укажи название предмета (или --list)")
 
-        item = find_item(conn, args.name)
+        item = find_item(conn, args.name, args.pick)
         payload = collect(conn, item, args.days)
     finally:
         conn.close()
