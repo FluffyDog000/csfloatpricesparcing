@@ -37,11 +37,18 @@ LISTING_ID_PATHS = ("id", "listing_id")
 # rather than depend on one shape (same approach as the sales parser).
 PRICE_PATHS = ("price", "market_price", "value", "amount")
 QTY_PATHS = ("qty", "quantity", "count", "num", "amount_left")
-FLOAT_MIN_PATHS = ("expression.float_value.min", "expression.min_float",
+# The live response carries filters under hybrid_properties rather than the
+# expression field, with the same inner shape — both are read.
+FLOAT_MIN_PATHS = ("hybrid_properties.float_value.min",
+                   "hybrid_properties.min_float",
+                   "expression.float_value.min", "expression.min_float",
                    "min_float", "float_min", "float_value.min")
-FLOAT_MAX_PATHS = ("expression.float_value.max", "expression.max_float",
+FLOAT_MAX_PATHS = ("hybrid_properties.float_value.max",
+                   "hybrid_properties.max_float",
+                   "expression.float_value.max", "expression.max_float",
                    "max_float", "float_max", "float_value.max")
-SEED_PATHS = ("expression.paint_seed", "paint_seed", "seed")
+SEED_PATHS = ("hybrid_properties.paint_seed", "expression.paint_seed",
+              "paint_seed", "seed")
 
 
 def records(payload: Any) -> list[dict]:

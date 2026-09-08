@@ -1919,3 +1919,28 @@ def test_order_prices_are_cents_like_everywhere_else():
     book = parse_orders({"data": [
         {"price": 24600, "qty": 1}, {"price": 300, "qty": 3}]})
     assert [o["price"] for o in book] == [246.0, 3.0]
+
+
+def test_filters_are_read_from_hybrid_properties_too():
+    """The live response carries the float range under hybrid_properties, not
+    the expression field the paths were written for, so scoped orders were
+    silently reported as unrestricted — the opposite of what the sweep exists
+    to find."""
+    from src.orders import parse_orders
+
+    book = parse_orders({"data": [
+        {"price": 24600, "qty": 1, "hybrid_properties": {}},
+        {"price": 28200, "qty": 1,
+         "hybrid_properties": {"float_value": {"min": 0.15, "max": 0.157}}},
+        {"price": 30000, "qty": 1, "hybrid_properties": {"paint_seed": 387}},
+        {"price": 25000, "qty": 1,
+         "expression": {"float_value": {"min": 0.2, "max": 0.25}}},
+    ]})
+    by_price = {o["price"]: o for o in book}
+
+    assert by_price[246.0]["float_min"] is None, "an empty filter is no filter"
+    assert by_price[282.0]["float_min"] == 0.15
+    assert by_price[282.0]["float_max"] == 0.157
+    assert by_price[300.0]["paint_seed"] == 387
+    # The older shape must keep working alongside it.
+    assert by_price[250.0]["float_min"] == 0.2

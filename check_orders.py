@@ -73,12 +73,24 @@ def describe(payload: Any, limit_asked: int) -> None:
     # key the parser does not know yet — show one whole record rather than
     # making the user guess which of --raw's pages to read.
     if not scoped:
-        nested = [k for k, v in rows[0].items() if isinstance(v, (dict, list)) and v]
-        if nested:
+        # Look through EVERY order, not just the first: an unfiltered order has
+        # nothing nested, so checking one told us nothing about the rest.
+        example = next(
+            (r for r in rows
+             if any(isinstance(v, (dict, list)) and v for v in r.values())),
+            None)
+        if example is None:
+            print("Во всех ордерах вложенные поля пусты — у этого лота "
+                  "действительно нет точечных ордеров.")
+            print("Чтобы проверить разбор фильтров, возьми лот, где на сайте "
+                  "виден ордер с диапазоном флота.")
+        else:
+            nested = [k for k, v in example.items()
+                      if isinstance(v, (dict, list)) and v]
             print(f"\nФильтры не распознаны, но есть вложенные поля: "
                   f"{', '.join(nested)}")
-            print("Вот один ордер целиком — по нему настрою разбор:")
-            print(json.dumps(rows[0], ensure_ascii=False, indent=2)[:1500])
+            print("Вот этот ордер целиком — по нему настрою разбор:")
+            print(json.dumps(example, ensure_ascii=False, indent=2)[:1500])
     if len(rows) >= limit_asked:
         print("Ответ упёрся в limit — есть что запросить дальше, попробуй больший --limit.")
     else:
