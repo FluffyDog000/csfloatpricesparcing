@@ -20,8 +20,9 @@ from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
 from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
-                     ORDERS_PATH, extract_listing_id, extract_listings,
-                     merge_orders, parse_orders, plan_bands)
+                     ORDERS_PATH, SORT_BY_END, coverage_gaps,
+                     extract_listing_id, extract_listings, merge_listings,
+                     merge_orders, parse_orders, plan_bands, wear_range)
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
@@ -324,6 +325,42 @@ class Collector:
         key = self.config.http.api_key
         return {"Authorization": key} if key else None
 
+    def _fetch_listings(self, name: str, sort_by: str | None = None) -> object:
+        url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
+               f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
+        if sort_by:
+            url += f"&sort_by={sort_by}"
+        # /api/v1/listings is the documented API and authenticates with the
+        # API key, not the browser session the sales endpoint uses. Sending
+        # only the cookie gets a flat 403.
+        return self.client.fetch_json(url, headers=self._listings_headers())
+
+    def _listing_sample(self, name: str, result: dict) -> list[dict]:
+        """The lots the band plan is built from.
+
+        One page of lots comes back in CSFloat's own order, so on a liquid item
+        it can sit entirely in the middle of the float range and the sweep never
+        asks a low-float lot — leaving every order scoped to that end invisible.
+        When the page misses an end of the item's wear range, that end is asked
+        for by name: at most two extra requests, and only where the gap is
+        provable. A sort key CSFloat does not honour costs one duplicate page
+        and changes nothing else."""
+        listings = extract_listings(self._fetch_listings(name))
+        result["requests"] += 1
+        for end in coverage_gaps(plan_bands(listings), wear_range(name)):
+            try:
+                extra = extract_listings(
+                    self._fetch_listings(name, SORT_BY_END[end]))
+                result["requests"] += 1
+            except RateLimited:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one end, not the sweep
+                log.warning("Could not reach the %s float end of '%s': %s",
+                            end, name, exc)
+                continue
+            listings = merge_listings(listings, extra)
+        return listings
+
     def sweep_buy_orders(self, name: str, item_id: int) -> dict:
         """Read the whole order book by walking the item's float range.
 
@@ -333,13 +370,7 @@ class Collector:
         requests rather than the twenty-four a fixed grid would."""
         result = {"orders": 0, "bands": 0, "requests": 0, "error": None}
         try:
-            url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
-                   f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
-            # /api/v1/listings is the documented API and authenticates with the
-            # API key, not the browser session the sales endpoint uses. Sending
-            # only the cookie gets a flat 403.
-            payload = self.client.fetch_json(url, headers=self._listings_headers())
-            result["requests"] += 1
+            listings = self._listing_sample(name, result)
         except NoRouteAvailable as exc:
             # Our own pool, not CSFloat: saying "лимит CSFloat" here sends the
             # user to wait out a limit that was never hit.
@@ -363,7 +394,13 @@ class Collector:
             self._note_orders_error(name, result["error"])
             return result
 
-        plan = plan_bands(extract_listings(payload))
+        plan = plan_bands(listings)
+        # What the plan actually covers: a book is only as complete as the float
+        # range the lots reached, and that is the first thing to check against
+        # the site when a bid is missing.
+        covered = [p["band"] for p in plan if p.get("band") is not None]
+        result["span"] = (f"{min(covered):.2f}-{max(covered):.2f}"
+                          if covered else "")
         if not plan:
             result["error"] = "нет активных лотов"
             self._note_orders_error(name, "нет активных лотов")
@@ -432,8 +469,9 @@ class Collector:
         result["orders"] = len(orders)
         self.db.set_setting("orders_summary", json.dumps(
             {"item": name, "at": utcnow_iso(), **result}, ensure_ascii=False))
-        log.info("'%s': swept %d band(s) in %d request(s) -> %d order(s)",
-                 name, result["bands"], result["requests"], len(orders))
+        log.info("'%s': swept %d band(s) [float %s] in %d request(s) -> %d order(s)",
+                 name, result["bands"], result["span"] or "?",
+                 result["requests"], len(orders))
         return result
 
     def fetch_buy_orders(self, name: str, item_id: int,
