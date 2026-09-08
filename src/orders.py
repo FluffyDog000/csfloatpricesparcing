@@ -3,7 +3,7 @@
 Two requests are needed, because the endpoint is keyed by listing, not by item:
 
     GET /api/v1/listings?market_hash_name=...&limit=1   -> a listing id
-    GET /api/v1/listings/{id}/buy-orders?limit=10       -> the orders
+    GET /api/v1/listings/{id}/buy-orders?limit=20       -> the orders
 
 Only the top of the book is kept: the dashboard shows the best bids, and a
 deeper book would cost more requests for information that changes by the minute.
@@ -20,7 +20,7 @@ log = logging.getLogger("csfloat.orders")
 
 LISTINGS_PATH = "/api/v1/listings"
 ORDERS_PATH = "/api/v1/listings/{listing_id}/buy-orders"
-DEFAULT_LIMIT = 10
+DEFAULT_LIMIT = 20
 
 # A listing's orders are the ones that match ITS float, so the book of an item
 # is only visible by asking several listings spread across the float range.
@@ -28,7 +28,22 @@ DEFAULT_LIMIT = 10
 # fixed grid: an empty band would cost a request and return nothing.
 BAND_STEP = 0.01
 MAX_BANDS = 25              # ceiling on requests for one sweep
-LISTINGS_PAGE = 50          # listings to pull in the single lookup request
+LISTINGS_PAGE = 50          # listings to pull per lookup request
+
+# The float span of each wear. A band plan can only be judged complete against
+# it: built from whatever lots happened to come back, a plan looks healthy even
+# when a whole end of the range is missing from it.
+WEAR_RANGES = {
+    "Factory New": (0.00, 0.07),
+    "Minimal Wear": (0.07, 0.15),
+    "Field-Tested": (0.15, 0.38),
+    "Well-Worn": (0.38, 0.45),
+    "Battle-Scarred": (0.45, 1.00),
+}
+
+# CSFloat's own sort keys, used only to reach an end of the range the default
+# page missed. If a key is not honoured the extra page is just a duplicate.
+SORT_BY_END = {"low": "lowest_float", "high": "highest_float"}
 
 LISTING_FLOAT_PATHS = ("item.float_value", "float_value", "item.float")
 LISTING_ID_PATHS = ("id", "listing_id")
@@ -175,6 +190,46 @@ def plan_bands(listings: list[dict], step: float = BAND_STEP,
     if not plan and unknown:
         plan = [dict(unknown[0], band=None)]
     return plan[:max_bands]
+
+
+def wear_range(name: str) -> tuple[float, float] | None:
+    """The float span of the wear named in the item, when it names one."""
+    for wear, span in WEAR_RANGES.items():
+        if f"({wear})" in name:
+            return span
+    return None
+
+
+def merge_listings(*batches: list[dict]) -> list[dict]:
+    """One list of lots, each id kept once."""
+    seen: dict[str, dict] = {}
+    for batch in batches:
+        for row in batch:
+            seen.setdefault(row["id"], row)
+    return list(seen.values())
+
+
+def coverage_gaps(plan: list[dict], span: tuple[float, float] | None,
+                  step: float = BAND_STEP) -> tuple[str, ...]:
+    """Which ends of the wear range this plan fails to reach.
+
+    A page of /listings is CSFloat's own selection of lots, and on a liquid
+    item all fifty can sit in the middle of the range. Orders scoped to an end
+    no lot represents are then invisible — that is how bids of $244 on
+    0.15-0.17 stayed out of a swept book whose top read $169. Returns the ends
+    worth one extra lookup each."""
+    if not span:
+        return ()
+    bands = [p["band"] for p in plan if p.get("band") is not None]
+    if not bands:
+        return ("low", "high")
+    lo, hi = span
+    out = []
+    if min(bands) > round(lo + step, 6):
+        out.append("low")
+    if max(bands) < round(hi - 2 * step, 6):
+        out.append("high")
+    return tuple(out)
 
 
 def order_key(order: dict) -> tuple:
