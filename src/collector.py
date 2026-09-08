@@ -370,6 +370,7 @@ class Collector:
             return result
 
         batches: list[list[dict]] = []
+        failed = 0
         for step in plan:
             try:
                 url = (f"{self.config.http.base_url}"
@@ -408,9 +409,16 @@ class Collector:
                 break
             except Exception as exc:  # noqa: BLE001
                 # One sold listing must not lose the bands already collected.
+                failed += 1
                 log.warning("Band %.2f of '%s' failed: %s", step.get("band") or -1,
                             name, exc)
-                result["error"] = str(exc)[:120]
+
+        # A band or two dropping out of twenty is not a failed sweep, and a
+        # wall of connection-pool text in the panel reads like one.
+        result["failed_bands"] = failed
+        if failed and not result.get("error"):
+            result["error"] = ("" if not result["bands"] else
+                               f"не ответило полос: {failed} из {failed + result['bands']}")
 
         orders = merge_orders(batches)
         if not orders and result.get("rate_limited"):

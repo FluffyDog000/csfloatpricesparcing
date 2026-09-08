@@ -286,8 +286,14 @@ class CSFloatClient:
                 f"нет доступных маршрутов, ближайший освободится через "
                 f"{wait / 60:.0f} мин" if wait > 0 else "нет доступных маршрутов")
         self._respect_spacing()
-        resp = self.session.get(url, timeout=self.http.timeout_seconds,
-                                proxies=route.proxies(), headers=headers)
+        try:
+            resp = self.session.get(url, timeout=self.http.timeout_seconds,
+                                    proxies=route.proxies(), headers=headers)
+        except requests.RequestException as exc:
+            # Fault the route like a sales poll does, so a proxy that keeps
+            # dropping connections leaves rotation instead of failing forever.
+            self.pool.record_failure(route, exc)
+            raise
         self._capture_rate_headers(resp)
         self._feed_pool(route, resp)
 

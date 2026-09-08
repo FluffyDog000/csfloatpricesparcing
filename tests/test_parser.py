@@ -1226,7 +1226,9 @@ def test_a_failed_band_keeps_the_bands_already_collected():
     result = col.sweep_buy_orders("Gloves", item_id)
     assert result["bands"] == 3, "the surviving bands still count"
     assert result["orders"] == 3 and len(db.buy_orders(item_id)) == 3
-    assert "404" in (result["error"] or "")
+    # Reported as a note about coverage, not as the raw exception text.
+    assert result["failed_bands"] == 1
+    assert result["error"] == "не ответило полос: 1 из 4"
 
     # If the listings lookup itself fails there is nothing to sweep, and the
     # previous snapshot must be left alone rather than wiped.
@@ -1944,3 +1946,74 @@ def test_filters_are_read_from_hybrid_properties_too():
     assert by_price[300.0]["paint_seed"] == 387
     # The older shape must keep working alongside it.
     assert by_price[250.0]["float_min"] == 0.2
+
+
+def test_a_dropped_band_is_a_note_not_a_failed_sweep():
+    """One flaky proxy connection out of twenty bands still yields a book. The
+    panel showed the raw ProxyError text — a wall of connection-pool noise that
+    reads as though the whole sweep failed."""
+    import os, tempfile, logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.15 + i * 0.01}}
+                         for i in range(20)]}
+
+    def flaky(url, headers=None):
+        if "/buy-orders" in url:
+            if "L7/" in url:
+                raise requests.exceptions.ProxyError(
+                    "HTTPSConnectionPool(host='csfloat.com', port=443): Max "
+                    "retries exceeded ... RemoteDisconnected(...)")
+            return {"data": [{"price": 24600, "qty": 1, "hybrid_properties": {
+                "float_value": {"min": 0.15, "max": 0.17}}}]}
+        return listings
+
+    col.client.fetch_json = flaky
+    result = col.sweep_buy_orders("Gloves", item_id)
+
+    assert result["bands"] == 19 and result["failed_bands"] == 1
+    assert result["orders"] == 1, "the surviving bands still produce a book"
+    assert result["error"] == "не ответило полос: 1 из 20"
+    assert "HTTPSConnectionPool" not in result["error"]
+    assert len(db.buy_orders(item_id)) == 1
+
+
+def test_a_side_request_network_error_faults_the_route():
+    """Sales polling faults a route that drops connections; side requests did
+    not, so a dead proxy stayed in rotation failing every sweep."""
+    import logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["a:p:g1:1 #rotating"], use_direct=False)
+    client._respect_spacing = lambda: None
+    route = client.pool.routes["http://g1:1#" + list(
+        client.pool.routes)[0].split("#")[1]] if False else \
+        next(iter(client.pool.routes.values()))
+
+    def dropped(url, **kw):
+        raise requests.exceptions.ProxyError("Remote end closed connection")
+
+    client.session.get = dropped
+    before = route.fails
+    try:
+        client.fetch_json("https://csfloat.com/api/v1/x")
+    except requests.RequestException:
+        pass
+    assert route.fails > before, "a dropping route must be faulted"
