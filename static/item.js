@@ -362,10 +362,18 @@ initCurrencyToggle("currency-toggle", () => { refresh(); refreshLatest(); });
 // Fetched only on demand: orders are keyed by listing, so each refresh costs
 // two requests, and nothing here is worth spending the polling budget on.
 
+// Show a bound exactly, not rounded: 0.179999 displayed as 0.1800 reads as
+// "includes 0.18" when it does not, and whether an item qualifies for an order
+// is precisely what these numbers are consulted for.
+function floatBound(v) {
+  const s = Number(v).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "" ? "0" : s;
+}
+
 function orderFilter(o) {
   if (o.float_min !== null || o.float_max !== null) {
-    const lo = o.float_min !== null ? Number(o.float_min).toFixed(4) : "0";
-    const hi = o.float_max !== null ? Number(o.float_max).toFixed(4) : "1";
+    const lo = o.float_min !== null ? floatBound(o.float_min) : "0";
+    const hi = o.float_max !== null ? floatBound(o.float_max) : "1";
     return `<span class="scoped">float ${lo}–${hi}</span>`;
   }
   if (o.paint_seed !== null && o.paint_seed !== undefined) {

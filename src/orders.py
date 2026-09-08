@@ -37,8 +37,9 @@ LISTING_ID_PATHS = ("id", "listing_id")
 # rather than depend on one shape (same approach as the sales parser).
 PRICE_PATHS = ("price", "market_price", "value", "amount")
 QTY_PATHS = ("qty", "quantity", "count", "num", "amount_left")
-# The live response carries filters under hybrid_properties rather than the
-# expression field, with the same inner shape — both are read.
+# The live response carries filters under hybrid_properties (confirmed against
+# CSFloat: {"hybrid_properties": {"float_value": {"min": 0.15, "max": 0.179999}}})
+# rather than an expression field. Both are read.
 FLOAT_MIN_PATHS = ("hybrid_properties.float_value.min",
                    "hybrid_properties.min_float",
                    "expression.float_value.min", "expression.min_float",
