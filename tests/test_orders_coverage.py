@@ -122,6 +122,35 @@ def test_a_sweep_leaves_from_one_address():
     pool.unpin()
 
 
+def test_dropping_the_rotating_marker_releases_the_quarantine():
+    """Eleven routes sat parked for six hours with nothing able to free them:
+    the quarantine had parked them as rotating, the marker was then removed,
+    and both the release path and the dashboard button only looked at routes
+    still flagged rotating. The pool fell back to the server's own IP, which
+    CSFloat refuses for buy orders."""
+    import logging
+    import time
+
+    logging.disable(logging.WARNING)
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://a:1 #rotating", "http://b:1 #rotating"],
+                     use_direct=False)
+    assert pool.park_rotating(6 * 3600) == 2
+    assert pool.pick() is None, "everything is parked"
+
+    # The marker goes away: the park applied for it has to go with it.
+    pool.replace(["http://a:1", "http://b:1"], use_direct=False)
+    assert all(r.parked_until == 0.0 for r in pool.routes.values())
+    assert pool.pick() is not None, "a route has to be usable again"
+
+    # And the operator's button releases a park whatever the flag says now.
+    for route in pool.routes.values():
+        route.parked_until = time.monotonic() + 6 * 3600
+    assert pool.unpark_rotating() == len(pool.routes)
+    assert pool.pick() is not None
+
+
 def test_a_wearless_item_costs_no_extra_lookup():
     """The probe is paid for out of the same quota as everything else, so it
     only fires where a gap can actually be proven."""
