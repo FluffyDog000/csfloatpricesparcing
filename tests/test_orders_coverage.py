@@ -95,6 +95,33 @@ def test_the_sweep_asks_for_the_float_end_its_first_page_missed():
     db.close()
 
 
+def test_a_sweep_leaves_from_one_address():
+    """CSFloat counts how many IPs an account speaks from, and a sweep is a
+    burst: thirteen requests hopping across routes read as thirteen addresses
+    in ninety seconds, which is what quarantined the whole rotating set."""
+    import logging
+
+    logging.disable(logging.WARNING)
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://a:1", "http://b:1", "http://c:1"],
+                     use_direct=False)
+    pinned = pool.pin()
+    assert pinned is not None
+    assert [pool.pick().key for _ in range(6)] == [pinned.key] * 6
+
+    # Unpinned, the pool spreads the load across routes again.
+    pool.unpin()
+    assert len({pool.pick().key for _ in range(20)}) > 1
+
+    # A pin must never wedge the pool: once that route is rate-limited the
+    # next request goes somewhere else instead of into the same wall.
+    pinned = pool.pin()
+    pool.record_429(pinned, 600.0)
+    assert pool.pick().key != pinned.key
+    pool.unpin()
+
+
 def test_a_wearless_item_costs_no_extra_lookup():
     """The probe is paid for out of the same quota as everything else, so it
     only fires where a gap can actually be proven."""
