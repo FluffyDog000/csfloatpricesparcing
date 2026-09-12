@@ -362,6 +362,19 @@ class Collector:
         return listings
 
     def sweep_buy_orders(self, name: str, item_id: int) -> dict:
+        """One sweep, one exit IP.
+
+        The band requests are a burst, and letting the pool hop between routes
+        inside it showed CSFloat a dozen addresses for one account in ninety
+        seconds — which is what drew "too many requests from too many IPs" and
+        quarantined every rotating route. See ProxyPool.pin."""
+        self.client.pool.pin()
+        try:
+            return self._sweep_bands(name, item_id)
+        finally:
+            self.client.pool.unpin()
+
+    def _sweep_bands(self, name: str, item_id: int) -> dict:
         """Read the whole order book by walking the item's float range.
 
         A listing only shows the orders that match its own float, so the book
