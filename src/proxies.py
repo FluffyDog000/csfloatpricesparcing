@@ -151,6 +151,11 @@ class ProxyPool:
                 route.rotating = rotating
                 route.window_used = 0              # budgets are not comparable
                 route.window_start = 0.0
+                # The account-IP quarantine parks rotating routes. Dropping the
+                # marker used to leave that park in place with nothing able to
+                # clear it: the pool fell back to the server's own IP — useless
+                # for buy orders — while the whole residential set sat idle.
+                route.parked_until = 0.0
             route.window_limit = self.rotating_limit
         self.routes = kept
         # A pin points at a route object; after a rebuild it may no longer be
@@ -275,11 +280,18 @@ class ProxyPool:
     def unpark_rotating(self) -> int:
         """Lift the account-IP quarantine early, at the operator's decision.
 
-        Only clears the park this pool applied — a route in a cooldown from its
-        own 429, or with its quota spent, stays unavailable on its own terms."""
+        Every parked route is lifted, not only the ones still flagged rotating.
+        Gating this on the flag made the button lie: dropping "#rotating" from
+        eleven quarantined routes left them parked with nothing able to release
+        them, the pool fell back to the server's own IP — which CSFloat refuses
+        for buy orders — and the dashboard reported "0 route(s) back in
+        rotation" while the entire residential set sat idle for six hours.
+
+        A route in a cooldown from its own 429, or with its quota spent, stays
+        unavailable on its own terms."""
         lifted = 0
         for r in self.routes.values():
-            if r.rotating and r.parked_until > time.monotonic():
+            if r.parked_until > time.monotonic():
                 r.parked_until = 0.0
                 lifted += 1
         if lifted:
