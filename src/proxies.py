@@ -113,6 +113,7 @@ class ProxyPool:
                  rotating_limit: int = ROTATING_DEFAULT_LIMIT):
         self.reserve = reserve
         self.rotating_limit = rotating_limit
+        self._pinned: RouteState | None = None
         self.routes: dict[str, RouteState] = {}
         if use_direct:
             self.routes[DIRECT] = RouteState(key=DIRECT, url=None)
@@ -152,6 +153,9 @@ class ProxyPool:
                 route.window_start = 0.0
             route.window_limit = self.rotating_limit
         self.routes = kept
+        # A pin points at a route object; after a rebuild it may no longer be
+        # in the pool at all.
+        self._pinned = None
         if changed:
             log.info("Proxy pool updated: %d route(s) — %s",
                      len(self.routes), ", ".join(sorted(self.routes)))
@@ -167,6 +171,19 @@ class ProxyPool:
         same account, which is exactly what its "too many IPs" check counts.
         """
         now = time.monotonic()
+        if self._pinned is not None and self._pinned.available(self.reserve, now):
+            chosen = self._pinned
+        else:
+            chosen = self._choose(now)
+        if chosen is None:
+            return None
+        chosen.last_used = now
+        chosen.note_request()     # a rotating route is metered locally
+        return chosen
+
+    def _choose(self, now: float) -> RouteState | None:
+        """Selection only, no metering — so pinning a route does not book a
+        request that has not been made."""
         usable = [r for r in self.routes.values() if r.available(self.reserve, now)]
         if not usable:
             return None
@@ -176,10 +193,25 @@ class ProxyPool:
         # Among equally-good routes prefer the least recently used one.
         top = [r for r in usable if r.score() == best]
         top.sort(key=lambda r: r.last_used)
-        chosen = top[0] if len(top) == 1 else random.choice(top[:2])
-        chosen.last_used = now
-        chosen.note_request()     # a rotating route is metered locally
-        return chosen
+        return top[0] if len(top) == 1 else random.choice(top[:2])
+
+    def pin(self) -> RouteState | None:
+        """Hold one route for a burst of requests, and return it.
+
+        Hopping to whichever route has the most quota left is right for polls
+        spread over hours and wrong for a burst: an order sweep fires a dozen
+        requests inside ninety seconds, and hopping showed CSFloat a dozen IPs
+        for one account in that window — precisely what its "too many requests
+        from too many IPs" check counts, and what put every rotating route in
+        quarantine. Pinned, the whole sweep leaves from one address.
+
+        A pinned route that goes on cooldown or runs out of quota stops being
+        honoured, so a pin can never wedge the pool."""
+        self._pinned = self._choose(time.monotonic())
+        return self._pinned
+
+    def unpin(self) -> None:
+        self._pinned = None
 
     def wait_seconds(self) -> float:
         """How long until any route becomes usable again (0 if one is ready)."""
