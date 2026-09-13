@@ -51,6 +51,12 @@ class RouteState:
     window_used: int = 0
     window_start: float = 0.0     # epoch seconds
     window_limit: int = ROTATING_DEFAULT_LIMIT
+    # CSFloat refuses buy orders from addresses it reads as datacenter or VPN
+    # ("Disable your VPN", code 170). That is a property of this exit address,
+    # not of our credentials, and it says nothing about sales history — which
+    # the same route keeps serving. Learned at runtime, never persisted: the
+    # address behind a route changes.
+    vpn_blocked: bool = False
 
     def proxies(self) -> dict[str, str] | None:
         if not self.url:
@@ -114,6 +120,8 @@ class ProxyPool:
         self.reserve = reserve
         self.rotating_limit = rotating_limit
         self._pinned: RouteState | None = None
+        self._orders_mode = False
+        self.last_picked: RouteState | None = None
         self.routes: dict[str, RouteState] = {}
         if use_direct:
             self.routes[DIRECT] = RouteState(key=DIRECT, url=None)
@@ -151,11 +159,6 @@ class ProxyPool:
                 route.rotating = rotating
                 route.window_used = 0              # budgets are not comparable
                 route.window_start = 0.0
-                # The account-IP quarantine parks rotating routes. Dropping the
-                # marker used to leave that park in place with nothing able to
-                # clear it: the pool fell back to the server's own IP — useless
-                # for buy orders — while the whole residential set sat idle.
-                route.parked_until = 0.0
             route.window_limit = self.rotating_limit
         self.routes = kept
         # A pin points at a route object; after a rebuild it may no longer be
@@ -184,12 +187,18 @@ class ProxyPool:
             return None
         chosen.last_used = now
         chosen.note_request()     # a rotating route is metered locally
+        self.last_picked = chosen
         return chosen
 
     def _choose(self, now: float) -> RouteState | None:
         """Selection only, no metering — so pinning a route does not book a
         request that has not been made."""
         usable = [r for r in self.routes.values() if r.available(self.reserve, now)]
+        if self._orders_mode:
+            # Buy orders only: an address CSFloat has refused as datacenter or
+            # VPN answers every band the same way, so it is out for this sweep
+            # even though it still serves sales history perfectly well.
+            usable = [r for r in usable if not r.vpn_blocked]
         if not usable:
             return None
         fixed = [r for r in usable if not r.rotating]
@@ -200,8 +209,12 @@ class ProxyPool:
         top.sort(key=lambda r: r.last_used)
         return top[0] if len(top) == 1 else random.choice(top[:2])
 
-    def pin(self) -> RouteState | None:
+    def pin(self, for_orders: bool = False) -> RouteState | None:
         """Hold one route for a burst of requests, and return it.
+
+        `for_orders` also keeps the burst off addresses CSFloat has refused as
+        datacenter or VPN — those serve sales history fine, so they stay in the
+        pool, but a buy-order sweep must not be handed one.
 
         Hopping to whichever route has the most quota left is right for polls
         spread over hours and wrong for a burst: an order sweep fires a dozen
@@ -212,11 +225,33 @@ class ProxyPool:
 
         A pinned route that goes on cooldown or runs out of quota stops being
         honoured, so a pin can never wedge the pool."""
+        self._orders_mode = for_orders
         self._pinned = self._choose(time.monotonic())
         return self._pinned
 
     def unpin(self) -> None:
         self._pinned = None
+        self._orders_mode = False
+
+    def mark_vpn_blocked(self, route: RouteState | None = None) -> RouteState | None:
+        """Remember that this address is refused for buy orders.
+
+        Defaults to the route that served the last request, which is the one
+        that drew the refusal. The flag lives only in memory: the address
+        behind a route changes, and a restart is the cheapest way to re-test."""
+        route = route or self.last_picked
+        if route is None or route.vpn_blocked:
+            return route
+        route.vpn_blocked = True
+        log.warning("Route %s refused for buy orders (datacenter/VPN); it stays "
+                    "in the pool for sales history", route.key)
+        return route
+
+    def has_order_route(self) -> bool:
+        """Is any route still allowed to read buy orders?"""
+        now = time.monotonic()
+        return any(r.available(self.reserve, now) and not r.vpn_blocked
+                   for r in self.routes.values())
 
     def wait_seconds(self) -> float:
         """How long until any route becomes usable again (0 if one is ready)."""
@@ -280,18 +315,11 @@ class ProxyPool:
     def unpark_rotating(self) -> int:
         """Lift the account-IP quarantine early, at the operator's decision.
 
-        Every parked route is lifted, not only the ones still flagged rotating.
-        Gating this on the flag made the button lie: dropping "#rotating" from
-        eleven quarantined routes left them parked with nothing able to release
-        them, the pool fell back to the server's own IP — which CSFloat refuses
-        for buy orders — and the dashboard reported "0 route(s) back in
-        rotation" while the entire residential set sat idle for six hours.
-
-        A route in a cooldown from its own 429, or with its quota spent, stays
-        unavailable on its own terms."""
+        Only clears the park this pool applied — a route in a cooldown from its
+        own 429, or with its quota spent, stays unavailable on its own terms."""
         lifted = 0
         for r in self.routes.values():
-            if r.parked_until > time.monotonic():
+            if r.rotating and r.parked_until > time.monotonic():
                 r.parked_until = 0.0
                 lifted += 1
         if lifted:
@@ -371,6 +399,7 @@ class ProxyPool:
                 "cooldown_sec": max(0, round(r.cooldown_until - now_mono)),
                 "parked_sec": max(0, round(r.parked_until - now_mono)),
                 "available": r.available(self.reserve, now_mono),
+                "vpn_blocked": r.vpn_blocked,
             })
         out.sort(key=lambda d: (not d["direct"], d["key"]))
         return out
