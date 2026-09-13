@@ -122,33 +122,61 @@ def test_a_sweep_leaves_from_one_address():
     pool.unpin()
 
 
-def test_dropping_the_rotating_marker_releases_the_quarantine():
-    """Eleven routes sat parked for six hours with nothing able to free them:
-    the quarantine had parked them as rotating, the marker was then removed,
-    and both the release path and the dashboard button only looked at routes
-    still flagged rotating. The pool fell back to the server's own IP, which
-    CSFloat refuses for buy orders."""
+def test_a_route_refused_for_orders_is_faulted_not_fatal():
+    """"Disable your VPN" is about the exit address, not the account. Aborting
+    the sweep on it left half a book on screen — five bands read, the rest
+    dropped — and the same address was handed out again on the next press."""
+    import os
+    import tempfile
     import logging
-    import time
 
     logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient, VpnBlocked
+    from src.collector import Collector
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    col.client.pool.replace(["http://a:1", "http://b:1"], use_direct=False)
+
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.20 + i * 0.01}}
+                         for i in range(4)]}
+    seen = []
+
+    def fake(url, headers=None):
+        if "/buy-orders" not in url:
+            return listings
+        seen.append(url)
+        if len(seen) == 1:                      # the first band is refused
+            raise VpnBlocked("Disable your VPN", None)
+        return {"data": [{"price": 16900, "qty": 1}]}
+
+    col.client.fetch_json = fake
+    result = col.sweep_buy_orders("Gloves", item_id)
+
+    assert len(seen) == 4, "the sweep must try every band, not stop at the first"
+    assert result["bands"] == 3, "three bands answered"
+    assert result["orders"] == 1, "and what they returned was stored"
+    assert "недоступны в принципе" not in (result["error"] or "")
+
+
+def test_a_blocked_route_still_serves_sales_but_not_orders():
     from src.proxies import ProxyPool
 
-    pool = ProxyPool(["http://a:1 #rotating", "http://b:1 #rotating"],
-                     use_direct=False)
-    assert pool.park_rotating(6 * 3600) == 2
-    assert pool.pick() is None, "everything is parked"
+    pool = ProxyPool(["http://a:1", "http://b:1"], use_direct=False)
+    bad = pool.routes["http://a:1"]
+    pool.mark_vpn_blocked(bad)
 
-    # The marker goes away: the park applied for it has to go with it.
-    pool.replace(["http://a:1", "http://b:1"], use_direct=False)
-    assert all(r.parked_until == 0.0 for r in pool.routes.values())
-    assert pool.pick() is not None, "a route has to be usable again"
-
-    # And the operator's button releases a park whatever the flag says now.
-    for route in pool.routes.values():
-        route.parked_until = time.monotonic() + 6 * 3600
-    assert pool.unpark_rotating() == len(pool.routes)
-    assert pool.pick() is not None
+    assert pool.pin(for_orders=True).key == "http://b:1"
+    pool.unpin()
+    # Sales history does not care about the refusal, so the route stays usable.
+    assert pool.has_order_route() is True
+    assert any(pool.pick().key == "http://a:1" for _ in range(20))
 
 
 def test_a_wearless_item_costs_no_extra_lookup():
