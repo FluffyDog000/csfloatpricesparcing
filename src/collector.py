@@ -368,7 +368,7 @@ class Collector:
         inside it showed CSFloat a dozen addresses for one account in ninety
         seconds — which is what drew "too many requests from too many IPs" and
         quarantined every rotating route. See ProxyPool.pin."""
-        self.client.pool.pin()
+        self.client.pool.pin(for_orders=True)
         try:
             return self._sweep_bands(name, item_id)
         finally:
@@ -430,14 +430,20 @@ class Collector:
                 result["requests"] += 1
                 result["bands"] += 1
             except VpnBlocked as exc:
-                # Every band answers the same from this IP; only a residential
-                # address changes anything.
-                log.warning("Order sweep for '%s' refused as VPN traffic: %s",
-                            name, exc)
-                result["error"] = (
-                    "CSFloat не показывает ордера с IP датацентра/VPN. Нужен "
-                    "резидентский прокси — с IP сервера они недоступны в принципе")
-                break
+                # This address is refused, not the account: every band would
+                # answer the same from it, but another route may well work.
+                # Fault it, re-pin, and carry on — aborting here threw away the
+                # bands still to come and left half a book on screen.
+                blocked = self.client.pool.mark_vpn_blocked()
+                failed += 1
+                log.warning("Order sweep for '%s': %s refused as VPN traffic: %s",
+                            name, blocked.key if blocked else "route", exc)
+                if self.client.pool.pin(for_orders=True) is None:
+                    result["error"] = (
+                        "CSFloat не показывает ордера с IP датацентра/VPN — "
+                        "отказали все маршруты. Нужен резидентский прокси")
+                    break
+                continue
             except AuthError as exc:
                 # Credentials are not per-band; every remaining one answers the
                 # same. Stop and say which credential to fix.
