@@ -32,6 +32,12 @@ MAX_FAILS = 3
 # x-ratelimit-limit it reports has been 500 on every address we have seen.
 ASSUMED_IP_LIMIT = 500
 
+# What an order sweep needs from the address it starts on: up to 25 bands plus
+# the listing lookups. Starting one on a route with less than this guarantees
+# it either stalls halfway or moves to a second address — an extra IP for the
+# account, which is the one thing the pool is arranged to avoid.
+ORDER_SWEEP_BUDGET = 30
+
 # A rotating route is metered locally over this window instead of by headers.
 ROTATING_WINDOW_SECONDS = 86400.0
 ROTATING_DEFAULT_LIMIT = ASSUMED_IP_LIMIT   # deliberately modest: one IP's worth
@@ -231,6 +237,17 @@ class ProxyPool:
             # VPN answers every band the same way, so it is out for this sweep
             # even though it still serves sales history perfectly well.
             usable = [r for r in usable if not r.vpn_blocked]
+            # The server's own address is a datacenter one, so the bands would
+            # be refused there anyway; spending the listing lookups from it
+            # only burns its quota. It stays a candidate when it is all there
+            # is — a collector running from home has no such problem.
+            proxied = [r for r in usable if r.url is not None]
+            usable = proxied or usable
+            # And start where there is budget to finish: draining picks the
+            # most spent address, which is exactly the one a twenty-request
+            # sweep should not begin on.
+            deep = [r for r in usable if r.budget_remaining() >= ORDER_SWEEP_BUDGET]
+            usable = deep or usable
         if not usable:
             return None
         fixed = [r for r in usable if not r.rotating]
