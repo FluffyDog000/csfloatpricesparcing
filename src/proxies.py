@@ -3,8 +3,10 @@
 CSFloat's request quota (x-ratelimit-*) is counted per IP, so every proxy —
 plus the direct connection — is its own budget. The pool keeps a small state
 record per route (remaining quota, reset time, 429 cooldown, failures) and
-always hands out the healthy route with the most quota left, which both
-multiplies the total budget and keeps any single IP from being hammered.
+drains them one at a time: a route is used until its daily quota is nearly
+spent, then the next takes over. Spreading requests evenly would multiply the
+budget just the same and cost far more — CSFloat counts the addresses one
+account speaks from, and an even spread shows it every address at once.
 
 A rotating proxy breaks that accounting: every request leaves from a different
 exit IP, so the x-ratelimit-* headers it returns describe a stranger's budget,
@@ -17,7 +19,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import random
 import time
 from dataclasses import dataclass, field
 
@@ -105,12 +106,23 @@ class RouteState:
                 and self.parked_until <= now_mono
                 and not self.quota_exhausted(reserve))
 
-    def score(self) -> float:
-        """Higher is better: prefer the route with the most quota left."""
+    def drain_key(self) -> tuple[int, float]:
+        """Sort key for draining: the route closest to its ceiling goes first.
+
+        Spreading requests across every healthy route is the obvious policy and
+        the wrong one against CSFloat, which counts how many addresses an
+        account speaks from: an even spread over a dozen routes showed it a
+        dozen IPs an hour and drew "too many requests from too many IPs", with
+        every rotating route parked for six hours. Drained one at a time, a
+        pool of any size shows one or two addresses a day and keeps the rest in
+        reserve — and the daily 500 is a quota, not a rate, so nothing is lost
+        by spending it from a single address.
+
+        A route whose budget is still unknown sorts last: it is an address
+        nobody has shown CSFloat yet, and opening one early is the whole thing
+        we are avoiding."""
         left = self.effective_remaining()
-        if left is None:
-            return float("inf")   # unknown -> assume fresh, try it
-        return float(left)
+        return (1, 0.0) if left is None else (0, float(left))
 
 
 class ProxyPool:
@@ -203,11 +215,9 @@ class ProxyPool:
             return None
         fixed = [r for r in usable if not r.rotating]
         usable = fixed or usable
-        best = max(r.score() for r in usable)
-        # Among equally-good routes prefer the least recently used one.
-        top = [r for r in usable if r.score() == best]
-        top.sort(key=lambda r: r.last_used)
-        return top[0] if len(top) == 1 else random.choice(top[:2])
+        # Drain, don't alternate — see RouteState.drain_key.
+        usable.sort(key=lambda r: (r.drain_key(), r.key))
+        return usable[0]
 
     def pin(self, for_orders: bool = False) -> RouteState | None:
         """Hold one route for a burst of requests, and return it.
