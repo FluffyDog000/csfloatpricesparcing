@@ -149,6 +149,32 @@ def test_routes_are_drained_one_at_a_time():
     assert pool.pick().key == "http://c:1", "only now is a fresh address opened"
 
 
+def test_unopened_routes_count_towards_the_budget():
+    """Draining leaves most of the pool deliberately unopened, and summing only
+    what CSFloat has spoken about reported forty fresh proxies as nothing: the
+    dashboard read "0 доступно сейчас" beside twenty thousand requests held in
+    reserve, and the pacing maths throttled to fit that phantom budget."""
+    import time as clock
+
+    from src.proxies import ASSUMED_IP_LIMIT, ProxyPool
+
+    pool = ProxyPool([f"http://p{i}:1" for i in range(40)], use_direct=False)
+    assert pool.total_remaining() == 40 * ASSUMED_IP_LIMIT
+    assert pool.usable_remaining() == 40 * ASSUMED_IP_LIMIT
+    assert pool.total_limit() == 40 * ASSUMED_IP_LIMIT
+
+    # Once CSFloat has spoken about a route, its own number is what counts.
+    route = pool.routes["http://p0:1"]
+    route.limit, route.remaining = 500, 120
+    route.reset = int(clock.time()) + 3600
+    assert pool.total_remaining() == 39 * ASSUMED_IP_LIMIT + 120
+
+    # The routes table still shows an unopened address as unopened, though —
+    # there the honest answer is "no number yet", not an assumption.
+    fresh = next(r for r in pool.snapshot() if r["key"] == "http://p1:1")
+    assert fresh["remaining"] is None
+
+
 def test_a_route_refused_for_orders_is_faulted_not_fatal():
     """"Disable your VPN" is about the exit address, not the account. Aborting
     the sweep on it left half a book on screen — five bands read, the rest
