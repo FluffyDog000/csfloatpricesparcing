@@ -28,9 +28,13 @@ DIRECT = "direct"                 # the server's own IP
 FAIL_COOLDOWN_SECONDS = 600.0     # park a route after repeated network errors
 MAX_FAILS = 3
 
+# What one IP is worth per window, when CSFloat has not told us yet: the
+# x-ratelimit-limit it reports has been 500 on every address we have seen.
+ASSUMED_IP_LIMIT = 500
+
 # A rotating route is metered locally over this window instead of by headers.
 ROTATING_WINDOW_SECONDS = 86400.0
-ROTATING_DEFAULT_LIMIT = 500      # same as one IP's quota: deliberately modest
+ROTATING_DEFAULT_LIMIT = ASSUMED_IP_LIMIT   # deliberately modest: one IP's worth
 # Markers that tag a proxy line as rotating, e.g. "http://gate:7000 #rotating".
 ROTATING_MARKERS = ("#rotating", "#rotate", "#rot", "#ротация", "#ротационный")
 
@@ -123,6 +127,22 @@ class RouteState:
         we are avoiding."""
         left = self.effective_remaining()
         return (1, 0.0) if left is None else (0, float(left))
+
+    def budget_remaining(self) -> int:
+        """Quota left for budgeting, counting an unopened route as a full window.
+
+        effective_remaining() answers "what did CSFloat last tell us about this
+        address", which is None for one we have never used — right for picking
+        a route, wrong for adding up a budget. Draining leaves most of the pool
+        deliberately unopened, so summing it the strict way reported forty
+        fresh proxies as nothing: the dashboard read "0 доступно сейчас" beside
+        twenty thousand requests held in reserve, and the pacing maths stretched
+        every interval to fit a budget that was not the real one."""
+        left = self.effective_remaining()
+        if left is not None:
+            return int(left)
+        return int(self.window_limit if self.rotating
+                   else (self.limit or ASSUMED_IP_LIMIT))
 
 
 class ProxyPool:
@@ -343,34 +363,28 @@ class ProxyPool:
     # -- reporting -----------------------------------------------------------
 
     def total_remaining(self) -> int | None:
-        """Sum of quota left across routes (None when nothing is known yet)."""
-        known = [r.effective_remaining() for r in self.routes.values()]
-        known = [n for n in known if n is not None]
-        return sum(known) if known else None
+        """Sum of quota left across routes — an unopened one counts as a full
+        window, since that is what it will report the moment it is used."""
+        if not self.routes:
+            return None
+        return sum(r.budget_remaining() for r in self.routes.values())
 
     def total_limit(self) -> int | None:
         """Sum of the routes' quota ceilings, to pair with total_remaining.
 
         Reporting a summed remaining against a single IP's limit produced
         nonsense on the dashboard — "8500 из 500 на окно"."""
-        known = []
-        for r in self.routes.values():
-            value = r.window_limit if r.rotating else r.limit
-            if value is not None:
-                known.append(value)
-        return sum(known) if known else None
+        if not self.routes:
+            return None
+        return sum(int(r.window_limit if r.rotating else (r.limit or ASSUMED_IP_LIMIT))
+                   for r in self.routes.values())
 
     def usable_remaining(self) -> int:
         """Quota that can actually be spent right now — parked routes hold
         budget nobody can use, and summing it reads as "plenty left"."""
         now = time.monotonic()
-        total = 0
-        for r in self.routes.values():
-            if not r.available(self.reserve, now):
-                continue
-            left = r.effective_remaining()
-            total += left if left is not None else 0
-        return total
+        return sum(r.budget_remaining() for r in self.routes.values()
+                   if r.available(self.reserve, now))
 
     def earliest_reset(self) -> int | None:
         resets = [r.effective_reset() for r in self.routes.values()]
