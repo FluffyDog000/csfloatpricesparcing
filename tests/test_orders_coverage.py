@@ -218,6 +218,36 @@ def test_a_route_refused_for_orders_is_faulted_not_fatal():
     assert "недоступны в принципе" not in (result["error"] or "")
 
 
+def test_a_sweep_starts_on_a_proxy_with_budget_to_finish():
+    """Draining hands out the most spent address, and the server's own IP is
+    the most spent of all — so every sweep began there and drew a 429 on its
+    first request, over and over. A sweep needs a proxied address with enough
+    budget to reach the last band."""
+    import time as clock
+
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://thin:1", "http://deep:1"], use_direct=True)
+    soon = int(clock.time()) + 3600
+    pool.routes["direct"].remaining, pool.routes["direct"].reset = 40, soon
+    pool.routes["http://thin:1"].remaining = 20
+    pool.routes["http://thin:1"].reset = soon
+    pool.routes["http://deep:1"].remaining = 400
+    pool.routes["http://deep:1"].reset = soon
+
+    assert pool.pin(for_orders=True).key == "http://deep:1"
+    pool.unpin()
+
+    # Sales history still drains, server IP and all: one request always fits.
+    assert pool.pick().key == "http://thin:1"
+
+    # With nothing else left, a thin route is still better than no sweep, and
+    # the drain order decides which of them it is.
+    pool.routes["http://deep:1"].remaining = 25
+    assert pool.pin(for_orders=True).key == "http://thin:1"
+    pool.unpin()
+
+
 def test_a_blocked_route_still_serves_sales_but_not_orders():
     from src.proxies import ProxyPool
 
