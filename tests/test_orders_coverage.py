@@ -110,9 +110,10 @@ def test_a_sweep_leaves_from_one_address():
     assert pinned is not None
     assert [pool.pick().key for _ in range(6)] == [pinned.key] * 6
 
-    # Unpinned, the pool spreads the load across routes again.
+    # Unpinned it does not go back to alternating either: routes are drained
+    # one at a time, so the account still speaks from one address.
     pool.unpin()
-    assert len({pool.pick().key for _ in range(20)}) > 1
+    assert len({pool.pick().key for _ in range(20)}) == 1
 
     # A pin must never wedge the pool: once that route is rate-limited the
     # next request goes somewhere else instead of into the same wall.
@@ -120,6 +121,32 @@ def test_a_sweep_leaves_from_one_address():
     pool.record_429(pinned, 600.0)
     assert pool.pick().key != pinned.key
     pool.unpin()
+
+
+def test_routes_are_drained_one_at_a_time():
+    """The spread is what CSFloat counts. A route keeps serving until its
+    quota is down to the reserve; only then does the next address open."""
+    import time as clock
+
+    from src.proxies import ProxyPool
+
+    pool = ProxyPool(["http://a:1", "http://b:1", "http://c:1"],
+                     use_direct=False, reserve=15)
+    soon = int(clock.time()) + 3600
+    pool.routes["http://a:1"].remaining, pool.routes["http://a:1"].reset = 300, soon
+    pool.routes["http://b:1"].remaining, pool.routes["http://b:1"].reset = 40, soon
+    # http://c:1 stays unknown: an address nobody has used yet.
+
+    assert {pool.pick().key for _ in range(10)} == {"http://b:1"}, \
+        "the route closest to its ceiling is spent first"
+
+    # Down to the reserve it drops out, and the next one takes over — still
+    # one address at a time, and the untouched one stays in reserve.
+    pool.routes["http://b:1"].remaining = 15
+    assert {pool.pick().key for _ in range(10)} == {"http://a:1"}
+
+    pool.routes["http://a:1"].remaining = 15
+    assert pool.pick().key == "http://c:1", "only now is a fresh address opened"
 
 
 def test_a_route_refused_for_orders_is_faulted_not_fatal():
