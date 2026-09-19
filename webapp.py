@@ -683,24 +683,40 @@ def _analysis_items(db) -> list[str]:
     return [n for n in names if isinstance(n, str)]
 
 
+# Bounds, not preferences: a band step of 0.5 spans a whole wear and a
+# minimum flow of 3/day passes nothing, and either would come back as an empty
+# report with no hint that the threshold, rather than the market, was the
+# reason. Out-of-range values are pulled to the nearest sane one and the page
+# is told what actually took effect.
+ANALYSIS_BOUNDS = {
+    "fee": (0.0, 0.20), "min_margin": (0.0, 1.0),
+    "window_days": (1.0, 365.0), "band_step": (0.005, 0.23),
+    "min_lambda": (0.0, 10.0), "min_wars": (0, 100),
+    "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
+}
+ANALYSIS_KEYS = (
+    ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
+    ("an_window", "window_days", float), ("an_step", "band_step", float),
+    ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
+    ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
+)
+
+
 def _analysis_params(db):
-    """Thresholds from the dashboard, falling back to the module defaults."""
+    """Thresholds from the dashboard, clamped, falling back to the defaults."""
     from src.pricing import Params
 
     p = Params()
-    for key, attr, cast in (
-        ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
-        ("an_window", "window_days", float), ("an_step", "band_step", float),
-        ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
-        ("an_max_fill", "max_fill_days", float),
-        ("an_min_sample", "min_sample", int),
-    ):
+    for key, attr, cast in ANALYSIS_KEYS:
         raw = db.get_setting(key)
-        if raw not in (None, ""):
-            try:
-                setattr(p, attr, cast(raw))
-            except (TypeError, ValueError):
-                pass
+        if raw in (None, ""):
+            continue
+        try:
+            value = cast(str(raw).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+        lo, hi = ANALYSIS_BOUNDS[attr]
+        setattr(p, attr, cast(min(max(value, lo), hi)))
     return p
 
 
@@ -811,11 +827,22 @@ def api_analysis_params():
     _require_admin()
     data = request.get_json(silent=True) or {}
     db = get_db()
-    for key in ("an_fee", "an_min_margin", "an_window", "an_step",
-                "an_min_lambda", "an_min_wars", "an_max_fill", "an_min_sample"):
-        if key in data:
-            db.set_setting(key, str(data[key]).strip())
-    return jsonify({"params": _analysis_params(db).__dict__})
+    rejected = []
+    for key, attr, cast in ANALYSIS_KEYS:
+        if key not in data:
+            continue
+        raw = str(data[key]).strip().replace(",", ".")
+        try:
+            value = cast(raw)
+        except (TypeError, ValueError):
+            rejected.append(f"{key}: '{raw}' — не число")
+            continue
+        lo, hi = ANALYSIS_BOUNDS[attr]
+        if not lo <= value <= hi:
+            rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
+        db.set_setting(key, str(cast(min(max(value, lo), hi))))
+    return jsonify({"params": _analysis_params(db).__dict__,
+                    "rejected": rejected})
 
 
 @app.route("/api/items/update", methods=["POST"])

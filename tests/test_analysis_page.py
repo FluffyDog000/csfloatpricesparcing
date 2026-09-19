@@ -123,3 +123,50 @@ def test_thresholds_round_trip_and_change_the_verdict():
     r = c.post("/api/analysis/params", json={"an_min_margin": "0.25"})
     assert r.get_json()["params"]["min_margin"] == 0.25
     assert c.get("/api/analysis").get_json()["params"]["min_margin"] == 0.25
+
+
+def test_the_page_loads_the_shared_helpers_it_calls():
+    """It shipped without common.js and every button died on "getJSON is not
+    defined" — the page renders fine, so nothing else catches this."""
+    import pathlib
+
+    page = pathlib.Path("templates/analysis.html").read_text()
+    script = pathlib.Path("static/analysis.js").read_text()
+    for helper in ("getJSON", "postJSON"):
+        if helper in script:
+            assert "common.js" in page, f"{helper} lives in common.js"
+    assert page.index("common.js") < page.index("analysis.js"), \
+        "helpers have to be defined before the page script runs"
+
+
+def test_a_threshold_out_of_range_is_pulled_back_and_reported():
+    """A band step of 0.5 spans a whole wear and a flow of 3/day passes
+    nothing; either returns an empty report that reads as "no opportunities"
+    rather than "your threshold did that"."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _app([name])
+    r = c.post("/api/analysis/params",
+               json={"an_step": "0.5", "an_min_lambda": "3"}).get_json()
+
+    assert r["params"]["band_step"] == 0.23, "clamped to the widest wear"
+    assert r["params"]["min_lambda"] == 3.0, "3/day is steep but not absurd"
+    assert any("an_step" in m for m in r["rejected"]), "and the page is told"
+
+
+def test_a_threshold_that_is_not_a_number_is_refused_not_stored():
+    """"0.15-038" typed into the band-step box: it reads like a float range,
+    which is exactly how the label was misread."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _app([name])
+    before = c.get("/api/analysis").get_json()["params"]["band_step"]
+    r = c.post("/api/analysis/params", json={"an_step": "0.15-038"}).get_json()
+
+    assert r["params"]["band_step"] == before, "the old value survives"
+    assert any("не число" in m for m in r["rejected"])
+
+
+def test_a_comma_decimal_is_accepted():
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _app([name])
+    r = c.post("/api/analysis/params", json={"an_step": "0,03"}).get_json()
+    assert r["params"]["band_step"] == 0.03

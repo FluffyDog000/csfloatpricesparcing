@@ -26,22 +26,31 @@
   <details>
     <summary>Пороги расчёта</summary>
     <div class="calc-grid analysis-params">
-      <label>комиссия, %
-        <input type="number" id="p-fee" class="input" step="0.1" min="0"></label>
-      <label>мин. маржа, %
-        <input type="number" id="p-margin" class="input" step="0.5" min="0"></label>
+      <label>комиссия CSFloat при продаже, %
+        <input type="number" id="p-fee" class="input" step="0.1" min="0" max="20" value="2">
+        <small class="muted">обычно 2</small></label>
+      <label>минимальная маржа, %
+        <input type="number" id="p-margin" class="input" step="0.5" min="0" max="100" value="3">
+        <small class="muted">ниже неё покупать не стоит; задаёт потолок цены</small></label>
       <label>окно истории, дней
-        <input type="number" id="p-window" class="input" step="1" min="1"></label>
-      <label>ширина полосы float
-        <input type="number" id="p-step" class="input" step="0.01" min="0.005"></label>
-      <label>мин. сделок в сутки
-        <input type="number" id="p-lambda" class="input" step="0.01" min="0"></label>
-      <label>мин. запас, перебиваний
-        <input type="number" id="p-wars" class="input" step="1" min="0"></label>
-      <label>макс. набор, дней
-        <input type="number" id="p-fill" class="input" step="1" min="1"></label>
-      <label>мин. выборка, продаж
-        <input type="number" id="p-sample" class="input" step="1" min="1"></label>
+        <input type="number" id="p-window" class="input" step="1" min="1" max="365" value="28">
+        <small class="muted">за сколько дней считать поток сделок</small></label>
+      <label>ширина <em>одной</em> полосы float
+        <input type="number" id="p-step" class="input" step="0.005" min="0.005" max="0.23" value="0.02">
+        <small class="muted">0.02 → полосы 0.15–0.17, 0.17–0.19 и т.д.<br>
+          не диапазон, а шаг</small></label>
+      <label>минимальный поток, сделок в сутки
+        <input type="number" id="p-lambda" class="input" step="0.01" min="0" max="10" value="0.1">
+        <small class="muted">0.1 ≈ 3 подходящие сделки в месяц</small></label>
+      <label>минимальный запас, перебиваний
+        <input type="number" id="p-wars" class="input" step="1" min="0" max="100" value="2">
+        <small class="muted">сколько раз сможем ответить конкуренту</small></label>
+      <label>максимальный срок набора, дней
+        <input type="number" id="p-fill" class="input" step="1" min="1" max="365" value="21">
+        <small class="muted">дольше — капитал стоит мёртво</small></label>
+      <label>минимальная выборка, продаж в полосе
+        <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
+        <small class="muted">меньше — медиана ничего не значит</small></label>
     </div>
     <button class="btn" id="p-save">Сохранить пороги</button>
   </details>
@@ -50,5 +59,6 @@
 <div id="an-results"></div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='common.js') }}"></script>
 <script src="{{ url_for('static', filename='analysis.js') }}"></script>
 {% endblock %}

@@ -210,7 +210,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         an_min_sample: $("p-sample").value,
       }, token());
       fillParams(r.params);
-      note("Пороги сохранены.");
+      // A value out of range is pulled to the nearest sane one; saying so
+      // beats an empty report the user reads as "nothing qualifies".
+      note((r.rejected && r.rejected.length)
+        ? "Поправлено: " + r.rejected.join("; ")
+        : "Пороги сохранены.", !!(r.rejected && r.rejected.length));
       loadItems();
     } catch (e) { note(e.message, true); }
   };
