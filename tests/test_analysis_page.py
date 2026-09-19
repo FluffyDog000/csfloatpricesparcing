@@ -372,8 +372,9 @@ def test_the_captured_request_is_saved_only_when_sent():
     got = c.get("/api/analysis/placement").get_json()
 
     assert not got["configured"], "an empty install has no request to send"
-    assert got["confirmed"] == ["update_method", "update_path"], \
-        "only the PATCH endpoint was actually captured"
+    assert got["confirmed"] == ["create_method", "create_path",
+                                "update_method", "update_path"], \
+        "create and amend were captured; cancelling was not"
     assert got["suggested"]["update_path"] == "/api/v1/buy-orders/{order_id}"
 
     saved = c.post("/api/analysis/placement",

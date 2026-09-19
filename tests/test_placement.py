@@ -159,13 +159,17 @@ def test_a_path_needing_an_id_refuses_to_render_without_one():
 
 
 def test_the_suggestion_is_not_the_configuration():
-    """Only the PATCH endpoint was captured; the rest follow its shape and are
-    a starting point to confirm, not a default to act on. An empty spec stays
-    empty until something is saved deliberately."""
-    from src.placement import CONFIRMED, load
+    """Create and amend were captured from the browser; cancelling was not,
+    and neither was the amend body - which is what separates changing a price
+    from taking the order down. An empty spec stays empty until something is
+    saved deliberately."""
+    from src.placement import CONFIRMED, SUGGESTED, load
 
     assert not load(None).can_place
-    assert CONFIRMED == {"update_path", "update_method"}
+    assert CONFIRMED == {"create_path", "create_method",
+                         "update_path", "update_method"}
+    assert SUGGESTED.create_path == "/api/v1/buy-orders"
+    assert "cancel_path" not in CONFIRMED, "still a guess, and it withdraws us"
 
 
 def test_a_missing_amend_endpoint_is_called_out_as_a_cost():

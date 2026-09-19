@@ -85,10 +85,11 @@
   <p class="muted">Что бот сделал бы прямо сейчас. Ничего не отправляется.</p>
   <details id="place-block">
     <summary>Запрос постановки (настройка)</summary>
-    <p class="muted">Подтверждён только <code>PATCH /api/v1/buy-orders/{order_id}</code>
-      — он снят с сайта. Остальные пути выведены из его формы: проверь их
-      в DevTools → Network, прежде чем сохранять. Ничего не отправляется,
-      пока не нажата «Сохранить запрос».</p>
+    <p class="muted">Сняты с сайта: <code>POST /api/v1/buy-orders</code> и
+      <code>PATCH /api/v1/buy-orders/{order_id}</code>. Отмена и тело правки
+      пока выведены по форме — проверь в DevTools → Network, прежде чем
+      сохранять. Без отмены нельзя уйти с позиции, которую перебили выше
+      потолка. Ничего не отправляется, пока не нажата «Сохранить запрос».</p>
     <div class="calc-grid analysis-params" id="place-fields"></div>
     <button class="btn" id="place-save">Сохранить запрос</button>
     <button class="btn" id="place-suggest">Подставить выведенные</button>

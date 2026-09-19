@@ -332,7 +332,11 @@
       // Which of these came off the site and which were inferred from it is
       // the difference between a fact and a guess that spends money.
       const sure = (d.confirmed || []).indexOf(key) >= 0;
-      wrap.textContent = label + (sure ? " ✓ снято с сайта" : "");
+      wrap.textContent = label;
+      const mark = document.createElement("small");
+      mark.className = sure ? "ok" : "over";
+      mark.textContent = sure ? " ✓ снято с сайта" : " выведено — проверь";
+      wrap.appendChild(mark);
       const input = document.createElement("input");
       input.className = "input";
       input.id = "sp-" + key;

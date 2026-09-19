@@ -85,24 +85,28 @@ class Spec:
         return dict(self.__dict__)
 
 
-# One endpoint is confirmed - PATCH https://csfloat.com/api/v1/buy-orders/{id},
-# captured while amending an order - and the rest follow the shape of it. They
-# are a starting point to be confirmed against the browser, not a default:
-# nothing is sent until they are saved deliberately, because the one that is
-# guessed at here is the one that spends money.
+# Captured from the browser, one request at a time:
+#
+#   POST  https://csfloat.com/api/v1/buy-orders             create
+#   PATCH https://csfloat.com/api/v1/buy-orders/{order_id}  amend in place
+#
+# Cancelling has not been captured yet, so DELETE on the same resource is a
+# guess - and so is the body of the PATCH, which matters because it is what
+# separates "change the price" from "take the order down". Both are offered as
+# a starting point and neither is sent until it is saved deliberately.
 SUGGESTED = Spec(
-    create_method="POST",
-    create_path="/api/v1/buy-orders",           # inferred from the PATCH path
-    create_body=DEFAULT_CREATE_BODY,
-    update_method="PATCH",
+    create_method="POST",                          # confirmed
+    create_path="/api/v1/buy-orders",              # confirmed
+    create_body=DEFAULT_CREATE_BODY,               # from the reply it returns
+    update_method="PATCH",                         # confirmed
     update_path="/api/v1/buy-orders/{order_id}",   # confirmed
-    update_body='{"price": {price_cents}}',
-    cancel_method="DELETE",
-    cancel_path="/api/v1/buy-orders/{order_id}",   # inferred
-    list_path="/api/v1/buy-orders",                # inferred
+    update_body='{"price": {price_cents}}',        # guessed
+    cancel_method="DELETE",                        # guessed
+    cancel_path="/api/v1/buy-orders/{order_id}",   # guessed
+    list_path="/api/v1/buy-orders",                # guessed
 )
 
-CONFIRMED = {"update_path", "update_method"}
+CONFIRMED = {"create_path", "create_method", "update_path", "update_method"}
 
 
 def endpoint(path: str, order_id: str | None = None) -> str:
