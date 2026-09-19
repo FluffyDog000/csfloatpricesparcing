@@ -28,11 +28,11 @@ def test_prices_go_out_in_cents_where_the_capture_used_cents():
     """Every other CSFloat endpoint quotes integer cents. Sending dollars
     where cents were meant bids a hundredth of the price - or a hundred times
     it, which is the direction that empties an account."""
-    body = ('{"market_hash_name": "{name}", "price": {price_cents},'
+    body = ('{"market_hash_name": "{name}", "max_price": {price_cents},'
             ' "min_float": {float_min}, "max_float": {float_max}}')
     out = render(body, name="★ Gloves | Fade (Field-Tested)", price=159.0,
                  float_min=0.32, float_max=0.38)
-    assert out["price"] == 15900
+    assert out["max_price"] == 15900
     assert out["min_float"] == 0.32 and out["max_float"] == 0.38
     assert out["market_hash_name"].startswith("★")
 
@@ -122,12 +122,14 @@ def test_the_default_body_matches_what_the_site_returned():
     sent = render(DEFAULT_CREATE_BODY,
                   name="AK-47 | Crane Flight (Battle-Scarred)",
                   price=6.30, float_min=0.605, float_max=1.0)
-    assert sent["price"] == 630, "cents, as the reply quoted them"
+    assert sent["max_price"] == 630, "cents, and named as the request wants it"
     assert sent["hybrid_properties"] == {"min_float": 0.605, "max_float": 1.0}
     assert sent["market_hash_name"] == SCOPED["market_hash_name"]
 
-    # Round trip: what we would send, read back the way a reply is read.
-    echoed = parse_order(dict(sent, id="x", bought_item_count=0))
+    # Round trip: what we would send, read back the way a reply is read -
+    # which means renaming max_price to price, as CSFloat does.
+    echoed = parse_order(dict(sent, id="x", price=sent.pop("max_price"),
+                              bought_item_count=0))
     assert echoed["price"] == 6.30
     assert echoed["float_min"] == 0.605 and echoed["float_max"] == 1.0
 
@@ -145,7 +147,7 @@ def test_amending_an_order_is_its_own_operation():
 
     body = render(SUGGESTED.update_body, name="x", price=6.30,
                   float_min=None, float_max=None)
-    assert body == {"price": 630}, "cents here as everywhere else"
+    assert body == {"max_price": 630}, "cents here as everywhere else"
 
 
 def test_a_path_needing_an_id_refuses_to_render_without_one():
@@ -173,7 +175,7 @@ def test_the_suggestion_is_not_the_configuration():
     assert SUGGESTED.cancel_method == "DELETE"
     # The amend body is the one thing still worked out rather than seen, and
     # it is what separates changing a price from taking an order down.
-    assert SUGGESTED.update_body == '{"price": {price_cents}}'
+    assert SUGGESTED.update_body == '{"max_price": {price_cents}}'
 
 
 def test_a_missing_amend_endpoint_is_called_out_as_a_cost():
@@ -183,3 +185,20 @@ def test_a_missing_amend_endpoint_is_called_out_as_a_cost():
                 '"cancel_path": "/x/{order_id}"}')
     assert spec.can_place and spec.can_cancel and not spec.can_update
     assert "правка" in describe(spec)
+
+
+def test_the_price_field_is_named_as_the_request_wants_it():
+    """Six orders came back "orders must have a max price above 0" (code 5).
+    The reply calls the field price; the request calls it max_price, and the
+    message names its meaning too - a buy order carries the most you will pay,
+    and CSFloat charges the lower of that and the listing."""
+    from src.placement import DEFAULT_CREATE_BODY, SUGGESTED, render
+
+    created = render(DEFAULT_CREATE_BODY, name="x", price=49.0,
+                     float_min=0.1501, float_max=0.158)
+    assert created["max_price"] == 4900
+    assert "price" not in created, "the name the reply uses is not the one sent"
+
+    amended = render(SUGGESTED.update_body, name="x", price=49.0,
+                     float_min=None, float_max=None)
+    assert amended == {"max_price": 4900}, "the same field amends it"

@@ -47,7 +47,8 @@ def test_placing_for_real_sends_cents_and_the_float_band():
 
     method, url, body = rec.calls[0]
     assert (method, url) == ("POST", "https://csfloat.com/api/v1/buy-orders")
-    assert body["price"] == 15900, "cents, as the site quotes them"
+    assert body["max_price"] == 15900, \
+        "the request names it max_price - the reply calls it price"
     assert body["hybrid_properties"] == {"min_float": 0.32, "max_float": 0.38}
     assert got.ok and got.remote_id == "abc"
 
@@ -60,7 +61,7 @@ def test_answering_an_outbid_amends_rather_than_replaces():
     method, url, body = rec.calls[0]
     assert method == "PATCH"
     assert url.endswith("/api/v1/buy-orders/xyz"), "the order keeps its place"
-    assert body == {"price": 16100}
+    assert body == {"max_price": 16100}
     assert got.ok
 
 

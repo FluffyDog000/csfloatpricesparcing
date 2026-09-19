@@ -623,9 +623,14 @@
     };
 
     $("place-suggest").onclick = () => {
+      // Overwrites, because what it is usually needed for is replacing a
+      // shape that has since been corrected - filling only the blanks left
+      // a body CSFloat had already rejected sitting there.
+      const filled = PLACE_FIELDS.some(([k]) => ($("sp-" + k) || {}).value);
+      if (filled && !confirm("Заменить текущие значения выведенными?")) return;
       PLACE_FIELDS.forEach(([key]) => {
         const el = $("sp-" + key);
-        if (el && !el.value) el.value = suggestedSpec[key] || "";
+        if (el) el.value = suggestedSpec[key] || "";
       });
       $("place-msg").textContent = "Подставлено. Проверь пути и сохрани.";
       $("place-msg").className = "muted";

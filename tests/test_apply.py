@@ -80,7 +80,7 @@ def test_a_real_run_sends_once_and_records_the_position():
 
     assert out["done"] == 1 and not out["dry_run"]
     assert len(sent) == 1 and sent[0][0] == "POST"
-    assert sent[0][2]["price"] == 15900
+    assert sent[0][2]["max_price"] == 15900
 
     held = db.our_orders()
     assert len(held) == 1

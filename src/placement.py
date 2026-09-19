@@ -40,8 +40,13 @@ FIELDS = ("name", "price", "price_cents", "float_min", "float_max", "quantity")
 # Money is in integer cents ($6.30 arrives as 630), and the float bounds sit
 # inside hybrid_properties under min_float/max_float - the same shape the
 # order-book parser already reads off the book.
+#
+# The reply calls the price `price`; the request does not. Sending that name
+# drew "orders must have a max price above 0" (code 5), which names the field
+# and its meaning at once: a buy order carries the most you will pay, and
+# CSFloat charges the lower of that and the listing.
 DEFAULT_CREATE_BODY = (
-    '{"market_hash_name": "{name}", "price": {price_cents},'
+    '{"market_hash_name": "{name}", "max_price": {price_cents},'
     ' "qty": {quantity},'
     ' "hybrid_properties": {"min_float": {float_min}, "max_float": {float_max}}}'
 )
@@ -101,7 +106,7 @@ SUGGESTED = Spec(
     create_body=DEFAULT_CREATE_BODY,               # from the reply it returns
     update_method="PATCH",                         # confirmed
     update_path="/api/v1/buy-orders/{order_id}",   # confirmed
-    update_body='{"price": {price_cents}}',        # guessed
+    update_body='{"max_price": {price_cents}}',    # same field as create
     cancel_method="DELETE",                        # confirmed
     cancel_path="/api/v1/buy-orders/{order_id}",   # confirmed
     list_path="/api/v1/buy-orders",                # guessed
