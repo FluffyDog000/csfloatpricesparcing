@@ -135,7 +135,9 @@ def test_the_page_loads_the_shared_helpers_it_calls():
     for helper in ("getJSON", "postJSON"):
         if helper in script:
             assert "common.js" in page, f"{helper} lives in common.js"
-    assert page.index("common.js") < page.index("analysis.js"), \
+    import re
+    tags = re.findall(r'<script src="\{\{ asset\(\'([^\']+)\'\)', page)
+    assert tags.index("common.js") < tags.index("analysis.js"), \
         "helpers have to be defined before the page script runs"
 
 
@@ -228,3 +230,21 @@ def test_diag_reports_whether_sessions_survive_a_restart():
     d = c.get("/api/diag").get_json()
     assert "session_persistent" in d and "auth_enabled" in d
     assert "commit" in d and "build" in d
+
+
+def test_the_page_can_tell_that_its_own_script_is_stale():
+    """Three rounds went on a page whose script was a different version than
+    the server's, with nothing on screen able to say so. The bootstrap is
+    inline, so it arrives with the markup and cannot go stale separately."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _app([name])
+    page = c.get("/analysis").get_data(as_text=True)
+
+    assert "ANALYSIS_BUILD" in page, "the page checks what the script announced"
+    assert "не выполнился" in page, "and says so when the script never ran"
+    assert "кэширует" in page, "naming the likely cause: a caching proxy"
+
+    import pathlib
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "window.ANALYSIS_BUILD = BUILD" in js, \
+        "the script announces its build before doing any work"

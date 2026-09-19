@@ -16,6 +16,9 @@ let busy = false;
 
 const BUILD = (document.currentScript && document.currentScript.src || "")
   .split("?v=")[1] || "?";
+// Announced before anything else runs, so the inline bootstrap in the page
+// can compare it against what the server meant to serve.
+window.ANALYSIS_BUILD = BUILD;
 
 function say(text, kind) {
   const el = $("an-note");

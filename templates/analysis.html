@@ -59,6 +59,39 @@
 <div id="an-results"></div>
 {% endblock %}
 {% block scripts %}
+<script>
+  // Inline, so it arrives with the markup and cannot be cached apart from it.
+  // Three rounds were lost to a page whose script was a different version
+  // than the server's, with nothing on screen able to say so.
+  (function () {
+    var note = document.getElementById("an-note");
+    var expect = "{{ asset_build }}";
+    function show(text, cls) {
+      if (!note) return;
+      note.textContent = text;
+      note.className = cls || "muted";
+    }
+    show("Загружаю скрипт страницы… (сборка " + expect + ")");
+    window.addEventListener("error", function (e) {
+      show("Ошибка в скрипте: " + (e.message || e.type)
+        + (e.filename ? " — " + e.filename.split("/").pop() : ""), "err");
+    });
+    window.addEventListener("load", function () {
+      setTimeout(function () {
+        if (window.ANALYSIS_BUILD === undefined) {
+          show("analysis.js не выполнился. Открой " +
+            "/static/analysis.js?v=" + expect +
+            " — если там старый код, статику кэширует прокси или браузер.",
+            "err");
+        } else if (String(window.ANALYSIS_BUILD) !== expect) {
+          show("Браузер выполняет старый analysis.js (сборка "
+            + window.ANALYSIS_BUILD + ", на сервере " + expect
+            + ") — статику кэширует прокси.", "err");
+        }
+      }, 1500);
+    });
+  })();
+</script>
 <script src="{{ asset('common.js') }}"></script>
 <script src="{{ asset('analysis.js') }}"></script>
 {% endblock %}
