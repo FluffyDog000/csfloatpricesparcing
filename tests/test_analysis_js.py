@@ -129,3 +129,79 @@ def test_both_scripts_parse_as_one_program():
         assert out.returncode == 0, out.stderr
     finally:
         os.unlink(path)
+
+
+def _plan_payload(**over):
+    base = {
+        "actions": [{"kind": "place", "item": "★ Gloves | Fade (Field-Tested)",
+                     "float_min": 0.32, "float_max": 0.38, "price": 159.0,
+                     "ceiling": 170.0, "reason": "59%/мес", "order_id": None,
+                     "remote_id": None, "was": None}],
+        "limits": {"total_capital": 500.0, "max_orders": 20,
+                   "max_orders_per_item": 3, "per_item_capital": 0.0,
+                   "patience_days": 14.0},
+        "held": {}, "by_item": {"★ Gloves | Fade (Field-Tested)": 159.0},
+        "planned_total": 159.0, "concentration": 1.0,
+        "armed": True, "dry_run": True, "pending": False, "last_apply": None,
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "last_defend": None,
+        "placement": "настроено: POST /api/v1/buy-orders",
+        "can_place": True, "can_cancel": True, "waiting": [],
+    }
+    base.update(over)
+    return base
+
+
+def _run_with_plan(plan, api=None):
+    import json
+    import os
+    import subprocess
+    import tempfile
+
+    from tests.test_analysis_page import _app
+    c = _app()
+    body = api if api is not None else c.get("/api/analysis").get_json()
+    paths = []
+    for blob in (body, plan):
+        fh = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                         encoding="utf-8")
+        json.dump(blob, fh, ensure_ascii=False)
+        fh.close()
+        paths.append(fh.name)
+    try:
+        out = subprocess.run(
+            [NODE, "tests/js/dom_stub.js", "static/analysis.js", *paths],
+            capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout.strip().splitlines()[-1])
+    finally:
+        for path in paths:
+            os.unlink(path)
+
+
+def test_the_apply_button_says_why_it_would_refuse():
+    """A button that will be refused should say so before it is pressed:
+    "ничего не произошло" is the one outcome that teaches nothing."""
+    import pathlib
+
+    js = pathlib.Path("static/analysis.js").read_text()
+    for reason in ("запрос постановки не настроен", "бюджет равен нулю",
+                   "выставление не разрешено", "нечего выполнять"):
+        assert reason in js
+
+    _run_with_plan(_plan_payload(can_place=False))
+    _run_with_plan(_plan_payload(limits={"total_capital": 0.0, "max_orders": 20,
+                                         "max_orders_per_item": 3,
+                                         "per_item_capital": 0.0,
+                                         "patience_days": 14.0}))
+
+
+def test_handing_a_plan_over_shows_what_went():
+    """The collector works on its own cycle, so between the press and the
+    result there is a gap the page used to spend in silence."""
+    import pathlib
+
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "renderQueued" in js, "what was sent is listed at once"
+    assert "Жду сборщик" in js, "and the wait is shown as progress"
+    assert "не отчитался" in js, "and it gives up saying so, not silently"

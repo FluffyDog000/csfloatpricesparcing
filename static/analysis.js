@@ -285,6 +285,20 @@
     renderDefence(d);
     renderApplyResult(d.last_apply, d.pending);
 
+    // A button that will refuse should say so before it is pressed, not
+    // after: "ничего не произошло" is the one outcome that teaches nothing.
+    const doing = d.actions.filter((a) => a.kind !== "keep");
+    const blocking = !d.can_place ? "запрос постановки не настроен"
+      : !d.limits.total_capital ? "бюджет равен нулю"
+      : !doing.length ? "в плане нечего выполнять"
+      : !d.armed ? "выставление не разрешено"
+      : "";
+    const apply = $("plan-apply");
+    apply.disabled = !!blocking;
+    apply.title = blocking || "Передать план сборщику";
+    apply.textContent = blocking
+      ? "Применить план — " + blocking : "Применить план";
+
     const places = d.actions.filter((a) => a.kind === "place").length;
     const sum = document.createElement("p");
     sum.innerHTML = `Потребуется <b>${money(need)}</b> из лимита `
@@ -356,6 +370,46 @@
     $("place-msg").className = d.configured ? "ok" : "muted";
   }
 
+  function actionTable(rows, extra) {
+    const t = document.createElement("table");
+    t.className = "stat";
+    t.innerHTML = `<thead><tr><th>что</th><th>предмет</th><th>float</th>
+      <th>цена</th>${extra ? `<th>${extra}</th>` : "<th>почему</th>"}
+      </tr></thead>`;
+    const tb = document.createElement("tbody");
+    rows.forEach((r) => {
+      const a = r.action || r;
+      const tr = document.createElement("tr");
+      tr.className = r.ok === false ? "act-cancel"
+        : (KIND[a.kind] || ["", "act-keep"])[1];
+      tr.innerHTML = `<td><b>${(KIND[a.kind] || [a.kind])[0]}</b></td>
+        <td>${a.item}</td>
+        <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
+        <td><b>${money(a.price)}</b>${
+          a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
+        <td class="muted">${r.detail || a.reason}</td>`;
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    return t;
+  }
+
+  /** What was just handed over, before the collector has touched it. */
+  function renderQueued(actions, note) {
+    const box = $("plan-result");
+    box.innerHTML = "";
+    const head = document.createElement("p");
+    head.className = "ok";
+    head.textContent = note;
+    box.appendChild(head);
+    box.appendChild(actionTable(actions));
+    const wait = document.createElement("p");
+    wait.className = "muted";
+    wait.id = "plan-waiting";
+    wait.textContent = "Жду сборщик…";
+    box.appendChild(wait);
+  }
+
   function renderDefence(d) {
     const box = $("plan-defence");
     if (!box) return;
@@ -389,23 +443,7 @@
       + (res.dry_run ? " (вхолостую, ничего не отправлялось)" : "")
       + ` · ${String(res.at).slice(0, 16).replace("T", " ")}`;
     box.appendChild(head);
-    const t = document.createElement("table");
-    t.className = "stat";
-    t.innerHTML = "<thead><tr><th>что</th><th>float</th><th>цена</th>"
-      + "<th>итог</th></tr></thead>";
-    const tb = document.createElement("tbody");
-    res.results.forEach((r) => {
-      const a = r.action;
-      const tr = document.createElement("tr");
-      tr.className = r.ok ? "act-keep" : "act-cancel";
-      tr.innerHTML = `<td>${(KIND[a.kind] || [a.kind])[0]}</td>
-        <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
-        <td>${money(a.price)}</td>
-        <td class="muted">${r.detail}</td>`;
-      tb.appendChild(tr);
-    });
-    t.appendChild(tb);
-    box.appendChild(t);
+    box.appendChild(actionTable(res.results, "итог"));
   }
 
   function fillLimits(l) {
@@ -553,9 +591,31 @@
         return;
       action("Применяю план", async () => {
         const r = await postJSON("/api/analysis/apply", {}, token());
-        say(`${r.note} Действий: ${r.queued}.`
-          + (r.dry_run ? " Вхолостую." : ""), "ok");
-        await loadPlan();
+        if (!r.queued) { say(r.note, "err"); return; }
+        renderQueued(r.actions, `Передано сборщику: ${r.queued} действий`
+          + (r.dry_run ? " (вхолостую)" : "") + ".");
+        say(r.note, "ok");
+
+        // The collector picks work up on its own cycle, so the page waits
+        // rather than leaving a handover looking like a dead button.
+        for (let i = 1; i <= 24; i += 1) {
+          await new Promise((ok) => setTimeout(ok, 5000));
+          let d;
+          try { d = await getJSON("/api/analysis/plan"); }
+          catch (e) { continue; }
+          if (!d.pending && d.last_apply) {
+            await loadPlan();
+            const res = d.last_apply;
+            say(`Выполнено ${res.done} из ${res.done + res.failed}`
+              + (res.dry_run ? " (вхолостую — ничего не отправлялось)" : ""),
+              res.failed ? "err" : "ok");
+            return;
+          }
+          const w = $("plan-waiting");
+          if (w) w.textContent = `Жду сборщик… проверка ${i} из 24`;
+        }
+        say("Сборщик не отчитался за две минуты — посмотри «Нагрузка», "
+          + "не на паузе ли он.", "err");
       });
     };
 

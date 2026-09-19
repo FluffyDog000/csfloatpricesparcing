@@ -1017,6 +1017,9 @@ def api_analysis_apply():
                 len(doing), db.get_setting("analysis_dry_run", "1"))
     return jsonify({
         "queued": len(doing),
+        # Handed back so the page can show what went, rather than only how
+        # many: a count is indistinguishable from a button that did nothing.
+        "actions": doing,
         "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
         "waiting": waiting,
         "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
