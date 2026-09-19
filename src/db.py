@@ -444,6 +444,12 @@ class Database:
         sql += " ORDER BY fetched_at, float_min"
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
+    def item_name(self, item_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT market_hash_name FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        return row["market_hash_name"] if row else None
+
     def our_orders(self, item_id: int | None = None,
                    live_only: bool = True) -> list[dict[str, Any]]:
         sql = ("SELECT id, item_id, float_min, float_max, price, ceiling, "

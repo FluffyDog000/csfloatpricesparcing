@@ -764,76 +764,13 @@ def _analysis_items(db) -> list[str]:
     return [n for n in names if isinstance(n, str)]
 
 
-# Bounds, not preferences: a band step of 0.5 spans a whole wear and a
-# minimum flow of 3/day passes nothing, and either would come back as an empty
-# report with no hint that the threshold, rather than the market, was the
-# reason. Out-of-range values are pulled to the nearest sane one and the page
-# is told what actually took effect.
-ANALYSIS_BOUNDS = {
-    "fee": (0.0, 0.20), "min_margin": (0.0, 1.0),
-    "window_days": (1.0, 365.0), "band_step": (0.005, 0.23),
-    "min_lambda": (0.0, 10.0), "min_wars": (0, 100),
-    "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
-    "bid_tolerance": (0.0, 1.0), "sigma_k": (0.0, 5.0),
-}
+from src.settings import (LIMIT_BOUNDS, LIMIT_KEYS, PARAM_BOUNDS,
+                          PARAM_KEYS, defend_minutes, defending)
+from src.settings import limits as _analysis_limits
+from src.settings import params as _analysis_params
 
-# Money limits live apart from the scoring thresholds: these decide how much
-# may be at risk, not which bands are worth holding.
-LIMIT_BOUNDS = {
-    "total_capital": (0.0, 1_000_000.0), "per_item_capital": (0.0, 1_000_000.0),
-    "max_orders": (0, 1000), "max_orders_per_item": (0, 1000),
-    "patience_days": (0.0, 365.0),
-}
-LIMIT_KEYS = (
-    ("an_total_capital", "total_capital", float),
-    ("an_per_item_capital", "per_item_capital", float),
-    ("an_max_orders", "max_orders", int),
-    ("an_max_per_item", "max_orders_per_item", int),
-    ("an_patience", "patience_days", float),
-)
-
-
-def _analysis_limits(db):
-    from src.executor import Limits
-
-    lim = Limits()
-    for key, attr, cast in LIMIT_KEYS:
-        raw = db.get_setting(key)
-        if raw in (None, ""):
-            continue
-        try:
-            value = cast(str(raw).strip().replace(",", "."))
-        except (TypeError, ValueError):
-            continue
-        lo, hi = LIMIT_BOUNDS[attr]
-        setattr(lim, attr, cast(min(max(value, lo), hi)))
-    return lim
-ANALYSIS_KEYS = (
-    ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
-    ("an_window", "window_days", float), ("an_step", "band_step", float),
-    ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
-    ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
-    ("an_bid_tol", "bid_tolerance", float),
-    ("an_sigma_k", "sigma_k", float),
-)
-
-
-def _analysis_params(db):
-    """Thresholds from the dashboard, clamped, falling back to the defaults."""
-    from src.pricing import Params
-
-    p = Params()
-    for key, attr, cast in ANALYSIS_KEYS:
-        raw = db.get_setting(key)
-        if raw in (None, ""):
-            continue
-        try:
-            value = cast(str(raw).strip().replace(",", "."))
-        except (TypeError, ValueError):
-            continue
-        lo, hi = ANALYSIS_BOUNDS[attr]
-        setattr(p, attr, cast(min(max(value, lo), hi)))
-    return p
+ANALYSIS_BOUNDS = PARAM_BOUNDS
+ANALYSIS_KEYS = PARAM_KEYS
 
 
 @app.route("/api/analysis/items", methods=["POST"])
@@ -1015,6 +952,10 @@ def api_analysis_plan():
         "armed": (db.get_setting("analysis_armed") or "0") == "1",
         "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
         "pending": bool(db.get_setting("analysis_pending_actions")),
+        "defend": defending(db),
+        "defend_minutes": defend_minutes(db),
+        "defend_at": db.get_setting("defend_last_at") or None,
+        "last_defend": _json_setting(db, "defend_result"),
         "last_apply": _json_setting(db, "analysis_apply_result"),
         "placement": describe(spec),
         "can_place": spec.can_place,
@@ -1032,10 +973,17 @@ def api_analysis_arm():
     db.set_setting("analysis_armed", "1" if on else "0")
     if "dry_run" in data:
         db.set_setting("analysis_dry_run", "0" if not data["dry_run"] else "1")
-    log.warning("Analysis arming set to %s (dry run %s)", on,
-                db.get_setting("analysis_dry_run", "1"))
+    if "defend" in data:
+        db.set_setting("an_defend", "1" if data["defend"] else "0")
+    if "defend_minutes" in data:
+        db.set_setting("an_defend_minutes", str(data["defend_minutes"]).strip())
+    log.warning("Analysis arming set to %s (dry run %s, defence %s)", on,
+                db.get_setting("analysis_dry_run", "1"),
+                db.get_setting("an_defend", "0"))
     return jsonify({"armed": on,
-                    "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0"})
+                    "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
+                    "defend": defending(db),
+                    "defend_minutes": defend_minutes(db)})
 
 
 @app.route("/api/analysis/apply", methods=["POST"])

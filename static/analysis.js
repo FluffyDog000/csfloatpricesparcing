@@ -280,6 +280,9 @@
     t.appendChild(tb);
     $("plan-arm").checked = !!d.armed;
     $("plan-dry").checked = d.dry_run !== false;
+    $("plan-defend").checked = !!d.defend;
+    $("plan-defend-min").value = d.defend_minutes || 60;
+    renderDefence(d);
     renderApplyResult(d.last_apply, d.pending);
 
     const places = d.actions.filter((a) => a.kind === "place").length;
@@ -351,6 +354,25 @@
     });
     $("place-msg").textContent = d.describe || "";
     $("place-msg").className = d.configured ? "ok" : "muted";
+  }
+
+  function renderDefence(d) {
+    const box = $("plan-defence");
+    if (!box) return;
+    if (!d.defend) {
+      box.textContent = "Автозащита выключена — перебитые ордера останутся "
+        + "как есть, пока не применишь план руками.";
+      box.className = "muted";
+      return;
+    }
+    const res = d.last_defend;
+    const when = d.defend_at
+      ? String(d.defend_at).slice(0, 16).replace("T", " ") : "ещё не было";
+    box.className = "ok";
+    box.textContent = `Автозащита включена, каждые ${d.defend_minutes} мин. `
+      + `Последняя проверка: ${when}`
+      + (res ? ` — предметов ${res.items}, действий ${res.actions}`
+             + (res.dry_run ? " (вхолостую)" : "") : "");
   }
 
   function renderApplyResult(res, pending) {
@@ -507,6 +529,23 @@
         : "Разрешение снято.", r.armed && !r.dry_run ? "err" : "ok");
     });
     $("plan-dry").onchange = () => $("plan-arm").onchange();
+
+    const saveDefence = () => action("Настраиваю защиту", async () => {
+      const on = $("plan-defend").checked;
+      const r = await postJSON("/api/analysis/arm", {
+        armed: $("plan-arm").checked,
+        dry_run: $("plan-dry").checked,
+        defend: on,
+        defend_minutes: $("plan-defend-min").value,
+      }, token());
+      say(r.defend
+        ? `Автозащита включена, каждые ${r.defend_minutes} мин.`
+          + (r.dry_run ? " Вхолостую." : " По-настоящему.")
+        : "Автозащита выключена.", r.defend && !r.dry_run ? "err" : "ok");
+      await loadPlan();
+    });
+    $("plan-defend").onchange = saveDefence;
+    $("plan-defend-min").onchange = saveDefence;
 
     $("plan-apply").onclick = () => {
       const real = $("plan-arm").checked && !$("plan-dry").checked;

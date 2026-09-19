@@ -26,6 +26,7 @@ from src.backup import read_generation
 from src.alerts import AlertService
 from src.backup_service import BackupService
 from src.collector import Collector
+from src.settings import defend_minutes, defending
 from src.config import load_config
 from src.csfloat_client import CSFloatClient
 from src.db import Database
@@ -95,6 +96,10 @@ def run_forever(collector: Collector) -> None:
     last_cooldown_log = 0.0
     last_quota_log = 0.0
     last_manual_check = 0.0
+
+    # Monotonic, so a clock change cannot make the defence fire in a loop.
+
+    last_defence = [time.monotonic()]
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
@@ -172,6 +177,19 @@ def run_forever(collector: Collector) -> None:
             # An approved plan runs before anything else asks for quota: it
             # was approved against a book that is already minutes old.
             collector.apply_pending_actions()
+
+            # Defence on its own clock. Off unless turned on, and it may only
+            # amend or withdraw - opening a position stays a decision made by
+            # hand, because a loop that can also open them can spend the whole
+            # budget while nobody is watching.
+            if defending(collector.db):
+                due = defend_minutes(collector.db) * 60.0
+                if time.monotonic() - last_defence[0] >= due:
+                    last_defence[0] = time.monotonic()
+                    try:
+                        collector.defend_orders()
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("Defence pass failed: %s", exc)
 
             # Buy-order requests, same gating: on demand, never on a schedule.
             for row in collector.db.pending_order_requests():

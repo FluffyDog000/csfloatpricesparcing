@@ -104,8 +104,15 @@
     <input type="checkbox" id="plan-arm"> <b>разрешить выставление</b>
     <span class="muted">— тратится при применении</span>
   </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-defend"> <b>защищать автоматически</b>
+    каждые <input type="number" id="plan-defend-min" class="input inline-num"
+                  step="10" min="10" max="1440" value="60"> мин
+    <span class="muted">— только перебить или снять, новые ордера не ставит</span>
+  </label>
   <button class="btn danger" id="plan-apply">Применить план</button>
   <div id="plan-out"></div>
+  <div id="plan-defence" class="muted"></div>
   <div id="plan-result"></div>
 </section>
 

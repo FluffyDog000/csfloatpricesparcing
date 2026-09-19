@@ -575,6 +575,127 @@ class Collector:
                  " (вхолостую)" if dry else "")
         return summary
 
+    def defend_orders(self) -> dict | None:
+        """Look at the orders we hold and answer what has happened to them.
+
+        Only two things may come of it: an order is amended upward, never past
+        the ceiling it was placed with, or it is taken down. Committing fresh
+        capital stays a decision someone makes by hand - a loop that can also
+        open positions is a loop that can spend the budget while nobody is
+        looking.
+
+        Each pass re-reads the book of every item we hold, which is real
+        quota: a dozen requests per item, every interval.
+        """
+        import json as _json
+
+        from .executor import CANCEL, RAISE, reconcile
+        from .placement import PLACEMENT_KEY, load
+        from .pricing import evaluate
+        from .sender import Sender
+        from .settings import dry_run, limits as read_limits, params as read_params
+
+        held = self.db.our_orders()
+        if not held:
+            return None
+
+        params = read_params(self.db)
+        limits = read_limits(self.db)
+        spec = load(self.db.get_setting(PLACEMENT_KEY))
+        dry = dry_run(self.db)
+
+        by_item: dict[int, list[dict]] = {}
+        for row in held:
+            by_item.setdefault(int(row["item_id"]), []).append(row)
+
+        results: list[dict] = []
+        looked = 0
+        for item_id, rows in by_item.items():
+            name = self.db.item_name(item_id)
+            if not name:
+                continue
+            # The book has to be fresh: acting on an hour-old one would answer
+            # a fight that is already over, or miss one that is not.
+            self.sweep_buy_orders(name, item_id)
+            looked += 1
+            book = self.db.buy_orders(item_id)
+            sales = self._sales_for_scoring(item_id, params)
+            try:
+                depth = self.db.listing_depth(item_id)
+            except Exception:  # noqa: BLE001 - an older DB has no such table
+                depth = []
+            # Each order is scored on its own float range, not looked up in
+            # today's grid: band edges are cut at the bounds of other people's
+            # orders, so a rival appearing reshapes them, and a shifted edge
+            # would read as "this band no longer qualifies" and withdraw a
+            # position that is perfectly sound.
+            span = wear_range(name)
+            wanted = []
+            for row in rows:
+                scored = evaluate(float(row["float_min"]), float(row["float_max"]),
+                                  sales, book, span, depth, params)
+                if scored.take:
+                    wanted.append(scored)
+
+            actions = [a for a in reconcile(name, wanted, rows, book, limits)
+                       if a.kind in (RAISE, CANCEL)]
+            if not actions:
+                continue
+            self.client.pool.pin(for_orders=True)
+            try:
+                sender = Sender(self.config.http.base_url, spec,
+                                self.client.send_json, dry_run=dry)
+                for action in actions:
+                    out = sender.perform(action)
+                    results.append(out.as_dict())
+                    if not out.ok or dry:
+                        continue
+                    row = next((r for r in rows
+                                if abs(r["float_min"] - action.float_min) < 1e-9
+                                and abs(r["float_max"] - action.float_max) < 1e-9),
+                               None)
+                    if row is None:
+                        continue
+                    if action.kind == CANCEL:
+                        self.db.set_our_order_state(int(row["id"]), "cancelled",
+                                                    out.detail)
+                    else:
+                        self.db.upsert_our_order(
+                            item_id, action.float_min, action.float_max,
+                            action.price, action.ceiling, state="live",
+                            remote_id=row.get("remote_id"), note=out.detail)
+            finally:
+                self.client.pool.unpin()
+
+        summary = {"at": utcnow_iso(), "dry_run": dry, "items": looked,
+                   "orders": len(held), "actions": len(results),
+                   "results": results}
+        self.db.set_setting("defend_result",
+                            _json.dumps(summary, ensure_ascii=False))
+        self.db.set_setting("defend_last_at", utcnow_iso())
+        if results:
+            log.info("Defence: %d action(s) across %d item(s)%s",
+                     len(results), looked, " (вхолостую)" if dry else "")
+        return summary
+
+    def _sales_for_scoring(self, item_id: int, params) -> list[dict]:
+        """Sales with ages attached, as the scoring reads them."""
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=max(params.window_days * 3, 90))).isoformat()
+        rows = [dict(r) for r in self.db.conn.execute(
+            "SELECT price, float_value, sold_at FROM sales WHERE item_id = ? "
+            "AND float_value IS NOT NULL AND sold_at >= ?", (item_id, cutoff))]
+        now = datetime.now(timezone.utc)
+        for s in rows:
+            try:
+                t = datetime.fromisoformat(s["sold_at"])
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                s["age_days"] = (now - t).total_seconds() / 86400
+            except (TypeError, ValueError):
+                s["age_days"] = None
+        return rows
+
     def sweep_listing_depth(self, name: str, item_id: int) -> dict:
         """Read the sell side band by band: who you queue behind when you list.
 

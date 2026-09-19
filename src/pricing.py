@@ -200,22 +200,21 @@ def _exit_price(band_sales: list[float], depth: Sequence[dict],
     return median, "история"
 
 
-def plan(sales: Sequence[dict], orders: Sequence[dict],
-         span: tuple[float, float] | None,
-         depth: Sequence[dict] = (),
-         params: Params | None = None) -> list[Band]:
-    """Score every float band of an item, taken or not.
+def evaluate(lo: float, hi: float, sales: Sequence[dict],
+             orders: Sequence[dict], span: tuple[float, float] | None,
+             depth: Sequence[dict] = (),
+             params: Params | None = None) -> Band:
+    """Score one float range, whoever chose it.
 
-    Rejected bands are returned with their reason: "why not this one" is the
-    question the numbers are read for, and dropping them silently makes an
-    over-bid band indistinguishable from one nobody has looked at.
+    The grid moves: band edges are cut at the bounds of other people's orders,
+    so a rival appearing or leaving reshapes them. An order we already hold has
+    a fixed range of its own, and it has to be judged on that range rather than
+    looked up in today's grid - a shifted edge would otherwise read as "this
+    band no longer qualifies" and withdraw a perfectly good position.
     """
     p = params or Params()
-    if not span:
-        return []
-
     out: list[Band] = []
-    for lo, hi in _bands(span, p.band_step, orders):
+    for lo, hi in ((lo, hi),):
         band = [s["price"] for s in sales
                 if s.get("float_value") is not None and lo <= s["float_value"] < hi]
         row = Band(float_min=lo, float_max=hi, sample=len(band))
@@ -316,5 +315,23 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
             row.entry_monthly = entry_monthly
             out.append(row)
 
+    return out[0]
+
+
+def plan(sales: Sequence[dict], orders: Sequence[dict],
+         span: tuple[float, float] | None,
+         depth: Sequence[dict] = (),
+         params: Params | None = None) -> list[Band]:
+    """Score every float band of an item, taken or not.
+
+    Rejected bands are returned with their reason: "why not this one" is the
+    question the numbers are read for, and dropping them silently makes an
+    over-bid band indistinguishable from one nobody has looked at.
+    """
+    p = params or Params()
+    if not span:
+        return []
+    out = [evaluate(lo, hi, sales, orders, span, depth, p)
+           for lo, hi in _bands(span, p.band_step, orders)]
     out.sort(key=lambda r: (not r.take, -(r.monthly or 0), r.float_min))
     return out
