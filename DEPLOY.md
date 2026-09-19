@@ -222,6 +222,19 @@ git pull
 source .venv/bin/activate && pip install -r requirements.txt   # если менялись зависимости
 sudo systemctl restart csfloat-collector csfloat-web
 ```
+
+Проверить, что обновление доехало — без чтения логов:
+
+```bash
+curl -s -c /tmp/cs.txt -X POST localhost:8000/login \
+     -d "username=admin" -d "password=ПАРОЛЬ" -o /dev/null
+curl -s -b /tmp/cs.txt localhost:8000/api/diag | python3 -m json.tool
+```
+
+Отдаёт текущий коммит, время старта процесса, версию Python и хеши
+отдаваемых файлов. Поле `session_persistent: false` означает, что
+`FLASK_SECRET_KEY` не задан и перезапуск разлогинит всех — открытая
+страница при этом выглядит рабочей, но её запросы к API получают 401.
 `items.yaml` и `.env` — личные (в `.gitignore`), при `git pull` не конфликтуют.
 
 ---

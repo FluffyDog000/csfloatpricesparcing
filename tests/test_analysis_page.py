@@ -206,3 +206,25 @@ def test_an_item_with_no_history_is_explained_not_left_blank():
     js = pathlib.Path("static/analysis.js").read_text()
     assert "Продаж в базе нет" in js, "the empty case has its own message"
     assert "Стакан не собран" in js
+
+
+def test_an_expired_session_is_named_not_left_as_a_bare_401():
+    """Restarting the web service mints a new signing key when
+    FLASK_SECRET_KEY is unset, so every session dies while the open page still
+    looks logged in - and its API calls return "authentication required",
+    which explains nothing to the person reading it."""
+    import pathlib
+
+    common = pathlib.Path("static/common.js").read_text()
+    assert "401" in common and "сессия истекла" in common
+    assert "FLASK_SECRET_KEY" in common, "and names the setting that prevents it"
+
+    base = pathlib.Path("templates/base.html").read_text()
+    assert "session_persistent" in base, "a missing key is warned about in the UI"
+
+
+def test_diag_reports_whether_sessions_survive_a_restart():
+    c = _app()
+    d = c.get("/api/diag").get_json()
+    assert "session_persistent" in d and "auth_enabled" in d
+    assert "commit" in d and "build" in d

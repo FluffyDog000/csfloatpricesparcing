@@ -34,7 +34,15 @@ async function action(label, fn) {
   try {
     await fn();
   } catch (e) {
-    say("Ошибка — " + (e && e.message ? e.message : e), "err");
+    const msg = (e && e.message) ? e.message : String(e);
+    say("Ошибка — " + msg, "err");
+    if (msg.indexOf("сессия истекла") === 0) {
+      const el = $("an-note");
+      const a = document.createElement("a");
+      a.href = "/login";
+      a.textContent = "  → войти";
+      el.appendChild(a);
+    }
     console.error(label, e);
   } finally {
     busy = false;

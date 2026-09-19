@@ -160,7 +160,8 @@ def _asset_version():
             return url
         return f"{url}?v={stamp}"
 
-    return {"asset": asset, "asset_build": _build_stamp()}
+    return {"asset": asset, "asset_build": _build_stamp(),
+            "session_persistent": bool(config.web.secret_key)}
 
 
 _STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -218,6 +219,8 @@ def api_diag():
         "python": sys.version.split()[0],
         "files": files,
         "started_at": _STARTED_AT,
+        "auth_enabled": AUTH_ENABLED,
+        "session_persistent": bool(config.web.secret_key),
     })
 
 

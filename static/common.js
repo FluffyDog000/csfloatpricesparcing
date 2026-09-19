@@ -1,12 +1,21 @@
 // Shared helpers for the dashboard.
 
+// A restart with no FLASK_SECRET_KEY set mints a new signing key, so every
+// session dies and the open page starts getting 401s from the API while it
+// still looks logged in. "authentication required" does not tell anyone that.
+const SESSION_GONE = "сессия истекла — открой /login и войди заново "
+  + "(после перезапуска сервера вход слетает, если не задан FLASK_SECRET_KEY)";
+
+async function apiError(resp) {
+  if (resp.status === 401) return new Error(SESSION_GONE);
+  let msg = resp.statusText;
+  try { msg = (await resp.json()).error || msg; } catch (e) {}
+  return new Error(msg);
+}
+
 async function getJSON(url) {
   const resp = await fetch(url, { headers: { "Accept": "application/json" } });
-  if (!resp.ok) {
-    let msg = resp.statusText;
-    try { msg = (await resp.json()).error || msg; } catch (e) {}
-    throw new Error(msg);
-  }
+  if (!resp.ok) throw await apiError(resp);
   return resp.json();
 }
 
@@ -16,11 +25,7 @@ async function postJSON(url, body, token) {
   const resp = await fetch(url, {
     method: "POST", headers, body: JSON.stringify(body || {}),
   });
-  if (!resp.ok) {
-    let msg = resp.statusText;
-    try { msg = (await resp.json()).error || msg; } catch (e) {}
-    throw new Error(msg);
-  }
+  if (!resp.ok) throw await apiError(resp);
   return resp.json();
 }
 

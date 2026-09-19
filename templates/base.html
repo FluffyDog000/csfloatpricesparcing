@@ -22,6 +22,14 @@
       {% if auth_enabled %}<a class="navlink" href="{{ url_for('logout') }}">Выйти</a>{% endif %}
     </div>
   </header>
+  {% if auth_enabled and not session_persistent %}
+  <div class="banner warn">
+    ⚠ <b>FLASK_SECRET_KEY не задан</b> — при каждом перезапуске сервера ключ
+    подписи меняется, вход слетает, и открытая страница начинает получать
+    «сессия истекла» на каждый запрос. Добавь в <code>.env</code>:
+    <code>FLASK_SECRET_KEY=$(python3 -c "import secrets;print(secrets.token_hex(32))")</code>
+  </div>
+  {% endif %}
   <main class="container">
     {% block content %}{% endblock %}
   </main>
