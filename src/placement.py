@@ -87,13 +87,14 @@ class Spec:
 
 # Captured from the browser, one request at a time:
 #
-#   POST  https://csfloat.com/api/v1/buy-orders             create
-#   PATCH https://csfloat.com/api/v1/buy-orders/{order_id}  amend in place
+#   POST   https://csfloat.com/api/v1/buy-orders             create
+#   PATCH  https://csfloat.com/api/v1/buy-orders/{order_id}  amend in place
+#   DELETE https://csfloat.com/api/v1/buy-orders/{order_id}  take down
 #
-# Cancelling has not been captured yet, so DELETE on the same resource is a
-# guess - and so is the body of the PATCH, which matters because it is what
-# separates "change the price" from "take the order down". Both are offered as
-# a starting point and neither is sent until it is saved deliberately.
+# What remains guessed is the amend body. It matters on its own: the body is
+# what separates changing a price from taking an order down, and getting it
+# wrong on a live position is not a cheap mistake. Nothing is sent until the
+# configuration is saved deliberately.
 SUGGESTED = Spec(
     create_method="POST",                          # confirmed
     create_path="/api/v1/buy-orders",              # confirmed
@@ -101,12 +102,13 @@ SUGGESTED = Spec(
     update_method="PATCH",                         # confirmed
     update_path="/api/v1/buy-orders/{order_id}",   # confirmed
     update_body='{"price": {price_cents}}',        # guessed
-    cancel_method="DELETE",                        # guessed
-    cancel_path="/api/v1/buy-orders/{order_id}",   # guessed
+    cancel_method="DELETE",                        # confirmed
+    cancel_path="/api/v1/buy-orders/{order_id}",   # confirmed
     list_path="/api/v1/buy-orders",                # guessed
 )
 
-CONFIRMED = {"create_path", "create_method", "update_path", "update_method"}
+CONFIRMED = {"create_path", "create_method", "update_path", "update_method",
+             "cancel_path", "cancel_method"}
 
 
 def endpoint(path: str, order_id: str | None = None) -> str:

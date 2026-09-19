@@ -97,7 +97,16 @@
   </details>
   <div id="plan-state" class="muted"></div>
   <button class="btn" id="plan-run">Пересчитать план</button>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-dry" checked> вхолостую (ничего не отправлять)
+  </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-arm"> <b>разрешить выставление</b>
+    <span class="muted">— тратится при применении</span>
+  </label>
+  <button class="btn danger" id="plan-apply">Применить план</button>
   <div id="plan-out"></div>
+  <div id="plan-result"></div>
 </section>
 
 <div id="an-results"></div>

@@ -278,6 +278,10 @@
       tb.appendChild(tr);
     });
     t.appendChild(tb);
+    $("plan-arm").checked = !!d.armed;
+    $("plan-dry").checked = d.dry_run !== false;
+    renderApplyResult(d.last_apply, d.pending);
+
     const places = d.actions.filter((a) => a.kind === "place").length;
     const sum = document.createElement("p");
     sum.innerHTML = `Потребуется <b>${money(need)}</b> из лимита `
@@ -347,6 +351,39 @@
     });
     $("place-msg").textContent = d.describe || "";
     $("place-msg").className = d.configured ? "ok" : "muted";
+  }
+
+  function renderApplyResult(res, pending) {
+    const box = $("plan-result");
+    box.innerHTML = "";
+    if (pending) {
+      box.innerHTML = '<p class="muted">План передан сборщику, жду выполнения…</p>';
+      return;
+    }
+    if (!res || !res.results) return;
+    const head = document.createElement("p");
+    head.className = res.failed ? "err" : "ok";
+    head.textContent = `Выполнено ${res.done} из ${res.done + res.failed}`
+      + (res.dry_run ? " (вхолостую, ничего не отправлялось)" : "")
+      + ` · ${String(res.at).slice(0, 16).replace("T", " ")}`;
+    box.appendChild(head);
+    const t = document.createElement("table");
+    t.className = "stat";
+    t.innerHTML = "<thead><tr><th>что</th><th>float</th><th>цена</th>"
+      + "<th>итог</th></tr></thead>";
+    const tb = document.createElement("tbody");
+    res.results.forEach((r) => {
+      const a = r.action;
+      const tr = document.createElement("tr");
+      tr.className = r.ok ? "act-keep" : "act-cancel";
+      tr.innerHTML = `<td>${(KIND[a.kind] || [a.kind])[0]}</td>
+        <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
+        <td>${money(a.price)}</td>
+        <td class="muted">${r.detail}</td>`;
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
   }
 
   function fillLimits(l) {
@@ -459,6 +496,29 @@
       await loadPlan();
       say("План пересчитан.", "ok");
     });
+
+    $("plan-arm").onchange = () => action("Меняю разрешение", async () => {
+      const r = await postJSON("/api/analysis/arm",
+        { armed: $("plan-arm").checked, dry_run: $("plan-dry").checked },
+        token());
+      say(r.armed
+        ? (r.dry_run ? "Разрешено, но вхолостую — ничего не уйдёт."
+                     : "РАЗРЕШЕНО ПО-НАСТОЯЩЕМУ. Применение потратит деньги.")
+        : "Разрешение снято.", r.armed && !r.dry_run ? "err" : "ok");
+    });
+    $("plan-dry").onchange = () => $("plan-arm").onchange();
+
+    $("plan-apply").onclick = () => {
+      const real = $("plan-arm").checked && !$("plan-dry").checked;
+      if (real && !confirm("Выставить ордера по-настоящему? Это потратит деньги."))
+        return;
+      action("Применяю план", async () => {
+        const r = await postJSON("/api/analysis/apply", {}, token());
+        say(`${r.note} Действий: ${r.queued}.`
+          + (r.dry_run ? " Вхолостую." : ""), "ok");
+        await loadPlan();
+      });
+    };
 
     $("place-suggest").onclick = () => {
       PLACE_FIELDS.forEach(([key]) => {

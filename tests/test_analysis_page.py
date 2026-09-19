@@ -372,9 +372,10 @@ def test_the_captured_request_is_saved_only_when_sent():
     got = c.get("/api/analysis/placement").get_json()
 
     assert not got["configured"], "an empty install has no request to send"
-    assert got["confirmed"] == ["create_method", "create_path",
+    assert got["confirmed"] == ["cancel_method", "cancel_path",
+                                "create_method", "create_path",
                                 "update_method", "update_path"], \
-        "create and amend were captured; cancelling was not"
+        "all three operations were captured from the browser"
     assert got["suggested"]["update_path"] == "/api/v1/buy-orders/{order_id}"
 
     saved = c.post("/api/analysis/placement",
@@ -435,3 +436,73 @@ def test_the_binding_limit_is_visible_in_the_plan():
     assert len(places) == 1, "the per-item cap binds"
     assert plan["limits"]["max_orders_per_item"] == 1, \
         "and the page is told which number did it"
+
+
+def test_applying_requires_arming_and_spends_it():
+    """Arming is separate from configuring and from planning, and one arming
+    applies one plan: the next one has to be approved on its own."""
+    c, _ = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/placement",
+           json=c.get("/api/analysis/placement").get_json()["suggested"])
+
+    assert c.post("/api/analysis/apply", json={}).status_code == 403
+
+    c.post("/api/analysis/arm", json={"armed": True})
+    assert c.get("/api/analysis/plan").get_json()["armed"] is True
+    body = c.post("/api/analysis/apply", json={}).get_json()
+    assert body["queued"] >= 1 and body["dry_run"] is True
+
+    plan = c.get("/api/analysis/plan").get_json()
+    assert plan["armed"] is False, "arming is spent by use"
+    assert plan["pending"] is True, "and the collector has the work"
+
+
+def test_what_is_queued_is_what_was_shown():
+    """A plan recomputed at apply time could differ from the one approved,
+    and nothing on screen would say so."""
+    import json as _json
+
+    c, _ = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/placement",
+           json=c.get("/api/analysis/placement").get_json()["suggested"])
+    shown = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
+             if a["kind"] != "keep"]
+
+    c.post("/api/analysis/arm", json={"armed": True})
+    c.post("/api/analysis/apply", json={})
+
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    queued = _json.loads(db.get_setting("analysis_pending_actions"))["actions"]
+    db.close()
+    assert [(a["float_min"], a["price"]) for a in queued] == \
+           [(a["float_min"], a["price"]) for a in shown]
+
+
+def test_arming_cannot_outlive_a_change_to_the_request():
+    c, _ = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    suggested = c.get("/api/analysis/placement").get_json()["suggested"]
+    c.post("/api/analysis/placement", json=suggested)
+    c.post("/api/analysis/arm", json={"armed": True})
+
+    c.post("/api/analysis/placement", json=dict(suggested, create_path="/other"))
+    assert c.get("/api/analysis/plan").get_json()["armed"] is False
+    assert c.post("/api/analysis/apply", json={}).status_code == 403
+
+
+def test_a_real_run_has_to_be_asked_for_twice():
+    """Dry run is the default, and the page confirms before a live one."""
+    import pathlib
+
+    c, _ = _stocked()
+    assert c.get("/api/analysis/plan").get_json()["dry_run"] is True
+
+    r = c.post("/api/analysis/arm",
+               json={"armed": True, "dry_run": False}).get_json()
+    assert r["dry_run"] is False
+
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "потратит деньги" in js, "a live apply is confirmed, not assumed"

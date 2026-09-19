@@ -883,6 +883,13 @@ def api_analysis_sweep():
     })
 
 
+def _json_setting(db, key: str):
+    try:
+        return json.loads(db.get_setting(key) or "null")
+    except ValueError:
+        return None
+
+
 def _sales_for(db, item_id: int, params) -> list[dict]:
     """An item's sales with each one's age, which is what the scoring reads.
 
@@ -1006,9 +1013,66 @@ def api_analysis_plan():
         "planned_total": round(total, 2),
         "concentration": (max(after.values()) / total) if total else 0.0,
         "armed": (db.get_setting("analysis_armed") or "0") == "1",
+        "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
+        "pending": bool(db.get_setting("analysis_pending_actions")),
+        "last_apply": _json_setting(db, "analysis_apply_result"),
         "placement": describe(spec),
         "can_place": spec.can_place,
         "can_cancel": spec.can_cancel,
+    })
+
+
+@app.route("/api/analysis/arm", methods=["POST"])
+def api_analysis_arm():
+    """Permission to spend, given separately from configuring and planning."""
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    on = bool(data.get("armed"))
+    db.set_setting("analysis_armed", "1" if on else "0")
+    if "dry_run" in data:
+        db.set_setting("analysis_dry_run", "0" if not data["dry_run"] else "1")
+    log.warning("Analysis arming set to %s (dry run %s)", on,
+                db.get_setting("analysis_dry_run", "1"))
+    return jsonify({"armed": on,
+                    "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0"})
+
+
+@app.route("/api/analysis/apply", methods=["POST"])
+def api_analysis_apply():
+    """Hand the collector the plan that was on screen, and disarm.
+
+    The actions are stored rather than recomputed, so what runs is what was
+    approved: a plan rebuilt a minute later against a moved book would be a
+    different plan, and nothing would say so. Arming is spent by use."""
+    import json as _json
+
+    _require_admin()
+    db = get_db()
+    if (db.get_setting("analysis_armed") or "0") != "1":
+        abort(403, description="не разрешено — включи разрешение на выставление")
+
+    plan = api_analysis_plan().get_json()
+    doing = [a for a in plan["actions"] if a["kind"] != "keep"]
+    if not doing:
+        return jsonify({"queued": 0, "note": "в плане нечего выполнять"})
+    if not plan["can_place"]:
+        abort(400, description=plan["placement"])
+
+    db.set_setting("analysis_pending_actions", _json.dumps(
+        {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+         "actions": doing}, ensure_ascii=False))
+    db.set_setting("analysis_armed", "0")
+    db.set_setting("analysis_apply_result", "")
+    waiting = _why_waiting(db)
+    log.warning("Plan queued for execution: %d action(s), dry run %s",
+                len(doing), db.get_setting("analysis_dry_run", "1"))
+    return jsonify({
+        "queued": len(doing),
+        "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
+        "waiting": waiting,
+        "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
+                "Передано сборщику — выполнит в ближайшем цикле.",
     })
 
 

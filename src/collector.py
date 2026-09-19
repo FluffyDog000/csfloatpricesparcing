@@ -24,6 +24,7 @@ from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
                      extract_listing_id, extract_listings, merge_listings,
                      merge_orders, parse_orders, plan_bands, wear_range)
 from .depth import DEPTH_STEP, depth_profile, depth_url, extract_depth
+from .executor import CANCEL, Action
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
@@ -499,6 +500,80 @@ class Collector:
                  name, result["bands"], result["span"] or "?",
                  result["requests"], len(orders))
         return result
+
+    def apply_pending_actions(self) -> dict | None:
+        """Carry out the plan the dashboard approved, exactly as approved.
+
+        The web process stores the actions it displayed rather than a request
+        to recompute them, so what runs is what was looked at - a plan rebuilt
+        here could differ from the one someone said yes to, and the difference
+        would be silent.
+
+        Runs from the collector because writes are counted against the same
+        account and address as everything else, and because buy orders need the
+        residential route the sweeps already pin.
+        """
+        import json as _json
+
+        from .placement import PLACEMENT_KEY, load
+        from .sender import Sender
+
+        raw = self.db.get_setting("analysis_pending_actions")
+        if not raw:
+            return None
+        try:
+            pending = _json.loads(raw)
+            actions = [Action(**a) for a in pending.get("actions", [])]
+        except (ValueError, TypeError) as exc:
+            log.warning("Approved plan unreadable, dropping it: %s", exc)
+            self.db.set_setting("analysis_pending_actions", "")
+            return None
+
+        # Taken before the first request: a crash halfway must not leave a plan
+        # that gets applied again on the next pass.
+        self.db.set_setting("analysis_pending_actions", "")
+        spec = load(self.db.get_setting(PLACEMENT_KEY))
+        dry = (self.db.get_setting("analysis_dry_run", "1") or "1") != "0"
+
+        self.client.pool.pin(for_orders=True)
+        try:
+            sender = Sender(self.config.http.base_url, spec,
+                            self.client.send_json,
+                            headers=self.client.order_headers()
+                            if hasattr(self.client, "order_headers") else None,
+                            dry_run=dry)
+            results = []
+            for action in actions:
+                out = sender.perform(action)
+                results.append(out.as_dict())
+                if not out.ok or dry:
+                    continue
+                item_id = self.db.get_item_id(action.item)
+                if item_id is None:
+                    continue
+                if action.kind == CANCEL:
+                    for row in self.db.our_orders(item_id):
+                        if (abs(row["float_min"] - action.float_min) < 1e-9
+                                and abs(row["float_max"] - action.float_max) < 1e-9):
+                            self.db.set_our_order_state(int(row["id"]),
+                                                        "cancelled", out.detail)
+                else:
+                    self.db.upsert_our_order(
+                        item_id, action.float_min, action.float_max,
+                        action.price, action.ceiling, state="live",
+                        remote_id=out.remote_id, note=out.detail)
+        finally:
+            self.client.pool.unpin()
+
+        done = sum(1 for r in results if r["ok"])
+        summary = {"at": utcnow_iso(), "dry_run": dry,
+                   "done": done, "failed": len(results) - done,
+                   "results": results}
+        self.db.set_setting("analysis_apply_result",
+                            _json.dumps(summary, ensure_ascii=False))
+        log.info("Applied plan: %d of %d%s", done, len(results),
+                 " (вхолостую)" if dry else "")
+        return summary
 
     def sweep_listing_depth(self, name: str, item_id: int) -> dict:
         """Read the sell side band by band: who you queue behind when you list.

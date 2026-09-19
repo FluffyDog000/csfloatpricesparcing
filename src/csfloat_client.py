@@ -294,6 +294,34 @@ class CSFloatClient:
             # dropping connections leaves rotation instead of failing forever.
             self.pool.record_failure(route, exc)
             raise
+        return self._read(resp, route, url)
+
+    def send_json(self, method: str, url: str, body: object | None = None,
+                  headers: dict[str, str] | None = None) -> object:
+        """A write: create, amend or take down one of our own buy orders.
+
+        Held to the same pool, spacing and limits as a read, because CSFloat
+        counts them against the same account and the same address. Writes are
+        never retried: a request that may already have placed an order is not
+        one to send twice on a guess."""
+        route = self.pool.pick()
+        if route is None:
+            wait = self.pool.wait_seconds()
+            raise NoRouteAvailable(
+                f"нет доступных маршрутов, ближайший освободится через "
+                f"{wait / 60:.0f} мин" if wait > 0 else "нет доступных маршрутов")
+        self._respect_spacing()
+        try:
+            resp = self.session.request(
+                method.upper(), url, json=body, headers=headers,
+                timeout=self.http.timeout_seconds, proxies=route.proxies())
+        except requests.RequestException as exc:
+            self.pool.record_failure(route, exc)
+            raise
+        return self._read(resp, route, url)
+
+    def _read(self, resp, route, url: str) -> object:
+        """Shared handling: the limits and refusals are the same either way."""
         self._capture_rate_headers(resp)
         self._feed_pool(route, resp)
 

@@ -376,3 +376,5 @@ tr.act-place td { background: rgba(63, 185, 80, .08); }
 tr.act-raise td { background: rgba(210, 153, 34, .10); }
 tr.act-cancel td { background: rgba(248, 81, 73, .08); }
 tr.act-keep td { opacity: .6; }
+
+.arm-line { display: block; margin: 8px 0; font-size: 13px; }

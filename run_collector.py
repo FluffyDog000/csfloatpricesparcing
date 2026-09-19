@@ -169,6 +169,10 @@ def run_forever(collector: Collector) -> None:
                 collector.db.clear_poll_request(int(row["id"]))
                 collector.poll_item(item)
 
+            # An approved plan runs before anything else asks for quota: it
+            # was approved against a book that is already minutes old.
+            collector.apply_pending_actions()
+
             # Buy-order requests, same gating: on demand, never on a schedule.
             for row in collector.db.pending_order_requests():
                 collector.db.clear_order_request(int(row["id"]))
