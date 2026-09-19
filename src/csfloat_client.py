@@ -363,7 +363,16 @@ class CSFloatClient:
                 f"HTTP {resp.status_code} — CSFloat не принял учётные данные "
                 f"для {url.split('?')[0]}", resp)
 
-        resp.raise_for_status()
+        if 400 <= resp.status_code < 600:
+            # The body is where CSFloat says what it disliked, and a bare
+            # "400 Client Error" throws that away: six rejected orders read
+            # identically whether the price was wrong, the filter was, or the
+            # field was not one it knows.
+            detail = (resp.text or "").strip().replace("\n", " ")[:300]
+            raise requests.HTTPError(
+                f"HTTP {resp.status_code} для {url.split('?')[0]}"
+                + (f" — {detail}" if detail else ""), response=resp)
+
         self.pool.record_success(route)
         return resp.json()
 

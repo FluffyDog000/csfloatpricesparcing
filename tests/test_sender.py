@@ -124,3 +124,31 @@ def test_a_reply_without_an_id_is_not_treated_as_a_placement():
     got = s.perform(act(PLACE))
 
     assert not got.ok and got.remote_id is None
+
+
+def test_a_refusal_carries_what_the_server_said():
+    """Six rejected orders read identically - "400 Bad Request" - whether the
+    price was wrong, the filter was, or the field was not one CSFloat knows.
+    The body is where it says which, and throwing it away costs a round trip
+    through a person to find out."""
+    import requests
+
+    class Resp:
+        status_code = 400
+        text = '{"message":"invalid float range"}'
+        headers = {}
+
+        def json(self):
+            import json
+            return json.loads(self.text)
+
+    def refuse(method, url, body=None, headers=None):
+        raise requests.HTTPError(
+            f"HTTP 400 для {url} — {Resp.text}", response=Resp())
+
+    s = Sender("https://csfloat.com", SUGGESTED, refuse, dry_run=False)
+    got = s.perform(act(PLACE))
+
+    assert not got.ok
+    assert "invalid float range" in got.detail, \
+        "what the server objected to survives into the report"
