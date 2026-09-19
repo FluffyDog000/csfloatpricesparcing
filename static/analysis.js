@@ -278,6 +278,9 @@
       tb.appendChild(tr);
     });
     t.appendChild(tb);
+    // Loaded into the form, not just used: left showing the markup's
+    // defaults, the next "save" posted a budget of zero over a real one.
+    fillLimits(d.limits);
     $("plan-arm").checked = !!d.armed;
     $("plan-dry").checked = d.dry_run !== false;
     $("plan-defend").checked = !!d.defend;
@@ -676,7 +679,9 @@
       an_patience: $("l-patience").value,
       }, token());
       fillParams(r.params);
+      if (r.limits) fillLimits(r.limits);
       await loadItems(true);
+      await loadPlan();
       say((r.rejected && r.rejected.length)
         ? "Поправлено: " + r.rejected.join("; ")
         : "Пороги сохранены, пересчитано.",

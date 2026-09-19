@@ -69,5 +69,6 @@ vm.runInThisContext(source, { filename: "page.js" });
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,
     step: (nodes["p-step"] || el("div")).value,
+    budget: (nodes["l-total"] || el("div")).value,
   }));
 })();

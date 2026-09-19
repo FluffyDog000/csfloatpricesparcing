@@ -205,3 +205,35 @@ def test_handing_a_plan_over_shows_what_went():
     assert "renderQueued" in js, "what was sent is listed at once"
     assert "Жду сборщик" in js, "and the wait is shown as progress"
     assert "не отчитался" in js, "and it gives up saying so, not silently"
+
+
+def test_the_limit_fields_are_loaded_before_they_can_be_saved_back():
+    """fillLimits was defined and never called, so the inputs kept the
+    markup's defaults while the database held real numbers. The next save of
+    any threshold posted a budget of zero over a live one, and the only sign
+    was the plan going quiet."""
+    import pathlib
+    import re
+
+    js = pathlib.Path("static/analysis.js").read_text()
+    calls = [m for m in re.finditer(r"\bfillLimits\(", js)]
+    assert len(calls) >= 3, "defined, called on load, and after saving"
+
+    result = _run_with_plan(_plan_payload(
+        limits={"total_capital": 500.0, "per_item_capital": 120.0,
+                "max_orders": 12, "max_orders_per_item": 3,
+                "patience_days": 14.0}))
+    assert result["budget"] == 500, "the saved budget reaches the form"
+
+
+def test_saving_thresholds_keeps_the_budget():
+    """The round trip the bug broke: change a threshold, keep the money."""
+    from tests.test_analysis_page import _app
+
+    c = _app()
+    c.post("/api/analysis/params", json={"an_total_capital": "500"})
+    r = c.post("/api/analysis/params", json={"an_min_margin": "0.05"}).get_json()
+
+    assert r["limits"]["total_capital"] == 500.0, \
+        "a threshold save must not touch the money"
+    assert c.get("/api/analysis/plan").get_json()["limits"]["total_capital"] == 500.0
