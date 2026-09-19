@@ -286,7 +286,11 @@ class ProxyPool:
         Defaults to the route that served the last request, which is the one
         that drew the refusal. The flag lives only in memory: the address
         behind a route changes, and a restart is the cheapest way to re-test."""
-        route = route or self.last_picked
+        # A sweep pins its route up front, so the pin is the address that drew
+        # the refusal even when the request never reached pick() to record it.
+        # Without this fallback nothing was flagged, pin() handed back the same
+        # refused address, and the sweep walked every band into the same wall.
+        route = route or self.last_picked or self._pinned
         if route is None or route.vpn_blocked:
             return route
         route.vpn_blocked = True

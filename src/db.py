@@ -59,6 +59,25 @@ CREATE TABLE IF NOT EXISTS buy_orders (
 
 CREATE INDEX IF NOT EXISTS idx_orders_item ON buy_orders(item_id);
 
+-- buy_orders holds one snapshot per item, replaced on every sweep, so how
+-- fast a band's top bid moves was never recorded. That rate decides whether
+-- an order placed there can be defended: outbid faster than it fills and the
+-- position is worth nothing. Kept as a per-band profile, it is about a dozen
+-- rows per sweep rather than the whole book.
+CREATE TABLE IF NOT EXISTS book_history (
+    item_id             INTEGER NOT NULL REFERENCES items(id),
+    fetched_at          TEXT    NOT NULL,
+    float_min           REAL    NOT NULL,
+    float_max           REAL    NOT NULL,
+    top_price           REAL,               -- best bid competing for the band
+    orders              INTEGER NOT NULL,   -- how many orders overlap it
+    qty                 INTEGER NOT NULL,   -- total quantity behind them
+    PRIMARY KEY (item_id, fetched_at, float_min)
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_hist_item
+    ON book_history(item_id, float_min, fetched_at);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -352,6 +371,35 @@ class Database:
         )
         self.conn.commit()
         return len(orders)
+
+    def record_book_profile(self, item_id: int,
+                            profile: list[dict[str, Any]]) -> int:
+        """Append one sweep's per-band tops, keeping what the snapshot drops."""
+        if not profile:
+            return 0
+        now = utcnow_iso()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO book_history (item_id, fetched_at, "
+            "float_min, float_max, top_price, orders, qty) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(item_id, now, b["float_min"], b["float_max"], b["top_price"],
+              b["orders"], b["qty"]) for b in profile],
+        )
+        self.conn.commit()
+        return len(profile)
+
+    def book_history(self, item_id: int,
+                     since: str | None = None) -> list[dict[str, Any]]:
+        """Per-band tops over time, oldest first, for measuring how fast the
+        book moves."""
+        sql = ("SELECT fetched_at, float_min, float_max, top_price, orders, qty "
+               "FROM book_history WHERE item_id = ?")
+        args: list[Any] = [item_id]
+        if since:
+            sql += " AND fetched_at >= ?"
+            args.append(since)
+        sql += " ORDER BY fetched_at, float_min"
+        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
     def buy_orders(self, item_id: int) -> list[dict[str, Any]]:
         rows = self.conn.execute(

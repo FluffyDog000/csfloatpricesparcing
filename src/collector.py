@@ -20,7 +20,7 @@ from .db import Database, utcnow_iso
 from .images import ImageService
 from .proxies import ROTATING_DEFAULT_LIMIT, parse_proxy_list
 from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
-                     ORDERS_PATH, SORT_BY_END, coverage_gaps,
+                     ORDERS_PATH, SORT_BY_END, book_profile, coverage_gaps,
                      extract_listing_id, extract_listings, merge_listings,
                      merge_orders, parse_orders, plan_bands, wear_range)
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
@@ -473,8 +473,12 @@ class Collector:
         # wall of connection-pool text in the panel reads like one.
         result["failed_bands"] = failed
         if failed and not result.get("error"):
-            result["error"] = ("" if not result["bands"] else
-                               f"не ответило полос: {failed} из {failed + result['bands']}")
+            # Every band failing is not a quiet result: the panel would show an
+            # empty book with nothing said about why, which reads like "nobody
+            # is bidding" rather than "the sweep never got an answer".
+            result["error"] = (f"не ответило полос: {failed} из {failed + result['bands']}"
+                               if result["bands"] else
+                               f"ни одна из {failed} полос не ответила — стакан не прочитан")
 
         orders = merge_orders(batches)
         if not orders and result.get("rate_limited"):
@@ -482,6 +486,8 @@ class Collector:
             # rather than blanking the panel.
             return result
         self.db.replace_buy_orders(item_id, orders)
+        self.db.record_book_profile(
+            item_id, book_profile(orders, wear_range(name)))
         # Keep one listing id for the cheap single-listing refresh.
         self.db.set_listing_id(item_id, plan[0]["id"])
         self._note_orders_error(name, result["error"] or "")
@@ -519,6 +525,8 @@ class Collector:
 
         orders = parse_orders(payload)
         self.db.replace_buy_orders(item_id, orders)
+        self.db.record_book_profile(
+            item_id, book_profile(orders, wear_range(name)))
         self._note_orders_error(name, "")
         log.info("'%s': %d buy order(s) stored", name, len(orders))
         return len(orders)

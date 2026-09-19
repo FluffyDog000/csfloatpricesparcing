@@ -298,3 +298,40 @@ def test_a_wearless_item_costs_no_extra_lookup():
     assert not any("sort_by" in u for u in asked)
     assert result["requests"] == 3, "one listings page, two bands"
     db.close()
+
+
+def test_a_sweep_where_nothing_answered_says_so():
+    """Silence read as an empty book. When every band failed, the panel showed
+    no orders and no error, which looks like "nobody is bidding" rather than
+    "the sweep never got an answer" — and those call for opposite actions."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    listings = {"data": [{"id": f"L{i}", "item": {"float_value": 0.20 + i * 0.01}}
+                         for i in range(3)]}
+
+    def fake(url, headers=None):
+        if "/buy-orders" in url:
+            raise RuntimeError("connection reset")
+        return listings
+
+    col.client.fetch_json = fake
+    result = col.sweep_buy_orders("Gloves", item_id)
+
+    assert result["bands"] == 0 and result["failed_bands"] == 3
+    assert result["error"], "a sweep that read nothing must not report silence"
+    assert "не ответила" in result["error"]

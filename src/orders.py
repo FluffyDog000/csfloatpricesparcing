@@ -274,3 +274,55 @@ def extract_listing_id(payload: Any) -> str | None:
             if listing_id not in (None, ""):
                 return str(listing_id)
     return None
+
+
+# How fast the top of a band moves decides whether an order placed there can
+# be defended at all, and that is a question about yesterday's book as much as
+# today's. The snapshot table answers "what is bid now" and is replaced on
+# every sweep, so the movement was being thrown away. A profile keeps the one
+# number that matters per band - a dozen rows per sweep instead of the book.
+BOOK_STEP = 0.02
+
+
+def book_profile(orders: list[dict[str, Any]],
+                 span: tuple[float, float] | None,
+                 step: float = BOOK_STEP) -> list[dict[str, Any]]:
+    """Reduce a book to the best bid competing for each float band.
+
+    CSFloat matches a lot to the highest-priced order whose float range covers
+    it, so what a seller in band [a, b) is offered is the top of every order
+    overlapping that band - not the top of the book, which may be scoped to
+    floats no lot in the band can satisfy.
+    """
+    if not span:
+        edges = [f for o in orders
+                 for f in (o.get("float_min"), o.get("float_max"))
+                 if f is not None]
+        if not edges:
+            return []
+        span = (min(edges), max(edges))
+    lo, hi = span
+    if not step > 0 or not hi > lo:
+        return []
+
+    profile: list[dict[str, Any]] = []
+    a = lo
+    while a < hi - 1e-9:
+        b = round(min(a + step, hi), 4)
+        a = round(a, 4)
+        # Half-open [a, b): an order starting exactly where the band ends
+        # competes for the next band, not this one.
+        hits = [o for o in orders
+                if (o.get("float_min") if o.get("float_min") is not None
+                    else 0.0) < b
+                and (o.get("float_max") if o.get("float_max") is not None
+                     else 1.0) >= a]
+        profile.append({
+            "float_min": a,
+            "float_max": b,
+            "top_price": max((o["price"] for o in hits), default=None),
+            "orders": len(hits),
+            "qty": sum((o.get("qty") or 1) for o in hits),
+        })
+        a = b
+    return profile
