@@ -29,6 +29,23 @@ PLACEMENT_KEY = "placement_spec"
 
 FIELDS = ("name", "price", "price_cents", "float_min", "float_max", "quantity")
 
+# Confirmed against two real replies from CSFloat - one unscoped order and one
+# scoped to a float range - so only the method and path are still guesswork:
+#
+#   {"id": "1021510122612067461", "qty": 1, "price": 630,
+#    "market_hash_name": "AK-47 | Crane Flight (Battle-Scarred)",
+#    "hybrid_properties": {"min_float": 0.605, "max_float": 1},
+#    "bought_item_count": 0}
+#
+# Money is in integer cents ($6.30 arrives as 630), and the float bounds sit
+# inside hybrid_properties under min_float/max_float - the same shape the
+# order-book parser already reads off the book.
+DEFAULT_CREATE_BODY = (
+    '{"market_hash_name": "{name}", "price": {price_cents},'
+    ' "qty": {quantity},'
+    ' "hybrid_properties": {"min_float": {float_min}, "max_float": {float_max}}}'
+)
+
 
 class NotConfigured(RuntimeError):
     """No captured request to work from, so nothing may be sent."""
@@ -102,6 +119,56 @@ def render(template: str, *, name: str, price: float,
         return json.loads(filled)
     except ValueError as exc:
         raise NotConfigured(f"тело запроса не разбирается как JSON: {exc}") from exc
+
+
+def parse_order(payload: Any) -> dict[str, Any] | None:
+    """Normalise one buy order as CSFloat returns it.
+
+    `bought_item_count` is how a fill is noticed: the order that created it
+    reports zero, and an order that has bought something reports what it
+    bought. Nothing else in the reply says whether our money is still waiting
+    or has already been spent.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("data"), dict):
+        payload = payload["data"]
+    if payload.get("id") in (None, ""):
+        return None
+
+    props = payload.get("hybrid_properties")
+    props = props if isinstance(props, dict) else {}
+    price = payload.get("price")
+
+    def number(value):
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    # Two shapes have been seen for the float bounds: flat min_float/max_float,
+    # and a nested float_value.{min,max}. The order-book parser reads both, so
+    # this does too rather than trusting whichever one arrived today.
+    nested = props.get("float_value")
+    nested = nested if isinstance(nested, dict) else {}
+
+    def bound(flat: str, inner: str):
+        value = props.get(flat)
+        return number(value if value is not None else nested.get(inner))
+
+    return {
+        "remote_id": str(payload["id"]),
+        # Integer cents everywhere, as every other endpoint quotes money.
+        "price": None if number(price) is None else round(number(price) / 100, 2),
+        "qty": int(number(payload.get("qty")) or 1),
+        "float_min": bound("min_float", "min"),
+        "float_max": bound("max_float", "max"),
+        "bought": int(number(payload.get("bought_item_count")) or 0),
+        "created_at": payload.get("created_at"),
+        "market_hash_name": payload.get("market_hash_name"),
+    }
 
 
 def describe(spec: Spec) -> str:

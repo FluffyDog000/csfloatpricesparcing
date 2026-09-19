@@ -59,3 +59,74 @@ def test_a_template_that_is_not_json_is_refused_before_sending():
 def test_rubbish_configuration_leaves_the_bot_disarmed():
     for raw in (None, "", "not json", "[1, 2]", '{"unknown": 1}'):
         assert not load(raw).can_place
+
+
+UNSCOPED = {
+    "id": "1021510122612067461",
+    "created_at": "2026-09-19T19:56:31.971261Z",
+    "qty": 1, "price": 630,
+    "market_hash_name": "AK-47 | Crane Flight (Battle-Scarred)",
+    "hybrid_properties": {}, "bought_item_count": 0,
+}
+SCOPED = dict(UNSCOPED,
+              hybrid_properties={"min_float": 0.605, "max_float": 1})
+
+
+def test_a_created_order_is_read_back_as_we_store_it():
+    """Both replies came off the site: money in integer cents, and the float
+    bounds inside hybrid_properties rather than beside them."""
+    from src.placement import parse_order
+
+    got = parse_order(SCOPED)
+    assert got["remote_id"] == "1021510122612067461"
+    assert got["price"] == 6.30, "630 is cents, not dollars"
+    assert got["float_min"] == 0.605 and got["float_max"] == 1.0
+    assert got["qty"] == 1
+
+    plain = parse_order(UNSCOPED)
+    assert plain["float_min"] is None and plain["float_max"] is None
+
+
+def test_a_fill_is_visible_only_through_bought_item_count():
+    """Nothing else in the reply says whether the money is still waiting."""
+    from src.placement import parse_order
+
+    assert parse_order(SCOPED)["bought"] == 0
+    assert parse_order(dict(SCOPED, bought_item_count=1))["bought"] == 1
+
+
+def test_the_older_nested_float_shape_is_read_too():
+    from src.placement import parse_order
+
+    nested = dict(UNSCOPED, hybrid_properties={
+        "float_value": {"min": 0.15, "max": 0.179999}})
+    got = parse_order(nested)
+    assert got["float_min"] == 0.15 and got["float_max"] == 0.179999
+
+
+def test_a_reply_without_an_id_is_not_an_order():
+    from src.placement import parse_order
+
+    assert parse_order({"price": 630}) is None
+    assert parse_order(None) is None
+    assert parse_order({"data": SCOPED})["remote_id"] == SCOPED["id"]
+
+
+def test_the_default_body_matches_what_the_site_returned():
+    """The reply echoes the request's fields, so the template is built from
+    it: only the method and path are still unknown."""
+    import json
+
+    from src.placement import DEFAULT_CREATE_BODY, parse_order, render
+
+    sent = render(DEFAULT_CREATE_BODY,
+                  name="AK-47 | Crane Flight (Battle-Scarred)",
+                  price=6.30, float_min=0.605, float_max=1.0)
+    assert sent["price"] == 630, "cents, as the reply quoted them"
+    assert sent["hybrid_properties"] == {"min_float": 0.605, "max_float": 1.0}
+    assert sent["market_hash_name"] == SCOPED["market_hash_name"]
+
+    # Round trip: what we would send, read back the way a reply is read.
+    echoed = parse_order(dict(sent, id="x", bought_item_count=0))
+    assert echoed["price"] == 6.30
+    assert echoed["float_min"] == 0.605 and echoed["float_max"] == 1.0
