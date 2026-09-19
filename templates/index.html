@@ -70,6 +70,6 @@
 {% endblock %}
 {% block scripts %}
 <script>window.ADMIN_REQUIRED = {{ 'true' if admin_required else 'false' }};</script>
-<script src="{{ url_for('static', filename='common.js') }}"></script>
-<script src="{{ url_for('static', filename='index.js') }}"></script>
+<script src="{{ asset('common.js') }}"></script>
+<script src="{{ asset('index.js') }}"></script>
 {% endblock %}

@@ -14,10 +14,13 @@ const days = (v) => (v === null || v === undefined) ? "—" : v.toFixed(1) + " �
 
 let busy = false;
 
+const BUILD = (document.currentScript && document.currentScript.src || "")
+  .split("?v=")[1] || "?";
+
 function say(text, kind) {
   const el = $("an-note");
   if (!el) return;
-  el.textContent = text || "";
+  el.textContent = (text || "") + (text ? `  [сборка ${BUILD}]` : "");
   el.className = kind === "err" ? "err" : (kind === "ok" ? "ok" : "muted");
 }
 
@@ -57,15 +60,19 @@ async function loadItems(quiet) {
 
 function renderList(names) {
   const box = $("an-list");
-  box.innerHTML = "";
   if (!names.length) {
     box.innerHTML = '<span class="muted">список пуст</span>';
     return;
   }
+  // Built aside and swapped in one go: clearing first meant a failure
+  // halfway through left the list blank, which reads as "nothing was added".
+  const chips = [];
   names.forEach((name) => {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.appendChild(document.createTextNode(name));
+    const label = document.createElement("span");
+    label.textContent = name;
+    chip.appendChild(label);
     const x = document.createElement("button");
     x.className = "chip-x";
     x.textContent = "×";
@@ -76,8 +83,10 @@ function renderList(names) {
       await loadItems();
     });
     chip.appendChild(x);
-    box.appendChild(chip);
+    chips.push(chip);
   });
+  box.innerHTML = "";
+  chips.forEach((c) => box.appendChild(c));
 }
 
 function bandRow(b) {

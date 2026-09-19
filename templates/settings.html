@@ -55,6 +55,6 @@
 
 {% if auth_required %}{% endif %}
 <script>window.ADMIN_REQUIRED = false;</script>
-<script src="{{ url_for('static', filename='common.js') }}"></script>
-<script src="{{ url_for('static', filename='settings.js') }}"></script>
+<script src="{{ asset('common.js') }}"></script>
+<script src="{{ asset('settings.js') }}"></script>
 {% endblock %}

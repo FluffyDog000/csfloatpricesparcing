@@ -1,0 +1,56 @@
+// A DOM small enough to run the dashboard's page scripts under node, so a
+// runtime error in one is caught here rather than as a button that silently
+// does nothing. Usage: node dom_stub.js <script.js> <api-response.json>
+const fs = require("fs");
+
+function el(tag) {
+  return {
+    tag, id: "", value: "", innerHTML: "", textContent: "", className: "",
+    disabled: false, title: "", children: [], onclick: null,
+    appendChild(c) { this.children.push(c); return c; },
+    addEventListener() {},
+    querySelectorAll: () => [],
+  };
+}
+
+const nodes = {};
+const doc = {
+  getElementById(id) {
+    if (!nodes[id]) { nodes[id] = el("div"); nodes[id].id = id; }
+    return nodes[id];
+  },
+  createElement: (t) => el(t),
+  createTextNode: (t) => ({ tag: "#text", textContent: t }),
+  addEventListener(ev, fn) { if (ev === "DOMContentLoaded") doc._ready = fn; },
+  querySelectorAll: () => [],
+  currentScript: { src: "/static/x.js?v=testbuild" },
+};
+
+global.document = doc;
+global.window = { addEventListener() {} };
+global.localStorage = { getItem: () => "" };
+global.confirm = () => true;
+
+const api = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+global.fetch = async (url) => ({
+  ok: true,
+  statusText: "OK",
+  json: async () => (url.startsWith("/api/analysis") ? api : { items: [] }),
+});
+
+eval(fs.readFileSync("static/common.js", "utf8"));
+eval(fs.readFileSync(process.argv[2], "utf8"));
+
+(async () => {
+  if (doc._ready) await doc._ready();
+  await new Promise((r) => setTimeout(r, 50));
+  const note = nodes["an-note"] || el("div");
+  console.log(JSON.stringify({
+    status: note.textContent,
+    kind: note.className,
+    chips: (nodes["an-list"] || el("div")).children.length,
+    listHtml: (nodes["an-list"] || el("div")).innerHTML,
+    sections: (nodes["an-results"] || el("div")).children.length,
+    step: (nodes["p-step"] || el("div")).value,
+  }));
+})();

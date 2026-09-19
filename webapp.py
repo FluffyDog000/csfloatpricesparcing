@@ -143,6 +143,38 @@ def _require_login():
     return redirect(url_for("login", next=request.path))
 
 
+# A template's URL is revalidated on every load, but /static is served with a
+# cache lifetime - so a deploy could leave a browser running yesterday's
+# JavaScript against today's markup, which reads as "my changes did nothing".
+# Stamping each asset with its mtime makes a changed file a different URL.
+@app.context_processor
+def _asset_version():
+    def asset(filename: str) -> str:
+        url = url_for("static", filename=filename)
+        try:
+            stamp = int(os.path.getmtime(
+                os.path.join(app.static_folder, filename)))
+        except OSError:
+            return url
+        return f"{url}?v={stamp}"
+
+    return {"asset": asset, "asset_build": _build_stamp()}
+
+
+def _build_stamp() -> str:
+    """Newest mtime across the served assets, shown in the UI so a screenshot
+    says which build is actually running."""
+    newest = 0.0
+    try:
+        for name in os.listdir(app.static_folder):
+            path = os.path.join(app.static_folder, name)
+            if os.path.isfile(path):
+                newest = max(newest, os.path.getmtime(path))
+    except OSError:
+        return "?"
+    return str(int(newest))[-6:]
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not AUTH_ENABLED:
