@@ -248,3 +248,31 @@ def test_the_page_can_tell_that_its_own_script_is_stale():
     js = pathlib.Path("static/analysis.js").read_text()
     assert "window.ANALYSIS_BUILD = BUILD" in js, \
         "the script announces its build before doing any work"
+
+
+def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
+    """Only the chosen bid was shown, so a price well over the book looked
+    arbitrary and could not be checked. Both numbers belong side by side,
+    with what the cheap one would have earned."""
+    import pathlib
+
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "минимум" in js, "the cheapest leading price is a column"
+    assert "entry_monthly" in js and "entry_lam" in js, \
+        "and what it would have returned is on hover"
+
+    from src.pricing import Params, plan
+    rows = [{"price": p, "float_value": 0.28, "age_days": a} for p, a in
+            [(117.0, 3.0), (118.0, 9.0), (119.0, 15.0)]]
+    rows += [{"price": p, "float_value": 0.28, "age_days": float(i % 27)}
+             for i, p in enumerate([121.0, 122.0] * 3)]
+    rows += [{"price": 135.0, "float_value": 0.28, "age_days": float(i % 27)}
+             for i in range(14)]
+    orders = [{"price": 116.0, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
+    band = plan(rows, orders, (0.27, 0.29), params=Params(min_sample=5))[0]
+
+    # The entry is measured even though it fails the filters - why it fails is
+    # the answer to "why are we bidding over the book".
+    assert band.entry_lam is not None and band.entry_lam < Params().min_lambda
+    assert band.entry_t_buy > band.t_buy * 5, "leading cheap means waiting"
+    assert band.entry_monthly < band.monthly

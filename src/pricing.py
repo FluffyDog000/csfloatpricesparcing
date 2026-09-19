@@ -98,6 +98,12 @@ class Band:
     t_buy: float | None = None
     t_sell: float | None = None
     monthly: float | None = None
+    # What the cheapest leading price would have given, so the surcharge the
+    # scan paid for flow is visible beside the price it chose rather than
+    # having to be taken on trust.
+    entry_lam: float | None = None
+    entry_t_buy: float | None = None
+    entry_monthly: float | None = None
     take: bool = False
     reason: str = ""
 
@@ -239,6 +245,19 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
                     t_sell=t_sell, monthly=monthly, take=True))
             bid = round(bid + step, 2)
 
+        # Measured whether or not the entry passes the filters: when it does
+        # not, why it does not is the answer to "why are we bidding over the
+        # book", and that is the question the number gets asked.
+        entry_fills = [x for x in recent if x["price"] <= entry]
+        entry_lam = len(entry_fills) / p.window_days
+        entry_queue = sum(int(o.get("qty") or 1) for o in rivals
+                          if o["price"] >= entry)
+        entry_t_buy = (1 + entry_queue) / entry_lam if entry_lam > 0 else None
+        entry_monthly = None
+        if entry_t_buy is not None and lam_sell > 0:
+            entry_monthly = ((net - entry) / entry) * 30.0 / (
+                entry_t_buy + 1.0 / lam_sell)
+
         if found:
             # The cheapest price that still earns nearly the best return. The
             # scan used to take the maximum outright, which bid dollars over
@@ -249,9 +268,15 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
             floor_ = peak * (1.0 - p.bid_tolerance)
             best = min((b for b in found if (b.monthly or 0) >= floor_),
                        key=lambda b: b.bid)
+            best.entry_lam = entry_lam
+            best.entry_t_buy = entry_t_buy
+            best.entry_monthly = entry_monthly
             out.append(best)
         else:
             row.reason = blocked
+            row.entry_lam = entry_lam
+            row.entry_t_buy = entry_t_buy
+            row.entry_monthly = entry_monthly
             out.append(row)
 
     out.sort(key=lambda r: (not r.take, -(r.monthly or 0), r.float_min))

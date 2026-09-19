@@ -369,3 +369,5 @@ tr.band-skip td { opacity: .65; }
   border-left: 3px solid var(--warn, #d29922);
 }
 .banner code { font-size: 12px; }
+
+.over { color: var(--warn, #d29922); font-size: 11px; }

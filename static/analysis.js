@@ -114,7 +114,7 @@
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="8" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
       return tr;
     }
     tr.className = "band-take";
