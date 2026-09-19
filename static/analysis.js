@@ -369,8 +369,26 @@
       wrap.appendChild(input);
       box.appendChild(wrap);
     });
-    $("place-msg").textContent = d.describe || "";
-    $("place-msg").className = d.configured ? "ok" : "muted";
+    // The body as it stands, so "the code updated" and "the saved shape
+    // updated" can be told apart without sending anything.
+    const msg = $("place-msg");
+    msg.innerHTML = "";
+    const line = document.createElement("div");
+    line.textContent = d.describe || "";
+    line.className = d.configured ? "ok" : "muted";
+    msg.appendChild(line);
+    (d.warnings || []).forEach((w) => {
+      const el = document.createElement("div");
+      el.className = "err";
+      el.textContent = "⚠ " + w;
+      msg.appendChild(el);
+    });
+    Object.keys(d.preview || {}).forEach((k) => {
+      const pre = document.createElement("pre");
+      pre.className = "preview";
+      pre.textContent = k + ": " + JSON.stringify(d.preview[k]);
+      msg.appendChild(pre);
+    });
   }
 
   function actionTable(rows, extra) {

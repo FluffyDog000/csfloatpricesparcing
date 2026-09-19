@@ -506,3 +506,45 @@ def test_a_real_run_has_to_be_asked_for_twice():
 
     js = pathlib.Path("static/analysis.js").read_text()
     assert "потратит деньги" in js, "a live apply is confirmed, not assumed"
+
+
+def test_a_saved_body_is_shown_as_it_would_be_sent():
+    """Updating the code does not update what was saved, and only the saved
+    shape is what goes out. The rendered request is on the page so the two can
+    be told apart without spending a request to find out."""
+    import json as _json
+
+    c, _ = _stocked()
+    stale = {
+        "create_method": "POST", "create_path": "/api/v1/buy-orders",
+        "create_body": '{"market_hash_name": "{name}", "price": {price_cents}}',
+        "update_method": "PATCH", "update_path": "/api/v1/buy-orders/{order_id}",
+        "update_body": '{"price": {price_cents}}',
+    }
+    c.post("/api/analysis/placement", json=stale)
+    got = c.get("/api/analysis/placement").get_json()
+
+    assert got["preview"]["создание"]["price"] == 4900, \
+        "what would be sent, rendered from what is stored"
+    assert any("max_price" in w for w in got["warnings"]), \
+        "and the field CSFloat refused is named"
+
+    # Saving the corrected shape clears it.
+    c.post("/api/analysis/placement",
+           json=c.get("/api/analysis/placement").get_json()["suggested"])
+    fixed = c.get("/api/analysis/placement").get_json()
+    assert fixed["warnings"] == []
+    assert fixed["preview"]["создание"]["max_price"] == 4900
+
+
+def test_a_body_that_cannot_render_shows_the_reason_not_a_blank():
+    c, _ = _stocked()
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.set_setting("placement_spec", json.dumps({
+        "create_path": "/x", "create_body": '{"p": {pennies}}'}))
+    db.close()
+
+    got = c.get("/api/analysis/placement").get_json()
+    assert "ошибка" in got["preview"]["создание"]
+    assert "pennies" in got["preview"]["создание"]["ошибка"]

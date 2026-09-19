@@ -380,3 +380,5 @@ tr.act-keep td { opacity: .6; }
 .arm-line { display: block; margin: 8px 0; font-size: 13px; }
 
 .input.inline-num { width: 5em; display: inline-block; padding: 2px 6px; }
+
+.preview { font-size: 11px; opacity: .8; margin: 4px 0; white-space: pre-wrap; word-break: break-all; }

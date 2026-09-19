@@ -1068,8 +1068,31 @@ def api_analysis_placement():
                         "describe": describe(spec)})
 
     spec = load(db.get_setting(PLACEMENT_KEY))
+    # Rendered from what is stored, so the request that would go out can be
+    # read off the page and compared with the browser's own - "the code was
+    # updated" and "the saved shape was updated" are different things, and
+    # only the second one is what gets sent.
+    preview, warn = {}, []
+    sample = dict(name="★ Hand Wraps | Duct Tape (Field-Tested)", price=49.0,
+                  float_min=0.1501, float_max=0.158)
+    for label, body in (("создание", spec.create_body),
+                        ("правка", spec.update_body)):
+        if not body:
+            continue
+        try:
+            preview[label] = render(body, **sample)
+        except Exception as exc:  # noqa: BLE001 - the message is the point
+            preview[label] = {"ошибка": str(exc)}
+    for label, body in preview.items():
+        if isinstance(body, dict) and "price" in body and "max_price" not in body:
+            warn.append(
+                f"тело «{label}» шлёт price — CSFloat отвечает «orders must "
+                f"have a max price above 0»; поле называется max_price")
+
     return jsonify({
         "spec": spec.as_dict(),
+        "preview": preview,
+        "warnings": warn,
         "suggested": SUGGESTED.as_dict(),
         "confirmed": sorted(CONFIRMED),
         "describe": describe(spec),
