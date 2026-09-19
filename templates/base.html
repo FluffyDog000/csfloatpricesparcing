@@ -13,6 +13,7 @@
     <div class="topbar-right">
       <button class="cur-btn" id="currency-toggle" hidden></button>
       <span class="status" id="status">—</span>
+      <span class="build" title="сборка статики на сервере">сб. {{ asset_build }}</span>
       <span class="timer" id="refresh-timer" title="До следующего автообновления страницы"></span>
       <a class="navlink" href="{{ url_for('analysis_page') }}">🎯 Анализ ордеров</a>
       <a class="navlink" href="{{ url_for('calc_page') }}">🧮 Калькулятор</a>

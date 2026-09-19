@@ -357,3 +357,5 @@ table.detail td.num { text-align: right; font-family: var(--mono); }
 .analysis-params label small { display: block; margin-top: 3px; line-height: 1.35; }
 tr.band-take td { background: rgba(63, 185, 80, .07); }
 tr.band-skip td { opacity: .65; }
+
+.build { font-size: 11px; opacity: .5; }

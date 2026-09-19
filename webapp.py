@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
+import sys
 import secrets
 import statistics
 import time
@@ -161,6 +163,9 @@ def _asset_version():
     return {"asset": asset, "asset_build": _build_stamp()}
 
 
+_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def _build_stamp() -> str:
     """Newest mtime across the served assets, shown in the UI so a screenshot
     says which build is actually running."""
@@ -173,6 +178,47 @@ def _build_stamp() -> str:
     except OSError:
         return "?"
     return str(int(newest))[-6:]
+
+
+@app.route("/api/diag")
+def api_diag():
+    """What is actually deployed here.
+
+    Three screenshots were spent guessing whether a fix had reached the
+    server, whether the browser had the new script, and which build was
+    running. This answers all three from one URL."""
+    import hashlib
+    import subprocess
+
+    def digest(path):
+        try:
+            data = pathlib.Path(path).read_bytes()
+        except OSError as exc:
+            return {"error": str(exc)}
+        return {"bytes": len(data),
+                "sha": hashlib.sha256(data).hexdigest()[:12],
+                "mtime": int(os.path.getmtime(path))}
+
+    try:
+        commit = subprocess.run(["git", "log", "-1", "--format=%h %s"],
+                                capture_output=True, text=True, timeout=5,
+                                cwd=os.path.dirname(os.path.abspath(__file__)))
+        head = commit.stdout.strip() or commit.stderr.strip()
+    except Exception as exc:  # noqa: BLE001
+        head = f"недоступно: {exc}"
+
+    files = {}
+    for name in ("static/analysis.js", "static/common.js", "static/style.css",
+                 "templates/analysis.html", "webapp.py", "src/pricing.py"):
+        files[name] = digest(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), name))
+    return jsonify({
+        "commit": head,
+        "build": _build_stamp(),
+        "python": sys.version.split()[0],
+        "files": files,
+        "started_at": _STARTED_AT,
+    })
 
 
 @app.route("/login", methods=["GET", "POST"])
