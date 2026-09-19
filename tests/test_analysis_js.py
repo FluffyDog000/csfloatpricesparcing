@@ -7,6 +7,7 @@ script under node against a stub DOM and the real API response.
 """
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -237,3 +238,14 @@ def test_saving_thresholds_keeps_the_budget():
     assert r["limits"]["total_capital"] == 500.0, \
         "a threshold save must not touch the money"
     assert c.get("/api/analysis/plan").get_json()["limits"]["total_capital"] == 500.0
+
+
+def test_a_failed_row_shows_the_server_text_as_text():
+    """The reason cell now carries a server message and the JSON that drew it.
+    Built with innerHTML it would be markup; a `<` in an error body would eat
+    the rest of the row."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    table = source.split("function actionTable")[1].split("\n  }")[0]
+    assert "why.textContent" in table
+    assert 'class="muted">${r.detail' not in table, \
+        "the server's own words must not be pasted in as markup"

@@ -408,7 +408,12 @@
         <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
         <td><b>${money(a.price)}</b>${
           a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
-        <td class="muted">${r.detail || a.reason}</td>`;
+        <td class="muted"></td>`;
+      // The last cell now carries whatever the server said, verbatim, plus the
+      // body that drew it - text from outside, so it goes in as text.
+      const why = tr.lastElementChild;
+      why.textContent = r.detail || a.reason;
+      if (r.ok === false && a.sent) why.title = "отправлено: " + JSON.stringify(a.sent);
       tb.appendChild(tr);
     });
     t.appendChild(tb);

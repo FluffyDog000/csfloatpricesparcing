@@ -153,3 +153,50 @@ def test_a_refusal_carries_what_the_server_said():
     assert not got.ok
     assert "invalid float range" in got.detail, \
         "what the server objected to survives into the report"
+
+
+def test_a_refusal_reports_the_request_that_drew_it():
+    """Six creates came back "orders must have a max price above 0" while the
+    code already sent max_price - because the saved request still said price.
+    From the outside those two look identical, so the failure carries the body
+    that actually went out."""
+    from src.executor import PLACE, Action
+    from src.placement import Spec
+    from src.sender import Sender
+
+    def refuse(method, url, body, headers):
+        raise RuntimeError('HTTP 400 — {"code":5,"message":'
+                           '"orders must have a max price above 0"}')
+
+    stale = Spec(create_path="/api/v1/buy-orders",
+                 create_body='{"market_hash_name": "{name}", '
+                             '"price": {price_cents}}')
+    sender = Sender("https://csfloat.com", stale, refuse, dry_run=False)
+    action = Action(PLACE, "★ Hand Wraps | Duct Tape (Field-Tested)",
+                    0.1501, 0.158, 49.0, 52.0, "проба")
+
+    result = sender.perform(action)
+    assert not result.ok
+    assert "max price above 0" in result.detail
+    assert '"price": 4900' in result.detail, "what went out, not what we meant"
+    assert result.action.sent == {
+        "market_hash_name": "★ Hand Wraps | Duct Tape (Field-Tested)",
+        "price": 4900}
+    assert result.as_dict()["action"]["sent"]["price"] == 4900
+
+
+def test_a_send_that_never_happened_reports_no_body():
+    """A dry run, or a refusal before the request was built, must not claim a
+    request went out."""
+    from src.executor import PLACE, Action
+    from src.placement import SUGGESTED
+    from src.sender import Sender
+
+    def unreachable(*a, **k):  # pragma: no cover - must not be called
+        raise AssertionError("dry run sent a request")
+
+    sender = Sender("https://csfloat.com", SUGGESTED, unreachable, dry_run=True)
+    action = Action(PLACE, "x", 0.1, 0.2, 49.0, 52.0, "проба")
+    result = sender.perform(action)
+    assert result.ok and action.sent is None
+    assert "отправлено" not in result.detail

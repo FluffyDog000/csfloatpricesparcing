@@ -17,6 +17,7 @@ separate from planning, and it is spent by use: a plan is applied once.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -65,10 +66,16 @@ class Sender:
         if self.dry_run:
             return Result(action, True,
                           f"[вхолостую] {self.spec.create_method} {url} {body}")
+        # Carried into the failure below: a refusal that does not say what was
+        # sent leaves "the code was corrected" and "the saved shape was
+        # corrected" looking identical, and only the second one is what travels.
+        action.sent = body
         reply = self.send(self.spec.create_method, url, body, self.headers)
         parsed = parse_order(reply)
         if not parsed:
-            return Result(action, False, f"ответ без id ордера: {reply!r:.120}")
+            return Result(action, False,
+                          f"ответ без id ордера: {reply!r:.120} · отправлено: "
+                          + json.dumps(body, ensure_ascii=False))
         log.info("Placed %s %.4f-%.4f at $%.2f -> %s", name, action.float_min,
                  action.float_max, action.price, parsed["remote_id"])
         return Result(action, True, f"поставлен по ${parsed['price']:.2f}",
@@ -85,6 +92,7 @@ class Sender:
         if self.dry_run:
             return Result(action, True,
                           f"[вхолостую] {self.spec.update_method} {url} {body}")
+        action.sent = body
         self.send(self.spec.update_method, url, body, self.headers)
         log.info("Amended %s to $%.2f", action.remote_id, action.price)
         return Result(action, True, f"цена изменена на ${action.price:.2f}",
@@ -124,5 +132,9 @@ class Sender:
             return Result(action, False, str(exc))
         except Exception as exc:  # noqa: BLE001 - the plan continues
             log.warning("Action %s on %s failed: %s", action.kind, action.item, exc)
-            return Result(action, False, f"{type(exc).__name__}: {exc}")
+            detail = f"{type(exc).__name__}: {exc}"
+            if action.sent is not None:
+                detail += " · отправлено: " + json.dumps(action.sent,
+                                                         ensure_ascii=False)
+            return Result(action, False, detail)
         return Result(action, False, f"неизвестное действие {action.kind}")

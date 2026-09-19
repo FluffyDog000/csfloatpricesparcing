@@ -57,6 +57,11 @@ class Action:
     order_id: int | None = None
     remote_id: str | None = None
     was: float | None = None        # the price we were bidding, when raising
+    # The body actually sent, filled in by the sender just before the request.
+    # A refusal that does not say what was sent leaves "the code was fixed" and
+    # "the saved request was fixed" looking identical from the outside, and only
+    # the second one is what travels.
+    sent: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
