@@ -1,4 +1,9 @@
 // Order analysis: what would we bid, and why not the bands we skip.
+//
+// Every action says what it is doing. The page shipped silent, and a button
+// that fetches, computes and re-renders looks identical to a broken one while
+// it works — which is exactly how a missing common.js read to the user.
+
 function token() {
   try { return localStorage.getItem("csfloat_admin_token") || ""; } catch (e) { return ""; }
 }
@@ -7,16 +12,46 @@ const money = (v) => (v === null || v === undefined) ? "—" : "$" + v.toFixed(2
 const pct = (v) => (v === null || v === undefined) ? "—" : (v * 100).toFixed(1) + "%";
 const days = (v) => (v === null || v === undefined) ? "—" : v.toFixed(1) + " д";
 
-function note(text, bad) {
+let busy = false;
+
+function say(text, kind) {
   const el = $("an-note");
+  if (!el) return;
   el.textContent = text || "";
-  el.className = bad ? "err" : "muted";
+  el.className = kind === "err" ? "err" : (kind === "ok" ? "ok" : "muted");
 }
 
-async function loadItems() {
+/** Run an action with the buttons locked and the status line narrating it. */
+async function action(label, fn) {
+  if (busy) { say("Подожди, идёт: " + busy, "err"); return; }
+  busy = label;
+  const buttons = document.querySelectorAll(".analysis-actions .btn, #an-add");
+  buttons.forEach((b) => { b.disabled = true; });
+  say(label + "…");
+  try {
+    await fn();
+  } catch (e) {
+    say("Ошибка — " + (e && e.message ? e.message : e), "err");
+    console.error(label, e);
+  } finally {
+    busy = false;
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+
+async function loadItems(quiet) {
   const data = await getJSON("/api/analysis");
-  renderList(data.items.map((i) => i.item));
+  const names = data.items.map((i) => i.item);
+  renderList(names);
   renderResults(data);
+  if (!quiet) {
+    const taken = data.items.reduce(
+      (n, it) => n + (it.bands || []).filter((b) => b.take).length, 0);
+    say(names.length
+      ? `Готово: ${names.length} предмет(ов), подходящих полос ${taken}.`
+      : "Список пуст — впиши название предмета выше и нажми «Добавить».",
+      names.length ? "ok" : null);
+  }
   return data;
 }
 
@@ -24,22 +59,22 @@ function renderList(names) {
   const box = $("an-list");
   box.innerHTML = "";
   if (!names.length) {
-    box.innerHTML = '<span class="muted">список пуст — добавь предмет выше</span>';
+    box.innerHTML = '<span class="muted">список пуст</span>';
     return;
   }
   names.forEach((name) => {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.textContent = name;
+    chip.appendChild(document.createTextNode(name));
     const x = document.createElement("button");
     x.className = "chip-x";
     x.textContent = "×";
     x.title = "убрать";
-    x.onclick = async () => {
+    x.onclick = () => action("Убираю " + name, async () => {
       await postJSON("/api/analysis/items",
         { market_hash_name: name, action: "remove" }, token());
-      loadItems();
-    };
+      await loadItems();
+    });
     chip.appendChild(x);
     box.appendChild(chip);
   });
@@ -70,13 +105,11 @@ function bandRow(b) {
 function renderResults(data) {
   const box = $("an-results");
   box.innerHTML = "";
-  if (data.waiting && data.waiting.length) {
-    note("Сборщик занят: " + data.waiting.join("; "));
-  }
+  if (!data.items.length) return;
+
   data.items.forEach((it) => {
     const sec = document.createElement("section");
     sec.className = "settings-block";
-    const take = it.bands.filter((b) => b.take);
     const head = document.createElement("h2");
     head.textContent = it.item;
     sec.appendChild(head);
@@ -92,22 +125,32 @@ function renderResults(data) {
     meta.textContent =
       `продаж ${it.sales} · ордеров в стакане ${it.orders}` +
       (it.swept_at ? ` · обойдён ${it.swept_at.slice(0, 16).replace("T", " ")}` : "") +
-      (it.depth ? ` · листингов по полосам ${it.depth}` : " · листинги не собраны (цена выхода из истории, завышена)");
+      (it.depth ? ` · листингов по полосам ${it.depth}`
+                : " · листинги не собраны (цена выхода из истории, завышена)");
     sec.appendChild(meta);
 
-    if (!it.orders) {
+    // The two ways a report is empty for a reason that is not the market.
+    if (!it.sales) {
       const warn = document.createElement("p");
       warn.className = "err";
-      warn.textContent = "Стакан не собран — нажми «Обойти стаканы».";
+      warn.textContent = "Продаж в базе нет — предмет добавлен недавно, "
+        + "история ещё собирается. Считать пока не из чего.";
+      sec.appendChild(warn);
+    } else if (!it.orders) {
+      const warn = document.createElement("p");
+      warn.className = "err";
+      warn.textContent = "Стакан не собран — нажми «Обойти стаканы». "
+        + "Без него не видно, кто уже стоит в полосе.";
       sec.appendChild(warn);
     }
 
+    const take = it.bands.filter((b) => b.take);
     const sum = document.createElement("p");
     sum.innerHTML = take.length
-      ? `<b>${take.length}</b> ордер(ов) · капитал <b>${money(it.capital)}</b>` +
-        ` · ожидаемо <b>${money(it.monthly)}</b>/мес` +
-        ` (<b>${it.capital ? (it.monthly / it.capital * 100).toFixed(0) : 0}%</b>)`
-      : "<b>Ни одной полосы не проходит.</b> Причины ниже.";
+      ? `<b>${take.length}</b> ордер(ов) · капитал <b>${money(it.capital)}</b>`
+        + ` · ожидаемо <b>${money(it.monthly)}</b>/мес`
+        + ` (<b>${it.capital ? (it.monthly / it.capital * 100).toFixed(0) : 0}%</b>)`
+      : "<b>Ни одной полосы не проходит.</b> Причина по каждой — в таблице.";
     sec.appendChild(sum);
 
     const t = document.createElement("table");
@@ -126,17 +169,19 @@ function renderResults(data) {
 
 async function fillKnown() {
   try {
-    const items = await getJSON("/api/items");
+    const data = await getJSON("/api/items");
     const dl = $("an-known");
     dl.innerHTML = "";
-    (items.items || items || []).forEach((it) => {
+    (data.items || []).forEach((it) => {
       const name = it.market_hash_name || it.name;
       if (!name) return;
       const o = document.createElement("option");
       o.value = name;
       dl.appendChild(o);
     });
-  } catch (e) { /* the datalist is a convenience, not a requirement */ }
+  } catch (e) {
+    console.error("автодополнение не загрузилось", e);
+  }
 }
 
 function fillParams(p) {
@@ -150,72 +195,113 @@ function fillParams(p) {
   $("p-sample").value = p.min_sample;
 }
 
-document.addEventListener("DOMContentLoaded", async () => {
-  fillKnown();
-  try {
-    const data = await loadItems();
-    fillParams(data.params);
-  } catch (e) { note(e.message, true); }
+document.addEventListener("DOMContentLoaded", () => {
+  // A script error must never again look like a button that does nothing.
+  window.addEventListener("error", (e) => {
+    say("Ошибка в скрипте: " + e.message, "err");
+  });
 
-  $("an-add").onclick = async () => {
+  fillKnown();
+  action("Загружаю список", async () => {
+    const data = await loadItems(true);
+    fillParams(data.params);
+    const n = data.items.length;
+    say(n ? `Список: ${n} предмет(ов). Нажми «Проанализировать».`
+          : "Список пуст — впиши название предмета выше и нажми «Добавить».");
+  });
+
+  $("an-add").onclick = () => {
     const name = $("an-name").value.trim();
-    if (!name) return;
-    try {
-      await postJSON("/api/analysis/items", { market_hash_name: name }, token());
+    if (!name) { say("Сначала впиши название предмета.", "err"); return; }
+    action("Добавляю «" + name + "»", async () => {
+      const r = await postJSON("/api/analysis/items",
+        { market_hash_name: name }, token());
       $("an-name").value = "";
-      note("");
-      loadItems();
-    } catch (e) { note(e.message, true); }
+      await loadItems(true);
+      say(`Добавлен «${name}». Всего в списке: ${r.items.length}. `
+        + "Дальше — «Обойти стаканы».", "ok");
+    });
   };
   $("an-name").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("an-add").click();
   });
 
-  $("an-sweep").onclick = async () => {
-    try {
-      const r = await postJSON("/api/analysis/sweep", {}, token());
-      note(r.note);
-      // The collector does the fetching, so poll until the books land.
-      let left = 20;
+  $("an-sweep").onclick = () => action("Ставлю обход в очередь", async () => {
+    const r = await postJSON("/api/analysis/sweep", {}, token());
+    if (!r.queued.length) {
+      say("Нечего обходить — список пуст.", "err");
+      return;
+    }
+    if (r.waiting && r.waiting.length) {
+      say("Обход поставлен в очередь, но сборщик занят: "
+        + r.waiting.join("; ") + ". Проверяю каждые 6 с…");
+    }
+    // The collector owns the routes, so the page waits for it rather than
+    // fetching itself. Show that the wait is progress, not a hang.
+    const before = {};
+    (await getJSON("/api/analysis")).items.forEach((it) => {
+      before[it.item] = it.swept_at || "";
+    });
+    let tries = 0;
+    const total = 25;
+    await new Promise((resolve) => {
       const timer = setInterval(async () => {
-        if (--left <= 0) return clearInterval(timer);
-        try { await loadItems(); } catch (e) { /* keep polling */ }
+        tries += 1;
+        try {
+          const data = await getJSON("/api/analysis");
+          renderList(data.items.map((i) => i.item));
+          renderResults(data);
+          const done = data.items.filter(
+            (it) => (it.swept_at || "") !== (before[it.item] || "")).length;
+          say(`Жду сборщик: обойдено ${done} из ${r.queued.length}`
+            + ` · проверка ${tries} из ${total}`
+            + (data.error ? ` · последняя ошибка: ${data.error}` : ""));
+          if (done >= r.queued.length) { clearInterval(timer); resolve(); }
+        } catch (e) {
+          say("Ошибка при проверке — " + e.message, "err");
+        }
+        if (tries >= total) { clearInterval(timer); resolve(); }
       }, 6000);
-    } catch (e) { note(e.message, true); }
-  };
+    });
+    const data = await loadItems(true);
+    const fresh = data.items.filter(
+      (it) => (it.swept_at || "") !== (before[it.item] || "")).length;
+    say(fresh >= r.queued.length
+      ? `Обход закончен: ${fresh} из ${r.queued.length}. Считаю…`
+      : `Обойдено ${fresh} из ${r.queued.length} — сборщик не успел или на паузе. `
+        + "Проверь вкладку «Нагрузка».", fresh ? "ok" : "err");
+    await loadItems();
+  });
 
-  $("an-run").onclick = async () => {
-    try { await loadItems(); note("Пересчитано."); }
-    catch (e) { note(e.message, true); }
-  };
+  $("an-run").onclick = () => action("Считаю", async () => {
+    await loadItems();
+  });
 
-  $("an-clear").onclick = async () => {
+  $("an-clear").onclick = () => {
     if (!confirm("Очистить список предметов для анализа?")) return;
-    try {
+    action("Очищаю список", async () => {
       await postJSON("/api/analysis/items", { action: "clear" }, token());
-      loadItems();
-    } catch (e) { note(e.message, true); }
+      await loadItems(true);
+      say("Список очищен.", "ok");
+    });
   };
 
-  $("p-save").onclick = async () => {
-    try {
-      const r = await postJSON("/api/analysis/params", {
-        an_fee: (parseFloat($("p-fee").value) / 100) || 0.02,
-        an_min_margin: (parseFloat($("p-margin").value) / 100) || 0.03,
-        an_window: $("p-window").value,
-        an_step: $("p-step").value,
-        an_min_lambda: $("p-lambda").value,
-        an_min_wars: $("p-wars").value,
-        an_max_fill: $("p-fill").value,
-        an_min_sample: $("p-sample").value,
-      }, token());
-      fillParams(r.params);
-      // A value out of range is pulled to the nearest sane one; saying so
-      // beats an empty report the user reads as "nothing qualifies".
-      note((r.rejected && r.rejected.length)
-        ? "Поправлено: " + r.rejected.join("; ")
-        : "Пороги сохранены.", !!(r.rejected && r.rejected.length));
-      loadItems();
-    } catch (e) { note(e.message, true); }
-  };
+  $("p-save").onclick = () => action("Сохраняю пороги", async () => {
+    const r = await postJSON("/api/analysis/params", {
+      an_fee: (parseFloat($("p-fee").value) / 100) || 0.02,
+      an_min_margin: (parseFloat($("p-margin").value) / 100) || 0.03,
+      an_window: $("p-window").value,
+      an_step: $("p-step").value,
+      an_min_lambda: $("p-lambda").value,
+      an_min_wars: $("p-wars").value,
+      an_max_fill: $("p-fill").value,
+      an_min_sample: $("p-sample").value,
+    }, token());
+    fillParams(r.params);
+    await loadItems(true);
+    say((r.rejected && r.rejected.length)
+      ? "Поправлено: " + r.rejected.join("; ")
+      : "Пороги сохранены, пересчитано.",
+      (r.rejected && r.rejected.length) ? "err" : "ok");
+  });
 });

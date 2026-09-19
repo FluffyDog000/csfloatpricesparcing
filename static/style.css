@@ -341,5 +341,19 @@ table.detail td.num { text-align: right; font-family: var(--mono); }
   color: inherit; opacity: .6; font-size: 15px; line-height: 1; padding: 0 2px;
 }
 .chip-x:hover { opacity: 1; color: #f85149; }
+
+/* The status line: the page used to work in silence, so a button that was
+   fetching looked exactly like one that was broken. */
+#an-note {
+  margin-top: 10px; min-height: 1.3em; font-size: 13px;
+  padding: 6px 10px; border-radius: 6px;
+  border-left: 3px solid transparent;
+}
+#an-note:empty { padding: 0; }
+#an-note.muted { border-left-color: var(--muted, #8b949e); }
+#an-note.ok { color: var(--good, #3fb950); border-left-color: var(--good, #3fb950); }
+#an-note.err { color: var(--bad, #f85149); border-left-color: var(--bad, #f85149); }
+.analysis-actions .btn[disabled], #an-add[disabled] { opacity: .5; cursor: progress; }
+.analysis-params label small { display: block; margin-top: 3px; line-height: 1.35; }
 tr.band-take td { background: rgba(63, 185, 80, .07); }
 tr.band-skip td { opacity: .65; }

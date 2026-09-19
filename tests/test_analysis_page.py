@@ -170,3 +170,39 @@ def test_a_comma_decimal_is_accepted():
     c = _app([name])
     r = c.post("/api/analysis/params", json={"an_step": "0,03"}).get_json()
     assert r["params"]["band_step"] == 0.03
+
+
+def test_every_button_reports_what_it_is_doing():
+    """The page worked in silence: a button that fetches, computes and
+    re-renders looks exactly like a broken one while it runs, which is how a
+    missing script read as "добавить не работает"."""
+    import pathlib
+
+    js = pathlib.Path("static/analysis.js").read_text()
+
+    # Each action is wrapped so the status line names it and the buttons lock.
+    for handler in ("an-add", "an-sweep", "an-run", "an-clear", "p-save"):
+        block = js.split(f'$("{handler}").onclick')[1][:400]
+        assert "action(" in block, f"{handler} runs without saying so"
+
+    assert "window.addEventListener(\"error\"" in js, \
+        "a script error must surface, not look like a dead button"
+    assert "buttons.forEach" in js, "actions lock the buttons while they run"
+
+
+def test_an_item_with_no_history_is_explained_not_left_blank():
+    """A freshly added item has no sales, so every band is "мало данных" and
+    the report looks broken unless the page says why."""
+    name = "★ Driver Gloves | Snow Leopard (Field-Tested)"
+    c = _app([name])
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+    it = c.get("/api/analysis").get_json()["items"][0]
+
+    assert it["sales"] == 0 and it["orders"] == 0
+    assert len(it["bands"]) == 12, "bands still reported, each with its reason"
+    assert all("мало данных" in b["reason"] for b in it["bands"])
+
+    import pathlib
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "Продаж в базе нет" in js, "the empty case has its own message"
+    assert "Стакан не собран" in js
