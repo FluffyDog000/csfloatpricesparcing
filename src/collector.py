@@ -23,6 +23,7 @@ from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
                      ORDERS_PATH, SORT_BY_END, book_profile, coverage_gaps,
                      extract_listing_id, extract_listings, merge_listings,
                      merge_orders, parse_orders, plan_bands, wear_range)
+from .depth import DEPTH_STEP, depth_profile, depth_url, extract_depth
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
     ADAPTIVE_MAX_MINUTES,
@@ -497,6 +498,62 @@ class Collector:
         log.info("'%s': swept %d band(s) [float %s] in %d request(s) -> %d order(s)",
                  name, result["bands"], result["span"] or "?",
                  result["requests"], len(orders))
+        return result
+
+    def sweep_listing_depth(self, name: str, item_id: int) -> dict:
+        """Read the sell side band by band: who you queue behind when you list.
+
+        Costs one request per band, but against the documented endpoint and the
+        API key — a different budget than the order sweep's cookie and
+        residential address, so the two do not compete for the same quota.
+        """
+        span = wear_range(name)
+        result: dict[str, Any] = {"bands": 0, "requests": 0, "listings": 0,
+                                  "error": "", "span": None}
+        if not span:
+            result["error"] = ("без износа в названии не с чем сопоставить "
+                               "диапазон float")
+            return result
+
+        lo, hi = span
+        result["span"] = f"{lo:.2f}-{hi:.2f}"
+        rows: list[dict] = []
+        failed = 0
+        a = lo
+        while a < hi - 1e-9 and result["bands"] < MAX_BANDS:
+            b = round(min(a + DEPTH_STEP, hi), 4)
+            try:
+                payload = self.client.fetch_json(
+                    depth_url(self.config.http.base_url, name, round(a, 4), b),
+                    headers=self._listings_headers())
+                result["requests"] += 1
+                rows.extend(extract_depth(payload))
+                result["bands"] += 1
+            except RateLimited as exc:
+                log.warning("Depth sweep for '%s' stopped at %.2f: %s", name, a, exc)
+                result["error"] = (f"лимит CSFloat после {result['bands']} полос "
+                                   "— часть листингов не прочитана")
+                result["rate_limited"] = True
+                break
+            except Exception as exc:  # noqa: BLE001 - one band must not lose the rest
+                failed += 1
+                log.warning("Depth band %.2f of '%s' failed: %s", a, name, exc)
+            a = b
+
+        result["failed_bands"] = failed
+        if failed and not result["error"]:
+            result["error"] = (f"не ответило полос: {failed} из {failed + result['bands']}"
+                               if result["bands"] else
+                               f"ни одна из {failed} полос не ответила — "
+                               "листинги не прочитаны")
+        if not result["bands"]:
+            return result
+
+        profile = depth_profile(rows, span)
+        self.db.record_listing_depth(item_id, profile)
+        result["listings"] = len(rows)
+        log.info("'%s': sell side %d band(s) [float %s] -> %d listing(s)",
+                 name, result["bands"], result["span"], len(rows))
         return result
 
     def fetch_buy_orders(self, name: str, item_id: int,

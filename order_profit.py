@@ -106,6 +106,22 @@ def observed_days(sales: list[dict], cap: int) -> float:
     return max(min(span, float(cap)), 0.5)
 
 
+def load_depth(conn: sqlite3.Connection, item_id: int) -> list[dict]:
+    """Последний свип стороны продажи. Пусто — значит цена выхода берётся из
+    истории продаж и завышена: медиана прошлых сделок не та цена, по которой
+    продашь сегодня, пока под ней стоят более дешёвые лоты."""
+    try:
+        rows = conn.execute(
+            "SELECT float_min, float_max, listings, cheapest, median_age_days, "
+            "oldest_days, offerable, best_offer FROM listing_depth "
+            "WHERE item_id = ? AND fetched_at = (SELECT MAX(fetched_at) FROM "
+            "listing_depth WHERE item_id = ?) ORDER BY float_min",
+            (item_id, item_id)).fetchall()
+    except sqlite3.OperationalError:
+        return []          # база старая, таблицы ещё нет
+    return [dict(r) for r in rows]
+
+
 def in_band(sales: list[dict], lo: float, hi: float) -> list[dict]:
     return [s for s in sales if lo <= s["float_value"] <= hi]
 
@@ -151,10 +167,34 @@ def queue_ahead(orders: list[dict], bid: float, lo: float, hi: float,
     return total
 
 
+def depth_for(depth: list[dict], lo: float, hi: float) -> dict:
+    """Сторона продажи по полосам, попадающим в [lo, hi].
+
+    Цена выхода — самый дешёвый живой аск, а не медиана прошлых продаж.
+    Старый расчёт брал медиану И мгновенную продажу сразу, а это несовместимо:
+    по медиане стоишь за всей очередью, первым продаёшь только подрезав
+    нижний аск. Из двух вариантов консервативен второй, и он же измерим.
+    """
+    hit = [b for b in depth
+           if not (b["float_max"] <= lo or b["float_min"] >= hi)]
+    asks = [b["cheapest"] for b in hit if b["cheapest"] is not None]
+    ages = [b["oldest_days"] for b in hit if b["oldest_days"] is not None]
+    offers = [b["best_offer"] for b in hit if b["best_offer"] is not None]
+    return {
+        "bands": len(hit),
+        "listings": sum(b["listings"] for b in hit),
+        "cheapest": min(asks) if asks else None,
+        "oldest_days": max(ages) if ages else None,
+        "offerable": sum(b["offerable"] for b in hit),
+        "best_offer": min(offers) if offers else None,
+    }
+
+
 def evaluate(bid: float, lo: float, hi: float, sales: list[dict],
              orders: list[dict], wear: tuple[float, float] | None,
-             fee: float, days: float) -> dict:
+             fee: float, days: float, depth: list[dict] | None = None) -> dict:
     price, sample, window = market_price(sales, lo, hi)
+    sell = depth_for(depth or [], lo, hi)
     band_sales = in_band(sales, lo, hi)
     cheap = [s for s in band_sales if s["price"] <= bid]
     lam_buy = len(cheap) / days if days else 0.0
@@ -166,11 +206,22 @@ def evaluate(bid: float, lo: float, hi: float, sales: list[dict],
         "bid": bid, "lo": lo, "hi": hi, "window": window,
         "market": price, "sample": sample, "queue": queue,
         "lam_buy": lam_buy, "lam_sell": lam_sell,
+        "listings": sell["listings"], "cheapest": sell["cheapest"],
+        "oldest_days": sell["oldest_days"], "offerable": sell["offerable"],
+        "best_offer": sell["best_offer"], "priced_from": "история",
         "net": None, "profit": None, "profit_pct": None,
         "t_buy": None, "t_sell": None, "monthly": None,
     }
     if price is None:
         return out
+
+    # Подрезаем нижний аск, значит продаём по нему, а не по медиане истории.
+    # Без свипа листингов остаётся медиана — и тогда цифра завышена, о чём
+    # отчёт обязан сказать вслух.
+    if sell["cheapest"] is not None and sell["cheapest"] < price:
+        price = sell["cheapest"]
+        out["market"] = price
+        out["priced_from"] = "аск"
 
     net = price * (1.0 - fee)
     out["net"] = net
@@ -201,6 +252,7 @@ def report_item(conn, item, fee: float, days_window: int, suggest: bool,
     orders = [dict(r) for r in conn.execute(
         "SELECT price, qty, float_min, float_max, paint_seed, fetched_at "
         "FROM buy_orders WHERE item_id = ? ORDER BY position", (item["id"],))]
+    depth = load_depth(conn, item["id"])
     wear = wear_range(item["market_hash_name"])
     days = observed_days(sales, days_window)
 
@@ -213,13 +265,25 @@ def report_item(conn, item, fee: float, days_window: int, suggest: bool,
           f"ордеров в стакане: {len(orders)}")
     if not orders:
         print("  стакан не собран — нажми 📥 на странице предмета")
+    if depth:
+        listed = sum(b["listings"] for b in depth)
+        stale = max((b["oldest_days"] for b in depth
+                     if b["oldest_days"] is not None), default=None)
+        reachable = sum(b["offerable"] for b in depth)
+        print(f"  сторона продажи: {listed} лотов в {len(depth)} полосах"
+              + (f" · самый старый лежит {stale:.0f} дн." if stale else "")
+              + (f" · оффером доступно {reachable}" if reachable else ""))
+    else:
+        print("  ⚠ листинги не собраны — цена выхода взята из истории продаж "
+              "и ЗАВЫШЕНА: медиана прошлых сделок не та цена, по которой "
+              "продашь, пока под тобой стоят лоты дешевле")
 
     rows = []
     for order in orders:
         lo, hi = order_band(order, wear)
         # Своя ставка перебивает чужую на цент: иначе очередь будет впереди нас.
         rows.append((order, evaluate(order["price"] + 0.01, lo, hi, sales,
-                                     orders, wear, fee, days)))
+                                     orders, wear, fee, days, depth)))
 
     if rows:
         print(f"\n  {'полоса':<14}{'перебить':>10}{'рынок':>10}{'после ком.':>12}"
@@ -254,7 +318,7 @@ def report_item(conn, item, fee: float, days_window: int, suggest: bool,
             if bid in seen:
                 continue
             seen.add(bid)
-            ev = evaluate(bid, lo, hi, sales, orders, wear, fee, days)
+            ev = evaluate(bid, lo, hi, sales, orders, wear, fee, days, depth)
             if ev["monthly"] is None or ev["profit_pct"] is None:
                 continue
             if ev["profit_pct"] <= 0 or ev["t_buy"] > MAX_DAYS_TO_FILL:

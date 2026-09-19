@@ -78,6 +78,27 @@ CREATE TABLE IF NOT EXISTS book_history (
 CREATE INDEX IF NOT EXISTS idx_book_hist_item
     ON book_history(item_id, float_min, fetched_at);
 
+-- The sell half of the cycle. Time-to-resell was estimated as one over the
+-- band's sale rate, which assumes you are the only seller and put $300 gloves
+-- back on the market in seven hours. The live listings say how long the queue
+-- actually is and how long its lots have been sitting.
+CREATE TABLE IF NOT EXISTS listing_depth (
+    item_id             INTEGER NOT NULL REFERENCES items(id),
+    fetched_at          TEXT    NOT NULL,
+    float_min           REAL    NOT NULL,
+    float_max           REAL    NOT NULL,
+    listings            INTEGER NOT NULL,   -- lots asking less than you
+    cheapest            REAL,               -- the real exit price, in USD
+    median_age_days     REAL,               -- how long they have sat unsold
+    oldest_days         REAL,
+    offerable           INTEGER NOT NULL DEFAULT 0,  -- reachable below ask
+    best_offer          REAL,
+    PRIMARY KEY (item_id, fetched_at, float_min)
+);
+
+CREATE INDEX IF NOT EXISTS idx_depth_item
+    ON listing_depth(item_id, float_min, fetched_at);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -398,6 +419,38 @@ class Database:
         if since:
             sql += " AND fetched_at >= ?"
             args.append(since)
+        sql += " ORDER BY fetched_at, float_min"
+        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def record_listing_depth(self, item_id: int,
+                             profile: list[dict[str, Any]]) -> int:
+        """Append one sell-side sweep: the queue per band and its age."""
+        if not profile:
+            return 0
+        now = utcnow_iso()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO listing_depth (item_id, fetched_at, "
+            "float_min, float_max, listings, cheapest, median_age_days, "
+            "oldest_days, offerable, best_offer) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(item_id, now, b["float_min"], b["float_max"], b["listings"],
+              b["cheapest"], b["median_age_days"], b["oldest_days"],
+              b["offerable"], b["best_offer"]) for b in profile],
+        )
+        self.conn.commit()
+        return len(profile)
+
+    def listing_depth(self, item_id: int,
+                      latest_only: bool = True) -> list[dict[str, Any]]:
+        """Per-band sell-side depth, newest sweep by default."""
+        sql = ("SELECT fetched_at, float_min, float_max, listings, cheapest, "
+               "median_age_days, oldest_days, offerable, best_offer "
+               "FROM listing_depth WHERE item_id = ?")
+        args: list[Any] = [item_id]
+        if latest_only:
+            sql += (" AND fetched_at = (SELECT MAX(fetched_at) FROM "
+                    "listing_depth WHERE item_id = ?)")
+            args.append(item_id)
         sql += " ORDER BY fetched_at, float_min"
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 
