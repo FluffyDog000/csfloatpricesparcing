@@ -190,3 +190,45 @@ def test_the_live_book_prices_the_exit_when_it_is_cheaper():
                 params=Params(min_sample=5))[0]
     assert band.market == 190.0 and band.priced_from == "аск", \
         "we undercut the cheapest ask to sell, whatever history says"
+
+
+def test_being_first_is_not_the_goal_getting_filled_is():
+    """The cheapest price that leads a band can sit under what sellers will
+    take, and then it fills nothing. On one real band the minimum to lead was
+    $117 with three qualifying sales a month, while $122 caught sixteen -
+    five dollars more cut the wait from nine days to two."""
+    from src.pricing import Params, plan
+
+    rows = [(117.0, 0.28, 3.0), (118.0, 0.28, 9.0), (119.0, 0.28, 15.0)]
+    rows += [(p, 0.28, float(i % 27)) for i, p in enumerate([121.0, 122.0] * 3)]
+    rows += [(135.0, 0.28, float(i % 27)) for i in range(14)]
+    orders = [{"price": 116.0, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
+
+    band = plan(_sales(rows), orders, (0.27, 0.29),
+                params=Params(min_sample=5, bid_tolerance=0.0))[0]
+    assert band.entry == 117.0, "a dollar over the book makes us first"
+    assert band.bid == 122.0, "but the flow only starts well above that"
+    assert band.lam > 0.3, "and that is what pays for the thinner margin"
+
+
+def test_the_cheapest_price_within_reach_of_the_best_is_preferred():
+    """Taking the maximum outright bid over the book for a couple of points
+    of turnover. Given the choice, keep the dollars and the headroom."""
+    from src.pricing import Params, plan
+
+    # Flow barely moves above the entry: one extra sale at $89, nothing after.
+    rows = [(87.0, 0.28, float(i % 27)) for i in range(5)]
+    rows += [(89.0, 0.28, 5.0)]
+    rows += [(110.0, 0.28, float(i % 27)) for i in range(15)]
+    orders = [{"price": 86.9, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
+    sales = _sales(rows)
+
+    greedy = plan(sales, orders, (0.27, 0.29),
+                  params=Params(min_sample=5, bid_tolerance=0.0))[0]
+    thrifty = plan(sales, orders, (0.27, 0.29),
+                   params=Params(min_sample=5, bid_tolerance=0.10))[0]
+
+    assert greedy.bid == 89.0 and thrifty.bid == 87.0
+    assert thrifty.bid == thrifty.entry, "nothing above the entry earned its cost"
+    assert thrifty.wars > greedy.wars, "and the headroom is kept"
+    assert thrifty.monthly > greedy.monthly * 0.9, "for a couple of points"

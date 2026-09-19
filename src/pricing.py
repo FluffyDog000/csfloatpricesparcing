@@ -72,6 +72,11 @@ class Params:
     min_wars: int = 2              # outbids we must be able to answer
     max_fill_days: float = 21.0
     min_sample: int = 8            # sales needed before a median means anything
+    # Raising the bid does buy flow - every listing at or under it executes
+    # against the order - but the last dollars of that often buy very little.
+    # Among prices that come within this fraction of the best return, take the
+    # cheapest: the difference is headroom kept and capital not risked.
+    bid_tolerance: float = 0.10
 
 
 @dataclass
@@ -210,7 +215,7 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
                   if s.get("float_value") is not None and lo <= s["float_value"] < hi
                   and (s.get("age_days") is None or s["age_days"] <= p.window_days)]
         lam_sell = len(recent) / p.window_days
-        best: Band | None = None
+        found: list[Band] = []
         blocked = "нет цены с потоком и запасом"
         bid = entry
         while bid <= ceiling + 1e-9:
@@ -226,16 +231,24 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
                     and lam_sell > 0):
                 t_sell = 1.0 / lam_sell
                 monthly = margin * 30.0 / (t_buy + t_sell)
-                if best is None or monthly > (best.monthly or 0):
-                    best = Band(
-                        float_min=lo, float_max=hi, sample=len(band),
-                        market=market, priced_from=source, top=top, entry=entry,
-                        ceiling=ceiling, bid=bid, step=step, margin=margin,
-                        wars=wars, lam=lam, queue=queue, t_buy=t_buy,
-                        t_sell=t_sell, monthly=monthly, take=True)
+                found.append(Band(
+                    float_min=lo, float_max=hi, sample=len(band),
+                    market=market, priced_from=source, top=top, entry=entry,
+                    ceiling=ceiling, bid=bid, step=step, margin=margin,
+                    wars=wars, lam=lam, queue=queue, t_buy=t_buy,
+                    t_sell=t_sell, monthly=monthly, take=True))
             bid = round(bid + step, 2)
 
-        if best is not None:
+        if found:
+            # The cheapest price that still earns nearly the best return. The
+            # scan used to take the maximum outright, which bid dollars over
+            # the book for a few percent of turnover - on one glove $48.10
+            # where $44.50 made us first, spending the headroom to buy flow
+            # that was barely there.
+            peak = max(b.monthly or 0 for b in found)
+            floor_ = peak * (1.0 - p.bid_tolerance)
+            best = min((b for b in found if (b.monthly or 0) >= floor_),
+                       key=lambda b: b.bid)
             out.append(best)
         else:
             row.reason = blocked

@@ -48,6 +48,10 @@
       <label>максимальный срок набора, дней
         <input type="number" id="p-fill" class="input" step="1" min="1" max="365" value="21">
         <small class="muted">дольше — капитал стоит мёртво</small></label>
+      <label>уступка ради дешёвой ставки, %
+        <input type="number" id="p-bidtol" class="input" step="5" min="0" max="100" value="10">
+        <small class="muted">0 — всегда максимум доходности<br>
+          100 — всегда минимальная цена, лишь бы прошла фильтры</small></label>
       <label>минимальная выборка, продаж в полосе
         <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
         <small class="muted">меньше — медиана ничего не значит</small></label>

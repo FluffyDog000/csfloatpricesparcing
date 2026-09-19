@@ -222,6 +222,7 @@
     $("p-wars").value = p.min_wars;
     $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
+    $("p-bidtol").value = Math.round(p.bid_tolerance * 100);
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -325,6 +326,7 @@
         an_min_wars: $("p-wars").value,
         an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
+      an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
       }, token());
       fillParams(r.params);
       await loadItems(true);
