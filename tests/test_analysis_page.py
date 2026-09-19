@@ -363,3 +363,44 @@ def test_an_order_we_hold_is_reconciled_rather_than_duplicated():
             and a["float_max"] == first["float_max"]]
     assert len(same) == 1 and same[0]["kind"] == "keep", \
         "an order we already hold is not placed a second time"
+
+
+def test_the_captured_request_is_saved_only_when_sent():
+    """One endpoint came off the site; the rest follow its shape. The page
+    offers them, but nothing is stored until it is saved deliberately."""
+    c, _ = _stocked()
+    got = c.get("/api/analysis/placement").get_json()
+
+    assert not got["configured"], "an empty install has no request to send"
+    assert got["confirmed"] == ["update_method", "update_path"], \
+        "only the PATCH endpoint was actually captured"
+    assert got["suggested"]["update_path"] == "/api/v1/buy-orders/{order_id}"
+
+    saved = c.post("/api/analysis/placement",
+                   json=got["suggested"]).get_json()
+    assert saved["saved"]
+    assert c.get("/api/analysis/placement").get_json()["configured"]
+
+
+def test_a_body_that_would_fail_at_send_time_is_refused_at_save_time():
+    """Finding out the template is wrong while holding a live order is the
+    expensive moment to find out."""
+    c, _ = _stocked()
+    bad = c.post("/api/analysis/placement",
+                 json={"create_path": "/x", "create_body": '{"p": {pennies}}'})
+    assert bad.status_code == 400
+    assert "pennies" in bad.get_json()["problems"][0]
+    assert not c.get("/api/analysis/placement").get_json()["configured"]
+
+
+def test_saving_a_new_request_disarms():
+    """What was approved was the previous shape, not this one."""
+    c, _ = _stocked()
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.set_setting("analysis_armed", "1")
+    db.close()
+
+    suggested = c.get("/api/analysis/placement").get_json()["suggested"]
+    c.post("/api/analysis/placement", json=suggested)
+    assert c.get("/api/analysis/plan").get_json()["armed"] is False

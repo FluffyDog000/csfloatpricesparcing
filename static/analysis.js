@@ -285,6 +285,39 @@
     box.appendChild(t);
   }
 
+  const PLACE_FIELDS = [
+    ["create_method", "метод создания"], ["create_path", "путь создания"],
+    ["create_body", "тело создания"],
+    ["update_method", "метод правки"], ["update_path", "путь правки"],
+    ["update_body", "тело правки"],
+    ["cancel_method", "метод отмены"], ["cancel_path", "путь отмены"],
+    ["cancel_body", "тело отмены"], ["list_path", "путь списка"],
+  ];
+  let suggestedSpec = {};
+
+  async function loadPlacement() {
+    const d = await getJSON("/api/analysis/placement");
+    suggestedSpec = d.suggested || {};
+    const box = $("place-fields");
+    box.innerHTML = "";
+    PLACE_FIELDS.forEach(([key, label]) => {
+      const wrap = document.createElement("label");
+      // Which of these came off the site and which were inferred from it is
+      // the difference between a fact and a guess that spends money.
+      const sure = (d.confirmed || []).indexOf(key) >= 0;
+      wrap.textContent = label + (sure ? " ✓ снято с сайта" : "");
+      const input = document.createElement("input");
+      input.className = "input";
+      input.id = "sp-" + key;
+      input.value = (d.spec && d.spec[key]) || "";
+      input.placeholder = suggestedSpec[key] || "";
+      wrap.appendChild(input);
+      box.appendChild(wrap);
+    });
+    $("place-msg").textContent = d.describe || "";
+    $("place-msg").className = d.configured ? "ok" : "muted";
+  }
+
   function fillLimits(l) {
     $("l-total").value = l.total_capital;
     $("l-item").value = l.per_item_capital;
@@ -316,6 +349,7 @@
     action("Загружаю список", async () => {
       const data = await loadItems(true);
       fillParams(data.params);
+      await loadPlacement();
       await loadPlan();
       const n = data.items.length;
       say(n ? `Список: ${n} предмет(ов). Нажми «Проанализировать».`
@@ -393,6 +427,35 @@
     $("plan-run").onclick = () => action("Строю план", async () => {
       await loadPlan();
       say("План пересчитан.", "ok");
+    });
+
+    $("place-suggest").onclick = () => {
+      PLACE_FIELDS.forEach(([key]) => {
+        const el = $("sp-" + key);
+        if (el && !el.value) el.value = suggestedSpec[key] || "";
+      });
+      $("place-msg").textContent = "Подставлено. Проверь пути и сохрани.";
+      $("place-msg").className = "muted";
+    };
+
+    $("place-save").onclick = () => action("Сохраняю запрос", async () => {
+      const body = {};
+      PLACE_FIELDS.forEach(([key]) => {
+        const el = $("sp-" + key);
+        if (el) body[key] = el.value.trim();
+      });
+      try {
+        const r = await postJSON("/api/analysis/placement", body, token());
+        $("place-msg").textContent = r.describe;
+        $("place-msg").className = "ok";
+        say("Запрос сохранён. Выставление по-прежнему выполняется вручную.", "ok");
+      } catch (e) {
+        $("place-msg").textContent = e.message;
+        $("place-msg").className = "err";
+        throw e;
+      }
+      await loadPlacement();
+      await loadPlan();
     });
 
     $("an-clear").onclick = () => {

@@ -83,6 +83,17 @@
 <section class="settings-block">
   <h2>План действий</h2>
   <p class="muted">Что бот сделал бы прямо сейчас. Ничего не отправляется.</p>
+  <details id="place-block">
+    <summary>Запрос постановки (настройка)</summary>
+    <p class="muted">Подтверждён только <code>PATCH /api/v1/buy-orders/{order_id}</code>
+      — он снят с сайта. Остальные пути выведены из его формы: проверь их
+      в DevTools → Network, прежде чем сохранять. Ничего не отправляется,
+      пока не нажата «Сохранить запрос».</p>
+    <div class="calc-grid analysis-params" id="place-fields"></div>
+    <button class="btn" id="place-save">Сохранить запрос</button>
+    <button class="btn" id="place-suggest">Подставить выведенные</button>
+    <div class="muted" id="place-msg"></div>
+  </details>
   <div id="plan-state" class="muted"></div>
   <button class="btn" id="plan-run">Пересчитать план</button>
   <div id="plan-out"></div>

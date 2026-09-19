@@ -130,3 +130,48 @@ def test_the_default_body_matches_what_the_site_returned():
     echoed = parse_order(dict(sent, id="x", bought_item_count=0))
     assert echoed["price"] == 6.30
     assert echoed["float_min"] == 0.605 and echoed["float_max"] == 1.0
+
+
+def test_amending_an_order_is_its_own_operation():
+    """PATCH /api/v1/buy-orders/{id} was captured off the site, so answering
+    an outbid changes the order rather than replacing it - a replacement would
+    give up whatever standing the original had."""
+    from src.placement import SUGGESTED, endpoint, render
+
+    assert SUGGESTED.update_method == "PATCH"
+    assert SUGGESTED.can_update
+    assert endpoint(SUGGESTED.update_path, "1021510122612067461") == \
+        "/api/v1/buy-orders/1021510122612067461"
+
+    body = render(SUGGESTED.update_body, name="x", price=6.30,
+                  float_min=None, float_max=None)
+    assert body == {"price": 630}, "cents here as everywhere else"
+
+
+def test_a_path_needing_an_id_refuses_to_render_without_one():
+    import pytest as pt
+
+    from src.placement import NotConfigured, endpoint
+
+    with pt.raises(NotConfigured):
+        endpoint("/api/v1/buy-orders/{order_id}", None)
+    assert endpoint("/api/v1/buy-orders", None) == "/api/v1/buy-orders"
+
+
+def test_the_suggestion_is_not_the_configuration():
+    """Only the PATCH endpoint was captured; the rest follow its shape and are
+    a starting point to confirm, not a default to act on. An empty spec stays
+    empty until something is saved deliberately."""
+    from src.placement import CONFIRMED, load
+
+    assert not load(None).can_place
+    assert CONFIRMED == {"update_path", "update_method"}
+
+
+def test_a_missing_amend_endpoint_is_called_out_as_a_cost():
+    from src.placement import describe, load
+
+    spec = load('{"create_path": "/x", "create_body": "{}", '
+                '"cancel_path": "/x/{order_id}"}')
+    assert spec.can_place and spec.can_cancel and not spec.can_update
+    assert "правка" in describe(spec)

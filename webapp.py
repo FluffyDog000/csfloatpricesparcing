@@ -1001,6 +1001,56 @@ def api_analysis_plan():
     })
 
 
+@app.route("/api/analysis/placement", methods=["GET", "POST"])
+def api_analysis_placement():
+    """The captured request that creates, amends and cancels an order.
+
+    Saved only when sent deliberately: one endpoint was captured from the
+    browser and the rest follow its shape, and the one being guessed at is the
+    one that spends money."""
+    import json as _json
+
+    from src.placement import (CONFIRMED, PLACEMENT_KEY, SUGGESTED, Spec,
+                               describe, load, render)
+
+    db = get_db()
+    if request.method == "POST":
+        _require_admin()
+        data = request.get_json(silent=True) or {}
+        known = set(Spec().__dict__)
+        spec = Spec(**{k: str(v).strip() for k, v in data.items() if k in known})
+        problems = []
+        for label, body in (("создания", spec.create_body),
+                            ("правки", spec.update_body),
+                            ("отмены", spec.cancel_body)):
+            if not body:
+                continue
+            try:
+                render(body, name="проверка", price=1.23,
+                       float_min=0.15, float_max=0.18)
+            except Exception as exc:  # noqa: BLE001 - the message is the point
+                problems.append(f"тело {label}: {exc}")
+        if problems:
+            return jsonify({"saved": False, "problems": problems}), 400
+        db.set_setting(PLACEMENT_KEY, _json.dumps(spec.as_dict(),
+                                                  ensure_ascii=False))
+        # Saving a new request shape disarms: what was approved was the old one.
+        db.set_setting("analysis_armed", "0")
+        log.info("Placement spec saved (%s %s)", spec.create_method,
+                 spec.create_path)
+        return jsonify({"saved": True, "spec": spec.as_dict(),
+                        "describe": describe(spec)})
+
+    spec = load(db.get_setting(PLACEMENT_KEY))
+    return jsonify({
+        "spec": spec.as_dict(),
+        "suggested": SUGGESTED.as_dict(),
+        "confirmed": sorted(CONFIRMED),
+        "describe": describe(spec),
+        "configured": spec.can_place,
+    })
+
+
 @app.route("/api/analysis/params", methods=["POST"])
 def api_analysis_params():
     _require_admin()

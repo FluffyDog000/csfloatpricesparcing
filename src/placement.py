@@ -53,10 +53,16 @@ class NotConfigured(RuntimeError):
 
 @dataclass
 class Spec:
-    """How to ask CSFloat to create, cancel and list buy orders."""
+    """How to ask CSFloat to create, amend, cancel and list buy orders."""
     create_method: str = "POST"
     create_path: str = ""
     create_body: str = ""
+    # Confirmed off the site: an order is amended in place rather than being
+    # cancelled and posted again, so answering an outbid keeps the order - and
+    # whatever standing it has - instead of going to the back of the queue.
+    update_method: str = "PATCH"
+    update_path: str = ""          # contains {order_id}
+    update_body: str = ""
     cancel_method: str = "DELETE"
     cancel_path: str = ""          # may contain {order_id}
     cancel_body: str = ""
@@ -68,11 +74,44 @@ class Spec:
         return bool(self.create_path and self.create_body)
 
     @property
+    def can_update(self) -> bool:
+        return bool(self.update_path and self.update_body)
+
+    @property
     def can_cancel(self) -> bool:
         return bool(self.cancel_path)
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
+
+
+# One endpoint is confirmed - PATCH https://csfloat.com/api/v1/buy-orders/{id},
+# captured while amending an order - and the rest follow the shape of it. They
+# are a starting point to be confirmed against the browser, not a default:
+# nothing is sent until they are saved deliberately, because the one that is
+# guessed at here is the one that spends money.
+SUGGESTED = Spec(
+    create_method="POST",
+    create_path="/api/v1/buy-orders",           # inferred from the PATCH path
+    create_body=DEFAULT_CREATE_BODY,
+    update_method="PATCH",
+    update_path="/api/v1/buy-orders/{order_id}",   # confirmed
+    update_body='{"price": {price_cents}}',
+    cancel_method="DELETE",
+    cancel_path="/api/v1/buy-orders/{order_id}",   # inferred
+    list_path="/api/v1/buy-orders",                # inferred
+)
+
+CONFIRMED = {"update_path", "update_method"}
+
+
+def endpoint(path: str, order_id: str | None = None) -> str:
+    """Fill {order_id} in a configured path."""
+    if "{order_id}" not in path:
+        return path
+    if not order_id:
+        raise NotConfigured(f"путь {path} требует id ордера, а его нет")
+    return path.replace("{order_id}", str(order_id))
 
 
 def load(raw: str | None) -> Spec:
@@ -176,7 +215,13 @@ def describe(spec: Spec) -> str:
     if not spec.can_place:
         return ("постановка не настроена — нужен захваченный запрос создания "
                 "ордера (метод, путь, тело JSON)")
+    missing = []
     if not spec.can_cancel:
-        return ("создание настроено, отмена — нет: снять ордер бот не сможет, "
-                "и защита потолком работать не будет")
+        missing.append("отмена — снять позицию, которую перебили выше потолка, "
+                       "будет нечем")
+    if not spec.can_update:
+        missing.append("правка — перебивать придётся снятием и постановкой "
+                       "заново")
+    if missing:
+        return "настроено создание, но нет: " + "; ".join(missing)
     return f"настроено: {spec.create_method} {spec.create_path}"

@@ -15,7 +15,8 @@ Prefer patience to re-bidding. Being outbid is not by itself a reason to
 answer: whoever went above us is filled first, and then we lead again for
 nothing. What makes it worth answering is the wait that queue implies - so we
 re-bid when the queue ahead would push the fill past the time we are willing
-to wait, and not before.
+to wait, and not before. When we do answer, the order is amended in place
+rather than replaced, so it keeps whatever standing it has.
 
 Concentration is a cap, not an outcome. Five orders on one item are one bet in
 five pieces: they fill together when that market drops. Limits are applied per
