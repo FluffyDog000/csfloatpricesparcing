@@ -111,15 +111,48 @@ def test_headroom_is_counted_in_outbids_not_dollars():
     assert low.wars > band.wars * 3
 
 
-def test_a_rival_scoped_to_part_of_the_band_still_competes():
-    """Priority is by price among the orders a lot satisfies, so an order
-    overlapping the band takes lots from it - covering it is not required."""
-    from src.pricing import Params, plan
+def test_a_band_is_cut_where_the_competition_changes():
+    """The regression the book made obvious: every bid over $46 was scoped to
+    0.15-0.16, so pricing a 0.15-0.17 band against the whole book asked for
+    $48.30 - while a lot at 0.165 had one rival at $44.40 and $44.50 took it.
+    Bands have to break where other people's orders end."""
+    from src.pricing import Params, plan, _bands
 
-    rows = [(200.0, 0.16, float(i)) for i in range(20)]
-    partial = [{"price": 185.0, "qty": 1, "float_min": 0.15, "float_max": 0.155}]
-    band = plan(_sales(rows), partial, (0.15, 0.17), params=Params(min_sample=5))[0]
-    assert band.top == 185.0 and band.entry == 186.0
+    orders = [
+        {"price": 47.00, "qty": 1, "float_min": 0.15, "float_max": 0.158},
+        {"price": 46.90, "qty": 1, "float_min": 0.15, "float_max": 0.16},
+        {"price": 44.40, "qty": 1, "float_min": 0.15, "float_max": 0.18},
+    ]
+    edges = _bands((0.15, 0.38), 0.02, orders)
+    assert (0.15, 0.158) in edges and (0.158, 0.16) in edges
+    assert (0.16, 0.18) in edges, "the cheap stretch is its own band"
+
+    rows = [(50.0 + (i % 5), 0.165, float(i)) for i in range(20)]
+    bands = {(b.float_min, b.float_max): b
+             for b in plan(_sales(rows), orders, (0.15, 0.38),
+                           params=Params(min_sample=5))}
+    free = bands[(0.16, 0.18)]
+    assert free.top == 44.40, "only the order that reaches past 0.16 competes"
+    assert free.entry == 44.50, "one tier step above it, not above the book"
+
+
+def test_a_rival_ending_where_a_band_starts_does_not_compete_in_it():
+    """Bands are half-open. An order capped at 0.16 belongs to the band below
+    it; counting it above would price every band off its neighbour's fight."""
+    from src.pricing import _competing
+
+    capped = [{"price": 46.90, "qty": 1, "float_min": 0.15, "float_max": 0.16}]
+    assert _competing(capped, 0.15, 0.16, (0.15, 0.38)) == capped
+    assert _competing(capped, 0.16, 0.18, (0.15, 0.38)) == []
+
+
+def test_a_rival_scoped_to_part_of_a_band_still_competes():
+    """Where a rival's edge falls inside a band that cannot be split further,
+    it still takes lots from it - covering the band is not required."""
+    from src.pricing import _competing
+
+    partial = [{"price": 185.0, "qty": 1, "float_min": 0.152, "float_max": 0.155}]
+    assert _competing(partial, 0.15, 0.16, (0.15, 0.38)) == partial
 
 
 def test_an_unscoped_order_competes_everywhere():

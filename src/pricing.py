@@ -109,22 +109,46 @@ def _order_span(order: dict, span: tuple[float, float] | None) -> tuple[float, f
 
 def _competing(orders: Sequence[dict], lo: float, hi: float,
                span: tuple[float, float] | None) -> list[dict]:
-    """Orders that would take a lot from this band. An order is a rival when
-    its float range reaches into the band at all - it need not cover it."""
+    """Orders that would take a lot from this band.
+
+    Bands are half-open, [lo, hi): an order ending exactly where one begins
+    competes for the band below, not this one.
+    """
     out = []
     for o in orders:
         o_lo, o_hi = _order_span(o, span)
-        if o_lo < hi and o_hi >= lo:
+        if o_lo < hi and o_hi > lo:
             out.append(o)
     return out
 
 
-def _bands(span: tuple[float, float], step: float) -> list[tuple[float, float]]:
-    out, x = [], span[0]
-    while x < span[1] - 1e-9:
-        b = round(min(x + step, span[1]), 4)
-        out.append((round(x, 4), b))
-        x = b
+def _bands(span: tuple[float, float], step: float,
+           orders: Sequence[dict] = ()) -> list[tuple[float, float]]:
+    """Cut the wear where the competition changes, then at most `step` wide.
+
+    An even grid straddles the edges of other people's orders, and the price
+    to be first is then set by the fiercest corner of the band. On one book
+    every bid above $46 was scoped to 0.15-0.16, so a 0.15-0.17 band was
+    priced at $48.30 - when a lot at 0.165 had a single rival at $44.40 and
+    $44.50 would have taken it. Cutting at 0.16 first makes the cheap half
+    its own band; capping each piece at `step` keeps the valuation honest,
+    since a wide band is one the seller fills from its worst end.
+    """
+    lo, hi = span
+    cuts = {round(lo, 4), round(hi, 4)}
+    for o in orders:
+        for edge in _order_span(o, span):
+            if lo + 1e-9 < edge < hi - 1e-9:
+                cuts.add(round(edge, 4))
+    edges = sorted(cuts)
+
+    out: list[tuple[float, float]] = []
+    for a, b in zip(edges, edges[1:]):
+        x = a
+        while x < b - 1e-9:
+            nxt = round(min(x + step, b), 4)
+            out.append((round(x, 4), nxt))
+            x = nxt
     return out
 
 
@@ -156,7 +180,7 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
         return []
 
     out: list[Band] = []
-    for lo, hi in _bands(span, p.band_step):
+    for lo, hi in _bands(span, p.band_step, orders):
         band = [s["price"] for s in sales
                 if s.get("float_value") is not None and lo <= s["float_value"] < hi]
         row = Band(float_min=lo, float_max=hi, sample=len(band))
