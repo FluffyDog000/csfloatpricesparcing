@@ -20,7 +20,7 @@ import os
 import secrets
 import statistics
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import (
@@ -668,6 +668,156 @@ def api_orders():
     })
 
 
+# ---------------------------------------------------------------------------
+# Order analysis: which orders would we place, and why not the rest
+# ---------------------------------------------------------------------------
+
+ANALYSIS_KEY = "analysis_items"
+
+
+def _analysis_items(db) -> list[str]:
+    try:
+        names = json.loads(db.get_setting(ANALYSIS_KEY) or "[]")
+    except ValueError:
+        return []
+    return [n for n in names if isinstance(n, str)]
+
+
+def _analysis_params(db):
+    """Thresholds from the dashboard, falling back to the module defaults."""
+    from src.pricing import Params
+
+    p = Params()
+    for key, attr, cast in (
+        ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
+        ("an_window", "window_days", float), ("an_step", "band_step", float),
+        ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
+        ("an_max_fill", "max_fill_days", float),
+        ("an_min_sample", "min_sample", int),
+    ):
+        raw = db.get_setting(key)
+        if raw not in (None, ""):
+            try:
+                setattr(p, attr, cast(raw))
+            except (TypeError, ValueError):
+                pass
+    return p
+
+
+@app.route("/api/analysis/items", methods=["POST"])
+def api_analysis_items():
+    """Add or drop an item from the analysis list."""
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    name = (data.get("market_hash_name") or "").strip()
+    action = data.get("action") or "add"
+    db = get_db()
+    names = _analysis_items(db)
+    if action == "clear":
+        names = []
+    elif not name:
+        abort(400, description="market_hash_name is required")
+    elif action == "remove":
+        names = [n for n in names if n != name]
+    else:
+        if db.get_item_id(name) is None:
+            abort(404, description=f"'{name}' не отслеживается — сначала добавь предмет")
+        if name not in names:
+            names.append(name)
+    db.set_setting(ANALYSIS_KEY, json.dumps(names, ensure_ascii=False))
+    return jsonify({"items": names})
+
+
+@app.route("/api/analysis/sweep", methods=["POST"])
+def api_analysis_sweep():
+    """Queue an order-book sweep for every item on the list.
+
+    The web process never talks to CSFloat: the collector owns the routes and
+    the rate limits, so it does the fetching and this only asks."""
+    _require_admin()
+    db = get_db()
+    names = _analysis_items(db)
+    queued = [n for n in names if db.request_orders(n)]
+    db.set_setting("orders_error", "")
+    db.set_setting("orders_error_at", "")
+    waiting = _why_waiting(db)
+    log.info("Analysis sweep queued for %d item(s)%s", len(queued),
+             f" (ожидает: {'; '.join(waiting)})" if waiting else "")
+    return jsonify({
+        "queued": queued, "waiting": waiting,
+        "note": (f"Обход начнётся, когда снимется пауза: {'; '.join(waiting)}"
+                 if waiting else
+                 f"Обхожу стакан по {len(queued)} предмет(ам) — до минуты на каждый."),
+    })
+
+
+@app.route("/api/analysis")
+def api_analysis():
+    """Score every float band of every listed item."""
+    from src.orders import wear_range
+    from src.pricing import plan
+
+    db = get_db()
+    params = _analysis_params(db)
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(params.window_days * 3, 90))).isoformat()
+    out = []
+    for name in _analysis_items(db):
+        item_id = db.get_item_id(name)
+        if item_id is None:
+            out.append({"item": name, "error": "предмет больше не отслеживается"})
+            continue
+        sales = [dict(r) for r in db.conn.execute(
+            "SELECT price, float_value, sold_at FROM sales "
+            "WHERE item_id = ? AND float_value IS NOT NULL AND sold_at >= ?",
+            (item_id, cutoff))]
+        now = datetime.now(timezone.utc)
+        for s in sales:
+            try:
+                t = datetime.fromisoformat(s["sold_at"])
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                s["age_days"] = (now - t).total_seconds() / 86400
+            except (TypeError, ValueError):
+                s["age_days"] = None
+        orders = db.buy_orders(item_id)
+        try:
+            depth = db.listing_depth(item_id)
+        except Exception:  # noqa: BLE001 - an older DB has no such table
+            depth = []
+        bands = [b.as_dict() for b in
+                 plan(sales, orders, wear_range(name), depth, params)]
+        take = [b for b in bands if b["take"]]
+        out.append({
+            "item": name,
+            "sales": len(sales),
+            "orders": len(orders),
+            "swept_at": orders[0]["fetched_at"] if orders else None,
+            "depth": len(depth),
+            "bands": bands,
+            "capital": round(sum(b["bid"] for b in take), 2),
+            "monthly": round(sum(b["bid"] * b["monthly"] for b in take), 2),
+        })
+    return jsonify({
+        "items": out,
+        "params": params.__dict__,
+        "error": db.get_setting("orders_error") or "",
+        "waiting": _why_waiting(db),
+    })
+
+
+@app.route("/api/analysis/params", methods=["POST"])
+def api_analysis_params():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    for key in ("an_fee", "an_min_margin", "an_window", "an_step",
+                "an_min_lambda", "an_min_wars", "an_max_fill", "an_min_sample"):
+        if key in data:
+            db.set_setting(key, str(data[key]).strip())
+    return jsonify({"params": _analysis_params(db).__dict__})
+
+
 @app.route("/api/items/update", methods=["POST"])
 def api_update_item():
     _require_admin()
@@ -750,6 +900,12 @@ def load_page():
 @app.route("/calc")
 def calc_page():
     return render_template("calc.html")
+
+
+@app.route("/analysis")
+def analysis_page():
+    return render_template("analysis.html",
+                           admin_required=bool(config.web.admin_token))
 
 
 def _num_setting(db, key):

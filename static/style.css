@@ -324,3 +324,22 @@ table.detail td.num { text-align: right; font-family: var(--mono); }
 .loading { color: var(--muted); padding: 6px 0; font-size: 12px; }
 .sticker { display: inline-block; background: var(--panel); border: 1px solid var(--line);
            border-radius: 4px; padding: 0 4px; margin: 0 2px 2px 0; font-size: 11px; }
+
+/* --- Анализ ордеров ------------------------------------------------------ */
+.analysis-add { display: flex; gap: 8px; margin-bottom: 10px; }
+.analysis-add .input { flex: 1; min-width: 0; }
+.analysis-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.analysis-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.analysis-params { margin: 10px 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 6px;
+  background: var(--chip-bg, #21262d); font-size: 13px;
+}
+.chip-x {
+  border: 0; background: transparent; cursor: pointer;
+  color: inherit; opacity: .6; font-size: 15px; line-height: 1; padding: 0 2px;
+}
+.chip-x:hover { opacity: 1; color: #f85149; }
+tr.band-take td { background: rgba(63, 185, 80, .07); }
+tr.band-skip td { opacity: .65; }

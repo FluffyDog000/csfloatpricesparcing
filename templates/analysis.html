@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Анализ ордеров{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('index') }}">← к предметам</a>
+<h1>Анализ ордеров</h1>
+<p class="muted">Какие ордера бот поставил бы сейчас — и почему не поставил бы
+остальные. Постановка не выполняется, только расчёт.</p>
+
+<section class="settings-block">
+  <div class="analysis-add">
+    <input type="text" id="an-name" class="input" list="an-known"
+           placeholder="★ Specialist Gloves | Big Swell (Field-Tested)">
+    <datalist id="an-known"></datalist>
+    <button class="btn" id="an-add">Добавить</button>
+  </div>
+  <div id="an-list" class="analysis-list"></div>
+  <div class="analysis-actions">
+    <button class="btn primary" id="an-sweep">Обойти стаканы</button>
+    <button class="btn" id="an-run">Проанализировать</button>
+    <button class="btn danger" id="an-clear">Очистить список</button>
+  </div>
+  <div class="muted" id="an-note"></div>
+</section>
+
+<section class="settings-block">
+  <details>
+    <summary>Пороги расчёта</summary>
+    <div class="calc-grid analysis-params">
+      <label>комиссия, %
+        <input type="number" id="p-fee" class="input" step="0.1" min="0"></label>
+      <label>мин. маржа, %
+        <input type="number" id="p-margin" class="input" step="0.5" min="0"></label>
+      <label>окно истории, дней
+        <input type="number" id="p-window" class="input" step="1" min="1"></label>
+      <label>ширина полосы float
+        <input type="number" id="p-step" class="input" step="0.01" min="0.005"></label>
+      <label>мин. сделок в сутки
+        <input type="number" id="p-lambda" class="input" step="0.01" min="0"></label>
+      <label>мин. запас, перебиваний
+        <input type="number" id="p-wars" class="input" step="1" min="0"></label>
+      <label>макс. набор, дней
+        <input type="number" id="p-fill" class="input" step="1" min="1"></label>
+      <label>мин. выборка, продаж
+        <input type="number" id="p-sample" class="input" step="1" min="1"></label>
+    </div>
+    <button class="btn" id="p-save">Сохранить пороги</button>
+  </details>
+</section>
+
+<div id="an-results"></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='analysis.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,159 @@
+"""What price to bid, and when not to bid at all.
+
+Two mistakes this covers, both found by reading the numbers against CSFloat's
+own rules. Prices move on a tier grid, so "$117.01" is not an order anyone can
+place - between $100 and $500 the step is a dollar, and headroom is counted in
+outbids rather than cents. And bidding the least that puts you at the front of
+a band fills nothing when the front of that band sits far below the market:
+0.15-0.17 of Big Swell had thirty-five sales in a month, of which exactly one
+came in under the top-of-book, and calling that band illiquid was wrong.
+"""
+
+
+def test_only_prices_on_the_tier_grid_exist():
+    from src.pricing import increment, next_above, snap_down, snap_up
+
+    assert increment(3.50) == 0.01
+    assert increment(7.00) == 0.05
+    assert increment(13.37) == 0.10
+    assert increment(117.0) == 1.00
+    assert increment(640.0) == 5.00
+    assert increment(1500.0) == 10.00
+
+    # CSFloat's own example: $13.37 is invalid in the $10-$100 tier.
+    assert snap_down(13.37) == 13.30
+    assert snap_up(13.37) == 13.40
+
+    # Outbidding a glove costs a dollar, not a cent.
+    assert next_above(117.0) == 118.0
+    assert next_above(186.13) == 187.0
+    assert next_above(3.50) == 3.51
+
+    # A tier boundary is where a war gets ten times cheaper to fight.
+    assert increment(99.0) == 0.10 and increment(101.0) == 1.00
+
+
+def _sales(rows):
+    return [{"price": p, "float_value": f, "age_days": a} for p, f, a in rows]
+
+
+def test_a_band_bid_below_the_market_is_not_an_illiquid_band():
+    """The regression. The top of this book sits well under what the band
+    actually trades at, so the cheapest price that makes us first catches
+    almost nothing - while a few dollars more reaches real flow."""
+    from src.pricing import Params, plan
+
+    # Twenty sales spread $250-$290, one straggler at $240.
+    rows = [(240.0, 0.16, 5.0)]
+    rows += [(250.0 + i * 2, 0.16, float(i)) for i in range(20)]
+    orders = [{"price": 244.0, "qty": 1, "float_min": 0.15, "float_max": 0.18}]
+
+    band = [r for r in plan(_sales(rows), orders, (0.15, 0.17),
+                            params=Params(min_sample=5))][0]
+    assert band.entry == 245.0, "a dollar above the top of the book"
+    assert band.take, "the band trades plenty; the cheap entry was the problem"
+    assert band.bid > band.entry, \
+        "the bid has to climb until real sellers are in reach"
+    assert band.lam >= Params().min_lambda
+
+
+def test_a_band_bid_up_past_its_worth_is_refused():
+    from src.pricing import Params, plan
+
+    rows = [(100.0 + i, 0.16, float(i)) for i in range(20)]
+    # Someone is bidding above what the band resells for, net of fee.
+    orders = [{"price": 140.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+
+    band = plan(_sales(rows), orders, (0.15, 0.17), params=Params(min_sample=5))[0]
+    assert not band.take
+    assert "выше потолка" in band.reason
+    assert band.ceiling < band.entry
+
+
+def test_the_ceiling_is_the_last_price_that_still_pays_the_margin():
+    from src.pricing import Params, plan
+
+    rows = [(200.0, 0.16, float(i)) for i in range(20)]
+    band = plan(_sales(rows), [], (0.15, 0.17),
+                params=Params(min_sample=5, fee=0.02, min_margin=0.03))[0]
+
+    # 200 sells, 2% fee leaves 196, and 3% of margin caps the bid at 190.
+    assert band.market == 200.0
+    assert band.ceiling == 190.0
+    assert (196.0 - band.ceiling) / band.ceiling >= 0.03
+    assert (196.0 - (band.ceiling + band.step)) / (band.ceiling + band.step) < 0.03
+
+
+def test_headroom_is_counted_in_outbids_not_dollars():
+    from src.pricing import Params, plan
+
+    # Cheap lots and dear ones, so some sit under the bid and some over it.
+    rows = [(p, 0.16, float(i)) for i, p in
+            enumerate([175.0, 177.0, 179.0, 181.0, 183.0, 185.0,
+                       210.0, 212.0, 214.0, 216.0, 218.0, 220.0])]
+    orders = [{"price": 180.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    band = plan(_sales(rows), orders, (0.15, 0.17),
+                params=Params(min_sample=5, min_wars=2))[0]
+
+    assert band.take and band.step == 1.0
+    assert band.wars == int(round((band.ceiling - band.bid) / band.step))
+    assert band.wars >= 2, "a position we cannot defend twice is not taken"
+
+    # The same spread priced under $100 sits on a ten-times finer grid, so it
+    # buys far more defence - which is why the unit is outbids, not dollars.
+    cheap = [(p, 0.16, float(i)) for i, p in
+             enumerate([87.5, 88.5, 89.5, 90.5, 91.5, 92.5,
+                        105.0, 106.0, 107.0, 108.0, 109.0, 110.0])]
+    rival = [{"price": 90.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    low = plan(_sales(cheap), rival, (0.15, 0.17),
+               params=Params(min_sample=5))[0]
+    assert low.take and low.step == 0.10
+    assert low.wars > band.wars * 3
+
+
+def test_a_rival_scoped_to_part_of_the_band_still_competes():
+    """Priority is by price among the orders a lot satisfies, so an order
+    overlapping the band takes lots from it - covering it is not required."""
+    from src.pricing import Params, plan
+
+    rows = [(200.0, 0.16, float(i)) for i in range(20)]
+    partial = [{"price": 185.0, "qty": 1, "float_min": 0.15, "float_max": 0.155}]
+    band = plan(_sales(rows), partial, (0.15, 0.17), params=Params(min_sample=5))[0]
+    assert band.top == 185.0 and band.entry == 186.0
+
+
+def test_an_unscoped_order_competes_everywhere():
+    from src.pricing import Params, plan
+
+    rows = [(200.0, f, float(i)) for i, f in enumerate([0.16, 0.36] * 10)]
+    wide = [{"price": 180.0, "qty": 2, "float_min": None, "float_max": None}]
+    rows_sales = _sales(rows)
+    for band in plan(rows_sales, wide, (0.15, 0.38),
+                     params=Params(min_sample=5, band_step=0.02)):
+        if band.sample >= 5:
+            assert band.top == 180.0, "a filterless order reaches every band"
+
+
+def test_rejected_bands_come_back_with_their_reason():
+    """"Why not this one" is the question these numbers get read for."""
+    from src.pricing import Params, plan
+
+    rows = [(200.0, 0.16, float(i)) for i in range(20)]
+    rows += [(200.0, 0.36, float(i)) for i in range(3)]      # too few to judge
+    bands = plan(_sales(rows), [], (0.15, 0.38), params=Params(min_sample=5))
+
+    assert len(bands) == 12, "every band reported, taken or not"
+    thin = [b for b in bands if b.float_min == 0.35][0]
+    assert not thin.take and "мало данных" in thin.reason
+
+
+def test_the_live_book_prices_the_exit_when_it_is_cheaper():
+    from src.pricing import Params, plan
+
+    rows = [(200.0, 0.16, float(i)) for i in range(20)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 190.0,
+              "listings": 4}]
+    band = plan(_sales(rows), [], (0.15, 0.17), depth=depth,
+                params=Params(min_sample=5))[0]
+    assert band.market == 190.0 and band.priced_from == "аск", \
+        "we undercut the cheapest ask to sell, whatever history says"
