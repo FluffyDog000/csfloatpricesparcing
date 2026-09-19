@@ -774,7 +774,7 @@ ANALYSIS_BOUNDS = {
     "window_days": (1.0, 365.0), "band_step": (0.005, 0.23),
     "min_lambda": (0.0, 10.0), "min_wars": (0, 100),
     "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
-    "bid_tolerance": (0.0, 1.0),
+    "bid_tolerance": (0.0, 1.0), "sigma_k": (0.0, 5.0),
 }
 ANALYSIS_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
@@ -782,6 +782,7 @@ ANALYSIS_KEYS = (
     ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
     ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
     ("an_bid_tol", "bid_tolerance", float),
+    ("an_sigma_k", "sigma_k", float),
 )
 
 

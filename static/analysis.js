@@ -234,6 +234,7 @@
     $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
     $("p-bidtol").value = Math.round(p.bid_tolerance * 100);
+    $("p-sigma").value = p.sigma_k;
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -338,6 +339,7 @@
         an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
       an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
+      an_sigma_k: $("p-sigma").value,
       }, token());
       fillParams(r.params);
       await loadItems(true);

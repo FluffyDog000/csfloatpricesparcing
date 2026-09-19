@@ -77,6 +77,29 @@ class Params:
     # Among prices that come within this fraction of the best return, take the
     # cheapest: the difference is headroom kept and capital not risked.
     bid_tolerance: float = 0.10
+    # A thin margin is not the same trade as a fat one at the same return: it
+    # is far more exposed to the exit price being wrong. The median of a
+    # band's sales carries its own error, so require the margin to clear that
+    # error by this many multiples before the trade is believed.
+    sigma_k: float = 2.0
+
+
+def _median_error(prices: Sequence[float]) -> float:
+    """Relative error of a band's median price.
+
+    Taken from the interquartile range rather than the standard deviation, so
+    one freak sale does not widen it: sigma = IQR / 1.349, and the median of n
+    samples carries 1.2533 * sigma / sqrt(n).
+    """
+    if len(prices) < 4:
+        return 1.0
+    ordered = sorted(prices)
+    q1, q3 = st.quantiles(ordered, n=4)[0], st.quantiles(ordered, n=4)[2]
+    middle = st.median(ordered)
+    if middle <= 0:
+        return 1.0
+    sigma = (q3 - q1) / 1.349
+    return 1.2533 * sigma / len(ordered) ** 0.5 / middle
 
 
 @dataclass
@@ -85,6 +108,7 @@ class Band:
     float_max: float
     sample: int = 0
     market: float | None = None        # what it resells for
+    market_error: float | None = None  # how well that median is pinned down
     priced_from: str = "история"
     top: float = 0.0                   # best competing bid in the band
     entry: float | None = None         # cheapest price that puts us first
@@ -201,6 +225,7 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
             continue
 
         market, source = _exit_price(band, depth, lo, hi)
+        error = _median_error(band)
         net = market * (1.0 - p.fee)
         step = increment(market)
         ceiling = snap_down(net / (1.0 + p.min_margin))
@@ -209,6 +234,7 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
         entry = next_above(top) if top else snap_down(market * 0.85)
 
         row.market, row.priced_from, row.step = market, source, step
+        row.market_error = error
         row.top, row.entry, row.ceiling = top, entry, ceiling
 
         if entry > ceiling:
@@ -222,6 +248,7 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
                   and (s.get("age_days") is None or s["age_days"] <= p.window_days)]
         lam_sell = len(recent) / p.window_days
         found: list[Band] = []
+        thin = False
         blocked = "нет цены с потоком и запасом"
         bid = entry
         while bid <= ceiling + 1e-9:
@@ -234,15 +261,22 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
             t_buy = (1 + queue) / lam if lam > 0 else None
             if (lam >= p.min_lambda and wars >= p.min_wars and margin > 0
                     and t_buy is not None and t_buy <= p.max_fill_days
-                    and lam_sell > 0):
+                    and lam_sell > 0
+                    and margin >= p.sigma_k * error):
                 t_sell = 1.0 / lam_sell
                 monthly = margin * 30.0 / (t_buy + t_sell)
                 found.append(Band(
                     float_min=lo, float_max=hi, sample=len(band),
-                    market=market, priced_from=source, top=top, entry=entry,
+                    market=market, market_error=error,
+                    priced_from=source, top=top, entry=entry,
                     ceiling=ceiling, bid=bid, step=step, margin=margin,
                     wars=wars, lam=lam, queue=queue, t_buy=t_buy,
                     t_sell=t_sell, monthly=monthly, take=True))
+            elif (lam >= p.min_lambda and wars >= p.min_wars
+                  and 0 < margin < p.sigma_k * error):
+                # Everything else about this price is fine; only the margin is
+                # inside the error bar on what the lot resells for.
+                thin = True
             bid = round(bid + step, 2)
 
         # Measured whether or not the entry passes the filters: when it does
@@ -273,6 +307,9 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
             best.entry_monthly = entry_monthly
             out.append(best)
         else:
+            if thin:
+                blocked = (f"маржа не перекрывает погрешность цены "
+                           f"(±{error * 100:.1f}% на {len(band)} продажах)")
             row.reason = blocked
             row.entry_lam = entry_lam
             row.entry_t_buy = entry_t_buy

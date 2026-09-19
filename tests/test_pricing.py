@@ -87,28 +87,53 @@ def test_the_ceiling_is_the_last_price_that_still_pays_the_margin():
 def test_headroom_is_counted_in_outbids_not_dollars():
     from src.pricing import Params, plan
 
-    # Cheap lots and dear ones, so some sit under the bid and some over it.
-    rows = [(p, 0.16, float(i)) for i, p in
-            enumerate([175.0, 177.0, 179.0, 181.0, 183.0, 185.0,
-                       210.0, 212.0, 214.0, 216.0, 218.0, 220.0])]
+    dear = [(184.0, 0.16, 1.0), (185.0, 0.16, 2.0), (186.0, 0.16, 3.0)]
+    dear += [(200.0, 0.16, float(i % 27)) for i in range(20)]
     orders = [{"price": 180.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
-    band = plan(_sales(rows), orders, (0.15, 0.17),
+    band = plan(_sales(dear), orders, (0.15, 0.17),
                 params=Params(min_sample=5, min_wars=2))[0]
 
     assert band.take and band.step == 1.0
     assert band.wars == int(round((band.ceiling - band.bid) / band.step))
     assert band.wars >= 2, "a position we cannot defend twice is not taken"
 
-    # The same spread priced under $100 sits on a ten-times finer grid, so it
+    # The same shape priced under $100 sits on a ten-times finer grid, so it
     # buys far more defence - which is why the unit is outbids, not dollars.
-    cheap = [(p, 0.16, float(i)) for i, p in
-             enumerate([87.5, 88.5, 89.5, 90.5, 91.5, 92.5,
-                        105.0, 106.0, 107.0, 108.0, 109.0, 110.0])]
-    rival = [{"price": 90.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    cheap = [(88.0, 0.16, 1.0), (88.1, 0.16, 2.0), (88.2, 0.16, 3.0)]
+    cheap += [(95.0, 0.16, float(i % 27)) for i in range(20)]
+    rival = [{"price": 87.9, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     low = plan(_sales(cheap), rival, (0.15, 0.17),
                params=Params(min_sample=5))[0]
     assert low.take and low.step == 0.10
     assert low.wars > band.wars * 3
+
+
+def test_a_margin_inside_the_price_error_is_not_a_trade():
+    """At 5.6% margin on an exit price read off past sales, a three-percent
+    error halves the profit; at 9.9% it takes a fifth. The scan valued both
+    the same, so it would spend margin on speed exactly where the price was
+    least trustworthy. A band's median carries its own error, and the margin
+    has to clear it."""
+    from src.pricing import Params, plan
+
+    # Prices in two camps: the median is somewhere in the gap, and poorly
+    # pinned down wherever that is.
+    rows = [(p, 0.16, float(i % 27)) for i, p in
+            enumerate([170.0, 175.0, 180.0, 185.0, 190.0] * 2
+                      + [215.0, 220.0, 225.0, 230.0, 235.0] * 2)]
+    orders = [{"price": 186.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    sales = _sales(rows)
+
+    band = plan(sales, orders, (0.15, 0.17),
+                params=Params(min_sample=5, sigma_k=2.0))[0]
+    assert band.market_error > 0.04, "a split market is not a known price"
+    assert not band.take
+    assert "погрешность" in band.reason
+
+    # Told to trust the number, the same band is tradeable again.
+    loose = plan(sales, orders, (0.15, 0.17),
+                 params=Params(min_sample=5, sigma_k=0.0))[0]
+    assert loose.take
 
 
 def test_a_band_is_cut_where_the_competition_changes():
