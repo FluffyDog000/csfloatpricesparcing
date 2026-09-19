@@ -118,8 +118,17 @@
       return tr;
     }
     tr.className = "band-take";
+    // The cheapest price that leads the band, beside the one we would pay.
+    // Without it the surcharge looks arbitrary next to the order book.
+    const over = b.bid - b.entry;
+    const why = (b.entry_monthly === null || b.entry_monthly === undefined)
+      ? `по ${money(b.entry)} мы первые, но подходящих сделок почти нет`
+      : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
+        + `набор ${days(b.entry_t_buy)}, ${(b.entry_monthly * 100).toFixed(0)}%/мес`;
     tr.innerHTML = `
       <td><b>${band}</b></td>
+      <td class="muted" title="${why}">${money(b.entry)}${
+        over > 0 ? ` <span class="over">+${over.toFixed(2)}</span>` : ""}</td>
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
       <td>${b.wars}</td>
@@ -185,7 +194,9 @@
       const t = document.createElement("table");
       t.className = "stat";
       t.innerHTML = `<thead><tr>
-        <th>float</th><th>ставить</th><th>потолок</th><th>запас</th>
+        <th>float</th>
+        <th title="минимальная цена, которая ставит нас первыми в полосе">минимум</th>
+        <th>ставить</th><th>потолок</th><th>запас</th>
         <th>рынок</th><th>маржа</th><th>λ/сут</th><th>набор</th><th>%/мес</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
