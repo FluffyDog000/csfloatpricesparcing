@@ -371,3 +371,8 @@ tr.band-skip td { opacity: .65; }
 .banner code { font-size: 12px; }
 
 .over { color: var(--warn, #d29922); font-size: 11px; }
+
+tr.act-place td { background: rgba(63, 185, 80, .08); }
+tr.act-raise td { background: rgba(210, 153, 34, .10); }
+tr.act-cancel td { background: rgba(248, 81, 73, .08); }
+tr.act-keep td { opacity: .6; }

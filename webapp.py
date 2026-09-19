@@ -776,6 +776,38 @@ ANALYSIS_BOUNDS = {
     "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
     "bid_tolerance": (0.0, 1.0), "sigma_k": (0.0, 5.0),
 }
+
+# Money limits live apart from the scoring thresholds: these decide how much
+# may be at risk, not which bands are worth holding.
+LIMIT_BOUNDS = {
+    "total_capital": (0.0, 1_000_000.0), "per_item_capital": (0.0, 1_000_000.0),
+    "max_orders": (0, 1000), "max_orders_per_item": (0, 1000),
+    "patience_days": (0.0, 365.0),
+}
+LIMIT_KEYS = (
+    ("an_total_capital", "total_capital", float),
+    ("an_per_item_capital", "per_item_capital", float),
+    ("an_max_orders", "max_orders", int),
+    ("an_max_per_item", "max_orders_per_item", int),
+    ("an_patience", "patience_days", float),
+)
+
+
+def _analysis_limits(db):
+    from src.executor import Limits
+
+    lim = Limits()
+    for key, attr, cast in LIMIT_KEYS:
+        raw = db.get_setting(key)
+        if raw in (None, ""):
+            continue
+        try:
+            value = cast(str(raw).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+        lo, hi = LIMIT_BOUNDS[attr]
+        setattr(lim, attr, cast(min(max(value, lo), hi)))
+    return lim
 ANALYSIS_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
     ("an_window", "window_days", float), ("an_step", "band_step", float),
@@ -851,6 +883,30 @@ def api_analysis_sweep():
     })
 
 
+def _sales_for(db, item_id: int, params) -> list[dict]:
+    """An item's sales with each one's age, which is what the scoring reads.
+
+    Three windows of history are kept rather than one: the rates are measured
+    over `window_days`, but a band's median needs more than that to mean
+    anything, and the two are not the same number."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(params.window_days * 3, 90))).isoformat()
+    rows = [dict(r) for r in db.conn.execute(
+        "SELECT price, float_value, sold_at FROM sales "
+        "WHERE item_id = ? AND float_value IS NOT NULL AND sold_at >= ?",
+        (item_id, cutoff))]
+    now = datetime.now(timezone.utc)
+    for s in rows:
+        try:
+            t = datetime.fromisoformat(s["sold_at"])
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            s["age_days"] = (now - t).total_seconds() / 86400
+        except (TypeError, ValueError):
+            s["age_days"] = None
+    return rows
+
+
 @app.route("/api/analysis")
 def api_analysis():
     """Score every float band of every listed item."""
@@ -859,27 +915,13 @@ def api_analysis():
 
     db = get_db()
     params = _analysis_params(db)
-    cutoff = (datetime.now(timezone.utc)
-              - timedelta(days=max(params.window_days * 3, 90))).isoformat()
     out = []
     for name in _analysis_items(db):
         item_id = db.get_item_id(name)
         if item_id is None:
             out.append({"item": name, "error": "предмет больше не отслеживается"})
             continue
-        sales = [dict(r) for r in db.conn.execute(
-            "SELECT price, float_value, sold_at FROM sales "
-            "WHERE item_id = ? AND float_value IS NOT NULL AND sold_at >= ?",
-            (item_id, cutoff))]
-        now = datetime.now(timezone.utc)
-        for s in sales:
-            try:
-                t = datetime.fromisoformat(s["sold_at"])
-                if t.tzinfo is None:
-                    t = t.replace(tzinfo=timezone.utc)
-                s["age_days"] = (now - t).total_seconds() / 86400
-            except (TypeError, ValueError):
-                s["age_days"] = None
+        sales = _sales_for(db, item_id, params)
         orders = db.buy_orders(item_id)
         try:
             depth = db.listing_depth(item_id)
@@ -906,6 +948,59 @@ def api_analysis():
     })
 
 
+@app.route("/api/analysis/plan")
+def api_analysis_plan():
+    """What the bot would do right now: place, defend, withdraw.
+
+    Nothing is sent. The request that creates an order on CSFloat is not
+    documented and has to be captured from the browser, so until it is
+    supplied this is the whole of the feature - and even once it is, the plan
+    is produced first and acted on separately."""
+    from src.executor import exposure, reconcile, select
+    from src.orders import wear_range
+    from src.placement import PLACEMENT_KEY, describe, load
+    from src.pricing import plan as plan_bands
+
+    db = get_db()
+    params = _analysis_params(db)
+    limits = _analysis_limits(db)
+    spec = load(db.get_setting(PLACEMENT_KEY))
+
+    held: dict[str, float] = {}
+    actions: list[dict] = []
+    spent = 0.0
+    placed = 0
+    for name in _analysis_items(db):
+        item_id = db.get_item_id(name)
+        if item_id is None:
+            continue
+        sales = _sales_for(db, item_id, params)
+        orders = db.buy_orders(item_id)
+        try:
+            depth = db.listing_depth(item_id)
+        except Exception:  # noqa: BLE001 - an older DB has no such table
+            depth = []
+        bands = plan_bands(sales, orders, wear_range(name), depth, params)
+        mine = db.our_orders(item_id)
+        held[name] = sum(float(r["price"]) for r in mine)
+
+        wanted = select(bands, limits, spent=spent, placed=placed)
+        spent += sum(b.bid for b in wanted)
+        placed += len(wanted)
+        actions += [a.as_dict()
+                    for a in reconcile(name, wanted, mine, orders, limits)]
+
+    return jsonify({
+        "actions": actions,
+        "limits": limits.__dict__,
+        "held": held,
+        "armed": (db.get_setting("analysis_armed") or "0") == "1",
+        "placement": describe(spec),
+        "can_place": spec.can_place,
+        "can_cancel": spec.can_cancel,
+    })
+
+
 @app.route("/api/analysis/params", methods=["POST"])
 def api_analysis_params():
     _require_admin()
@@ -925,7 +1020,21 @@ def api_analysis_params():
         if not lo <= value <= hi:
             rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
         db.set_setting(key, str(cast(min(max(value, lo), hi))))
+    for key, attr, cast in LIMIT_KEYS:
+        if key not in data:
+            continue
+        raw = str(data[key]).strip().replace(",", ".")
+        try:
+            value = cast(float(raw))
+        except (TypeError, ValueError):
+            rejected.append(f"{key}: '{raw}' — не число")
+            continue
+        lo, hi = LIMIT_BOUNDS[attr]
+        if not lo <= value <= hi:
+            rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
+        db.set_setting(key, str(cast(min(max(value, lo), hi))))
     return jsonify({"params": _analysis_params(db).__dict__,
+                    "limits": _analysis_limits(db).__dict__,
                     "rejected": rejected})
 
 

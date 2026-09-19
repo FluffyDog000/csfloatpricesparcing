@@ -224,6 +224,75 @@
     }
   }
 
+  const KIND = {
+    place: ["поставить", "act-place"],
+    raise: ["перебить", "act-raise"],
+    cancel: ["снять", "act-cancel"],
+    keep: ["оставить", "act-keep"],
+  };
+
+  async function loadPlan() {
+    const d = await getJSON("/api/analysis/plan") || {};
+    // Defaults rather than assumptions: a reply missing a field must not take
+    // the page down, which is how a whole tab went dark earlier today.
+    d.actions = d.actions || [];
+    d.limits = d.limits || {};
+    const box = $("plan-out");
+    box.innerHTML = "";
+
+    // What stops it acting, said once and plainly: an unconfigured request
+    // and a zero budget are different problems with the same symptom.
+    const state = $("plan-state");
+    const blocks = [];
+    if (!d.can_place) blocks.push(d.placement);
+    else if (!d.can_cancel) blocks.push(d.placement);
+    if (!d.limits.total_capital) blocks.push("бюджет не задан — лимиты ниже");
+    state.textContent = blocks.length
+      ? "Выставление недоступно: " + blocks.join(" · ")
+      : "Запрос постановки настроен. Выставление всё равно выполняется вручную.";
+    state.className = blocks.length ? "err" : "ok";
+
+    if (!d.actions.length) {
+      box.innerHTML = '<p class="muted">Действий нет.</p>';
+      return;
+    }
+    const t = document.createElement("table");
+    t.className = "stat";
+    t.innerHTML = `<thead><tr><th>что</th><th>предмет</th><th>float</th>
+      <th>цена</th><th>потолок</th><th>почему</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    let need = 0;
+    d.actions.forEach((a) => {
+      if (a.kind === "place") need += a.price;
+      if (a.kind === "raise" && a.was) need += a.price - a.was;
+      const [label, cls] = KIND[a.kind] || [a.kind, ""];
+      const tr = document.createElement("tr");
+      tr.className = cls;
+      tr.innerHTML = `<td><b>${label}</b></td>
+        <td>${a.item}</td>
+        <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
+        <td><b>${money(a.price)}</b>${
+          a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
+        <td>${money(a.ceiling)}</td>
+        <td class="muted">${a.reason}</td>`;
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    const sum = document.createElement("p");
+    sum.innerHTML = `Потребуется <b>${money(need)}</b> из лимита `
+      + `<b>${money(d.limits.total_capital)}</b>`;
+    box.appendChild(sum);
+    box.appendChild(t);
+  }
+
+  function fillLimits(l) {
+    $("l-total").value = l.total_capital;
+    $("l-item").value = l.per_item_capital;
+    $("l-max").value = l.max_orders;
+    $("l-maxitem").value = l.max_orders_per_item;
+    $("l-patience").value = l.patience_days;
+  }
+
   function fillParams(p) {
     $("p-fee").value = (p.fee * 100).toFixed(1);
     $("p-margin").value = (p.min_margin * 100).toFixed(1);
@@ -247,6 +316,7 @@
     action("Загружаю список", async () => {
       const data = await loadItems(true);
       fillParams(data.params);
+      await loadPlan();
       const n = data.items.length;
       say(n ? `Список: ${n} предмет(ов). Нажми «Проанализировать».`
             : "Список пуст — впиши название предмета выше и нажми «Добавить».");
@@ -317,6 +387,12 @@
 
     $("an-run").onclick = () => action("Считаю", async () => {
       await loadItems();
+      await loadPlan();
+    });
+
+    $("plan-run").onclick = () => action("Строю план", async () => {
+      await loadPlan();
+      say("План пересчитан.", "ok");
     });
 
     $("an-clear").onclick = () => {
@@ -340,6 +416,11 @@
         an_min_sample: $("p-sample").value,
       an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
       an_sigma_k: $("p-sigma").value,
+      an_total_capital: $("l-total").value,
+      an_per_item_capital: $("l-item").value,
+      an_max_orders: $("l-max").value,
+      an_max_per_item: $("l-maxitem").value,
+      an_patience: $("l-patience").value,
       }, token());
       fillParams(r.params);
       await loadItems(true);

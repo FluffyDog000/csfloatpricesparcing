@@ -60,8 +60,32 @@
         <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
         <small class="muted">меньше — медиана ничего не значит</small></label>
     </div>
-    <button class="btn" id="p-save">Сохранить пороги</button>
+    <h3>Лимиты капитала</h3>
+    <div class="calc-grid analysis-params">
+      <label>всего в ордерах, $
+        <input type="number" id="l-total" class="input" step="10" min="0" value="0">
+        <small class="muted">0 — ничего не выставляется</small></label>
+      <label>на один предмет, $
+        <input type="number" id="l-item" class="input" step="10" min="0" value="0">
+        <small class="muted">пять ордеров на предмет — одна ставка пятью кусками</small></label>
+      <label>максимум ордеров
+        <input type="number" id="l-max" class="input" step="1" min="0" value="20"></label>
+      <label>максимум на предмет
+        <input type="number" id="l-maxitem" class="input" step="1" min="0" value="3"></label>
+      <label>терпение, дней
+        <input type="number" id="l-patience" class="input" step="1" min="0" value="14">
+        <small class="muted">перебили — отвечаем, только если ждать дольше этого</small></label>
+    </div>
+    <button class="btn" id="p-save">Сохранить пороги и лимиты</button>
   </details>
+</section>
+
+<section class="settings-block">
+  <h2>План действий</h2>
+  <p class="muted">Что бот сделал бы прямо сейчас. Ничего не отправляется.</p>
+  <div id="plan-state" class="muted"></div>
+  <button class="btn" id="plan-run">Пересчитать план</button>
+  <div id="plan-out"></div>
 </section>
 
 <div id="an-results"></div>

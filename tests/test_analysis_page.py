@@ -276,3 +276,90 @@ def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
     assert band.entry_lam is not None and band.entry_lam < Params().min_lambda
     assert band.entry_t_buy > band.t_buy * 5, "leading cheap means waiting"
     assert band.entry_monthly < band.monthly
+
+
+def _stocked(name="★ Specialist Gloves | Big Swell (Field-Tested)"):
+    """A client with one item that has history and a swept book."""
+    import datetime as dt
+    import json
+
+    c = _app([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    now = dt.datetime.now(dt.timezone.utc)
+    # A cheap tail the order would actually catch, under a market that sells
+    # far higher - otherwise the band is bid past its ceiling and nothing is
+    # planned, which is a different case from the one being tested here.
+    rows = []
+    for i in range(10):
+        price = 168.0 + (i % 4)
+        rows.append((f"lo{i}", item_id, name, int(price * 100), price, 0.16,
+                     (now - dt.timedelta(days=i % 20)).isoformat()))
+    for i in range(40):
+        rows.append((f"hi{i}", item_id, name, 21000, 210.0, 0.16,
+                     (now - dt.timedelta(days=i % 20)).isoformat()))
+    db.conn.executemany(
+        "INSERT INTO sales (sale_id,item_id,market_hash_name,price_cents,price,"
+        "float_value,sold_at,sold_at_estimated,scraped_at) "
+        "VALUES (?,?,?,?,?,?,?,0,?)",
+        [(a, b, c_, d, e, f, g, g) for a, b, c_, d, e, f, g in rows])
+    db.conn.commit()
+    db.replace_buy_orders(item_id, [
+        {"price": 170.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}])
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+    return c, name
+
+
+def test_a_bot_with_no_budget_plans_nothing():
+    """The default is zero, so a fresh install cannot spend by accident."""
+    c, _ = _stocked()
+    plan = c.get("/api/analysis/plan").get_json()
+    assert plan["limits"]["total_capital"] == 0.0
+    assert plan["actions"] == []
+    assert not plan["can_place"], "and the request itself is unconfigured"
+    assert "не настроена" in plan["placement"]
+
+
+def test_a_budget_turns_the_scored_bands_into_placements():
+    c, name = _stocked()
+    c.post("/api/analysis/params",
+           json={"an_total_capital": "1000", "an_max_per_item": "2"})
+    plan = c.get("/api/analysis/plan").get_json()
+
+    places = [a for a in plan["actions"] if a["kind"] == "place"]
+    assert places, "a funded bot plans the bands that passed"
+    assert len(places) <= 2, "the per-item cap is honoured"
+    assert all(a["price"] <= a["ceiling"] for a in places)
+    assert sum(a["price"] for a in places) <= 1000.0
+
+
+def test_limits_are_clamped_like_the_thresholds():
+    c, _ = _stocked()
+    r = c.post("/api/analysis/params",
+               json={"an_total_capital": "-5", "an_max_orders": "9999"}).get_json()
+    assert r["limits"]["total_capital"] == 0.0
+    assert r["limits"]["max_orders"] == 1000
+    assert len(r["rejected"]) == 2
+
+
+def test_an_order_we_hold_is_reconciled_rather_than_duplicated():
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    plan = c.get("/api/analysis/plan").get_json()
+    first = [a for a in plan["actions"] if a["kind"] == "place"][0]
+
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.upsert_our_order(db.get_item_id(name), first["float_min"],
+                        first["float_max"], first["price"], first["ceiling"],
+                        state="live", remote_id="abc")
+    db.close()
+
+    again = c.get("/api/analysis/plan").get_json()["actions"]
+    same = [a for a in again
+            if a["float_min"] == first["float_min"]
+            and a["float_max"] == first["float_max"]]
+    assert len(same) == 1 and same[0]["kind"] == "keep", \
+        "an order we already hold is not placed a second time"

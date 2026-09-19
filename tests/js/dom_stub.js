@@ -32,10 +32,21 @@ global.localStorage = { getItem: () => "" };
 global.confirm = () => true;
 
 const api = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+// A fourth argument supplies the plan endpoint's reply; without one it
+// answers empty, which is also what an unconfigured bot returns.
+const plan = process.argv[4]
+  ? JSON.parse(fs.readFileSync(process.argv[4], "utf8"))
+  : { actions: [], limits: { total_capital: 0 }, held: {}, armed: false,
+      placement: "постановка не настроена", can_place: false,
+      can_cancel: false };
 global.fetch = async (url) => ({
   ok: true,
   statusText: "OK",
-  json: async () => (url.startsWith("/api/analysis") ? api : { items: [] }),
+  json: async () => {
+    if (url.startsWith("/api/analysis/plan")) return plan;
+    if (url.startsWith("/api/analysis")) return api;
+    return { items: [] };
+  },
 });
 
 // One program, one scope — as a browser loads them. Two eval() calls gave

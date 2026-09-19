@@ -99,6 +99,28 @@ CREATE TABLE IF NOT EXISTS listing_depth (
 CREATE INDEX IF NOT EXISTS idx_depth_item
     ON listing_depth(item_id, float_min, fetched_at);
 
+-- Our own buy orders, as we believe them to stand. CSFloat removes an order
+-- when it tries to execute it and the balance will not cover it, and says
+-- nothing, so what we placed and what is live can drift apart: this table is
+-- the "what we placed" half, and reconciling it against the site is how a
+-- silent removal is noticed at all.
+CREATE TABLE IF NOT EXISTS our_orders (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id             INTEGER NOT NULL REFERENCES items(id),
+    float_min           REAL    NOT NULL,
+    float_max           REAL    NOT NULL,
+    price               REAL    NOT NULL,   -- what we are bidding now
+    ceiling             REAL    NOT NULL,   -- we withdraw rather than pass it
+    remote_id           TEXT,               -- CSFloat's id, once placed
+    state               TEXT    NOT NULL,   -- planned/live/cancelled/filled/gone
+    placed_at           TEXT,
+    updated_at          TEXT    NOT NULL,
+    note                TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_our_orders_item
+    ON our_orders(item_id, state);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -421,6 +443,57 @@ class Database:
             args.append(since)
         sql += " ORDER BY fetched_at, float_min"
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def our_orders(self, item_id: int | None = None,
+                   live_only: bool = True) -> list[dict[str, Any]]:
+        sql = ("SELECT id, item_id, float_min, float_max, price, ceiling, "
+               "remote_id, state, placed_at, updated_at, note FROM our_orders")
+        where, args = [], []
+        if item_id is not None:
+            where.append("item_id = ?")
+            args.append(item_id)
+        if live_only:
+            where.append("state IN ('planned', 'live')")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY item_id, float_min"
+        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def upsert_our_order(self, item_id: int, float_min: float, float_max: float,
+                         price: float, ceiling: float, state: str,
+                         remote_id: str | None = None,
+                         note: str | None = None) -> int:
+        """One row per item and float band: two orders on the same band would
+        only bid against each other."""
+        now = utcnow_iso()
+        row = self.conn.execute(
+            "SELECT id, placed_at FROM our_orders WHERE item_id = ? "
+            "AND float_min = ? AND float_max = ? AND state IN ('planned','live')",
+            (item_id, float_min, float_max)).fetchone()
+        if row:
+            self.conn.execute(
+                "UPDATE our_orders SET price = ?, ceiling = ?, state = ?, "
+                "remote_id = COALESCE(?, remote_id), note = ?, updated_at = ? "
+                "WHERE id = ?",
+                (price, ceiling, state, remote_id, note, now, row["id"]))
+            self.conn.commit()
+            return int(row["id"])
+        cur = self.conn.execute(
+            "INSERT INTO our_orders (item_id, float_min, float_max, price, "
+            "ceiling, remote_id, state, placed_at, updated_at, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (item_id, float_min, float_max, price, ceiling, remote_id, state,
+             now if state == "live" else None, now, note))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def set_our_order_state(self, order_id: int, state: str,
+                            note: str | None = None) -> None:
+        self.conn.execute(
+            "UPDATE our_orders SET state = ?, note = COALESCE(?, note), "
+            "updated_at = ? WHERE id = ?",
+            (state, note, utcnow_iso(), order_id))
+        self.conn.commit()
 
     def record_listing_depth(self, item_id: int,
                              profile: list[dict[str, Any]]) -> int:
