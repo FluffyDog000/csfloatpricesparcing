@@ -278,10 +278,37 @@
       tb.appendChild(tr);
     });
     t.appendChild(tb);
+    const places = d.actions.filter((a) => a.kind === "place").length;
     const sum = document.createElement("p");
     sum.innerHTML = `Потребуется <b>${money(need)}</b> из лимита `
-      + `<b>${money(d.limits.total_capital)}</b>`;
+      + `<b>${money(d.limits.total_capital)}</b> · ${places} ордер(ов) `
+      + `из ${d.limits.max_orders}, не больше `
+      + `${d.limits.max_orders_per_item} на предмет`;
     box.appendChild(sum);
+
+    // Several orders on one item are one bet in pieces: they fill together
+    // when that market moves. The split is what says whether that happened.
+    const byItem = d.by_item || {};
+    const names = Object.keys(byItem);
+    if (names.length && d.concentration > 0.5) {
+      const worst = names.reduce((a, b) => (byItem[a] > byItem[b] ? a : b));
+      const warn = document.createElement("p");
+      warn.className = "err";
+      warn.textContent = `${worst} держал бы ${money(byItem[worst])} — `
+        + `${(d.concentration * 100).toFixed(0)}% всего капитала. `
+        + (names.length === 1
+          ? "Это один предмет: просядет он — просядет всё. Добавь ещё предметы."
+          : "Опусти «максимум на предмет», чтобы разложить по разным предметам.");
+      box.appendChild(warn);
+    }
+    if (names.length > 1) {
+      const split = document.createElement("p");
+      split.className = "muted";
+      split.textContent = "по предметам: " + names
+        .sort((a, b) => byItem[b] - byItem[a])
+        .map((n) => `${n} ${money(byItem[n])}`).join(" · ");
+      box.appendChild(split);
+    }
     box.appendChild(t);
   }
 

@@ -990,10 +990,21 @@ def api_analysis_plan():
         actions += [a.as_dict()
                     for a in reconcile(name, wanted, mine, orders, limits)]
 
+    # What each item would hold once the plan is applied. Several orders on one
+    # item are not several bets: they are one bet in pieces, and they fill
+    # together when that market moves, so the split has to be visible.
+    from src.executor import Action
+    after = exposure([Action(**a) for a in actions], held)
+    after = {k: round(v, 2) for k, v in after.items() if v > 0}
+    total = sum(after.values())
+
     return jsonify({
         "actions": actions,
         "limits": limits.__dict__,
         "held": held,
+        "by_item": after,
+        "planned_total": round(total, 2),
+        "concentration": (max(after.values()) / total) if total else 0.0,
         "armed": (db.get_setting("analysis_armed") or "0") == "1",
         "placement": describe(spec),
         "can_place": spec.can_place,

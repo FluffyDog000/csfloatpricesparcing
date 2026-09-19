@@ -404,3 +404,33 @@ def test_saving_a_new_request_disarms():
     suggested = c.get("/api/analysis/placement").get_json()["suggested"]
     c.post("/api/analysis/placement", json=suggested)
     assert c.get("/api/analysis/plan").get_json()["armed"] is False
+
+
+def test_the_plan_says_how_the_capital_would_be_split():
+    """Six orders on one item are one bet in six pieces: they fill together
+    when that market moves. The plan has to show that, not just the total."""
+    c, name = _stocked()
+    c.post("/api/analysis/params",
+           json={"an_total_capital": "1000", "an_max_per_item": "3"})
+    plan = c.get("/api/analysis/plan").get_json()
+
+    assert plan["by_item"], "the split is reported, not only the sum"
+    assert plan["concentration"] == 1.0, "one item holding everything is 100%"
+    assert plan["planned_total"] == sum(plan["by_item"].values())
+
+    import pathlib
+    js = pathlib.Path("static/analysis.js").read_text()
+    assert "концентрация" in js or "капитала" in js, \
+        "and the page warns rather than leaving it to be noticed"
+
+
+def test_the_binding_limit_is_visible_in_the_plan():
+    c, _ = _stocked()
+    c.post("/api/analysis/params",
+           json={"an_total_capital": "1000", "an_max_per_item": "1"})
+    plan = c.get("/api/analysis/plan").get_json()
+
+    places = [a for a in plan["actions"] if a["kind"] == "place"]
+    assert len(places) == 1, "the per-item cap binds"
+    assert plan["limits"]["max_orders_per_item"] == 1, \
+        "and the page is told which number did it"
