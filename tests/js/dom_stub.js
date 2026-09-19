@@ -38,8 +38,14 @@ global.fetch = async (url) => ({
   json: async () => (url.startsWith("/api/analysis") ? api : { items: [] }),
 });
 
-eval(fs.readFileSync("static/common.js", "utf8"));
-eval(fs.readFileSync(process.argv[2], "utf8"));
+// One program, one scope — as a browser loads them. Two eval() calls gave
+// each file its own scope for const/let, so a redeclaration between them
+// parsed cleanly here and threw a SyntaxError in the browser, skipping the
+// page script entirely while every test passed.
+const vm = require("vm");
+const source = fs.readFileSync("static/common.js", "utf8") + "\n"
+  + fs.readFileSync(process.argv[2], "utf8");
+vm.runInThisContext(source, { filename: "page.js" });
 
 (async () => {
   if (doc._ready) await doc._ready();

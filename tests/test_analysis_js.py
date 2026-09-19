@@ -80,3 +80,52 @@ def test_a_failure_midway_does_not_blank_the_list():
     assert result["chips"] == 1, "the list survives a broken report"
     assert "Ошибка" in result["status"], \
         "and the failure is stated rather than swallowed"
+
+
+def test_the_page_scripts_share_one_scope_without_colliding():
+    """A browser loads common.js and a page script into the same global scope,
+    so one name declared in both is a SyntaxError at parse time - and the page
+    script is skipped whole, with no listener attached and every button dead.
+    `const money` in analysis.js against `function money` in common.js is
+    exactly that, and it looked like a page that ignored every click."""
+    import pathlib
+    import re
+
+    def declared(path):
+        found = {}
+        for i, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
+            m = re.match(r"^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)",
+                         line)
+            if m:
+                found[m.group(1)] = i
+        return found
+
+    common = declared("static/common.js")
+    for page in ("analysis.js", "index.js", "item.js", "load.js", "calc.js",
+                 "settings.js"):
+        path = f"static/{page}"
+        if not pathlib.Path(path).exists():
+            continue
+        clash = sorted(set(common) & set(declared(path)))
+        assert not clash, f"{page} redeclares {clash} from common.js"
+
+
+def test_both_scripts_parse_as_one_program():
+    """The check above reads declarations line by line; this one hands the
+    pair to a real parser, the way a browser gets them."""
+    import pathlib
+    import subprocess
+    import tempfile
+
+    source = (pathlib.Path("static/common.js").read_text() + "\n"
+              + pathlib.Path("static/analysis.js").read_text())
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write(source)
+        path = fh.name
+    try:
+        out = subprocess.run([NODE, "--check", path],
+                             capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, out.stderr
+    finally:
+        os.unlink(path)
