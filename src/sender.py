@@ -34,6 +34,10 @@ class Result:
     ok: bool
     detail: str
     remote_id: str | None = None
+    # Whether the reply agreed with what we asked for. Only an amend can be
+    # accepted and yet do nothing, so only an amend sets this; elsewhere the
+    # reply carries the order's id and that is the confirmation.
+    confirmed: bool | None = None
 
     def as_dict(self) -> dict[str, Any]:
         out = dict(self.__dict__)
@@ -93,10 +97,31 @@ class Sender:
             return Result(action, True,
                           f"[вхолостую] {self.spec.update_method} {url} {body}")
         action.sent = body
-        self.send(self.spec.update_method, url, body, self.headers)
-        log.info("Amended %s to $%.2f", action.remote_id, action.price)
-        return Result(action, True, f"цена изменена на ${action.price:.2f}",
-                      remote_id=action.remote_id)
+        reply = self.send(self.spec.update_method, url, body, self.headers)
+
+        # The amend body was worked out, not captured, and an ignored field is
+        # the failure that does not announce itself: the request is accepted,
+        # the price on the site does not move, and we write down a price that
+        # is not standing. So the reply has to agree before we believe it.
+        echoed = parse_order(reply)
+        if echoed and echoed.get("price") is not None:
+            if abs(echoed["price"] - action.price) > 0.005:
+                return Result(
+                    action, False,
+                    f"запрос принят, но цена осталась ${echoed['price']:.2f} "
+                    f"вместо ${action.price:.2f} — тело правки не то, "
+                    f"что ждёт CSFloat",
+                    remote_id=action.remote_id, confirmed=False)
+            log.info("Amended %s to $%.2f", action.remote_id, action.price)
+            return Result(action, True, f"цена изменена на ${action.price:.2f}",
+                          remote_id=action.remote_id, confirmed=True)
+
+        log.info("Amended %s to $%.2f (unconfirmed)", action.remote_id,
+                 action.price)
+        return Result(action, True,
+                      f"цена изменена на ${action.price:.2f} — ответ её "
+                      f"не подтвердил, проверь ордер на сайте",
+                      remote_id=action.remote_id, confirmed=False)
 
     def cancel(self, action: Action, name: str) -> Result:
         if not self.spec.can_cancel:

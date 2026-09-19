@@ -16,17 +16,27 @@ def act(kind, price=159.0, remote_id=None, was=None):
                   170.0, "потому что", remote_id=remote_id, was=was)
 
 
+_DEFAULT = object()
+
+
 class Recorder:
-    def __init__(self, reply=None, fail=None):
+    def __init__(self, reply=_DEFAULT, fail=None):
         self.calls = []
-        self.reply = reply or {"id": "abc", "price": 15900, "qty": 1,
-                               "hybrid_properties": {}, "bought_item_count": 0}
+        self.reply = ({"id": "abc", "price": 15900, "qty": 1,
+                       "hybrid_properties": {}, "bought_item_count": 0}
+                      if reply is _DEFAULT else reply)
         self.fail = fail
 
     def __call__(self, method, url, body=None, headers=None):
         self.calls.append((method, url, body))
         if self.fail:
             raise self.fail
+        # A server that honours the request echoes the order back at the price
+        # it now stands at. A stub that always replies with the old price would
+        # let a body CSFloat ignores look exactly like one it obeys.
+        if isinstance(self.reply, dict) and isinstance(body, dict) \
+                and "max_price" in body:
+            return dict(self.reply, price=body["max_price"])
         return self.reply
 
 
@@ -62,7 +72,7 @@ def test_answering_an_outbid_amends_rather_than_replaces():
     assert method == "PATCH"
     assert url.endswith("/api/v1/buy-orders/xyz"), "the order keeps its place"
     assert body == {"max_price": 16100}
-    assert got.ok
+    assert got.ok and got.confirmed is True
 
 
 def test_cancelling_uses_the_order_id():
@@ -200,3 +210,33 @@ def test_a_send_that_never_happened_reports_no_body():
     result = sender.perform(action)
     assert result.ok and action.sent is None
     assert "отправлено" not in result.detail
+
+
+def test_an_amend_the_server_ignores_is_not_a_success():
+    """The amend body was worked out rather than captured. An unknown field is
+    the failure that does not announce itself: 200 back, the price on the site
+    unchanged, and our own record saying otherwise - so the next hour's defence
+    sees an order it thinks is fine. The reply has to agree before we believe
+    it."""
+    rec = Recorder(reply={"id": "xyz", "price": 15900, "qty": 1,
+                          "hybrid_properties": {}, "bought_item_count": 0})
+    wrong = Spec(update_path="/api/v1/buy-orders/{order_id}",
+                 update_body='{"price": {price_cents}}')
+    s = Sender("https://csfloat.com", wrong, rec, dry_run=False)
+    got = s.perform(act(RAISE, price=161.0, remote_id="xyz", was=159.0))
+
+    assert not got.ok and got.confirmed is False
+    assert "$159.00" in got.detail and "$161.00" in got.detail
+    assert got.action.sent == {"price": 16100}
+
+
+def test_an_amend_with_nothing_to_check_says_so_rather_than_claiming_it():
+    """Some endpoints answer a PATCH with 204 and no body. That is not proof
+    the price moved, and it is not proof it did not - the one thing it must not
+    do is read as confirmation."""
+    rec = Recorder(reply=None)
+    s = Sender("https://csfloat.com", SUGGESTED, rec, dry_run=False)
+    got = s.perform(act(RAISE, price=161.0, remote_id="xyz", was=159.0))
+
+    assert got.ok and got.confirmed is False
+    assert "не подтвердил" in got.detail
