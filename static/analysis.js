@@ -273,13 +273,13 @@
     // Why we are not simply bidding the minimum. Asked twice from a tooltip,
     // so it goes in the open: the surcharge buys flow, and the number it buys
     // is the only thing that justifies it.
-    const cheapWhy = (b.entry_monthly === null || b.entry_monthly === undefined)
+    const cheapWhy = (b.entry_t_buy === null || b.entry_t_buy === undefined)
       ? "по ней сделок нет"
       : `по ней набор ${days(b.entry_t_buy)}`;
-    const why = (b.entry_monthly === null || b.entry_monthly === undefined)
+    const why = (b.entry_t_buy === null || b.entry_t_buy === undefined)
       ? `по ${money(b.entry)} мы первые, но подходящих сделок почти нет`
       : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
-        + `набор ${days(b.entry_t_buy)}, ${(b.entry_monthly * 100).toFixed(0)}%/мес`;
+        + `набор ${days(b.entry_t_buy)}`;
     tr.innerHTML = `
       <td><b>${band}</b></td>
       <td class="muted" title="${why}">${money(b.entry)}${
@@ -297,9 +297,7 @@
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam.toFixed(2)}</td>
       <td>${days(b.t_buy)}</td>
-      <td title="набор ${days(b.t_buy)} + бан + продажа ${days(b.t_sell)}${
-        b.monthly ? ` · в пересчёте ${(b.monthly * 100).toFixed(0)}%/мес` : ""}"
-        >${days(b.cycle)}</td>`;
+      <td>${days(b.t_sell)}</td>`;
     return tr;
   }
 
@@ -460,8 +458,9 @@
         <th>ставить</th><th>потолок</th><th>запас</th>
         <th>рынок</th>
         <th title="что останется после комиссии, если продать по рынку">маржа</th>
-        <th>λ/сут</th><th>набор</th>
-        <th title="весь круг: набор + торговый бан + продажа">круг</th>
+        <th>λ/сут</th>
+        <th title="сколько ждать, пока ордер наберётся">набор</th>
+        <th title="сколько ждать покупателя после того, как снимут бан">продажа</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
       it.bands.forEach((b) => tb.appendChild(bandRow(b)));
@@ -811,8 +810,6 @@
     $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
     $("p-reach").value = p.max_reach;
-    $("p-lock").value = p.trade_lock_days;
-    $("p-locklist").checked = !!p.list_during_lock;
     $("p-sigma").value = p.sigma_k;
   }
 
@@ -1033,8 +1030,6 @@
         an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
         an_reach: $("p-reach").value,
-        an_trade_lock: $("p-lock").value,
-        an_list_locked: $("p-locklist").checked ? "1" : "0",
       an_sigma_k: $("p-sigma").value,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,

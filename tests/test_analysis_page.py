@@ -258,8 +258,8 @@ def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
 
     js = pathlib.Path("static/analysis.js").read_text()
     assert "минимум" in js, "the cheapest leading price is a column"
-    assert "entry_monthly" in js and "entry_lam" in js, \
-        "and what it would have returned is on hover"
+    assert "entry_t_buy" in js and "entry_lam" in js, \
+        "and what it would have caught is shown beside it"
 
     from src.pricing import Params, plan
     rows = [{"price": p, "float_value": 0.28, "age_days": a} for p, a in
@@ -277,7 +277,7 @@ def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
     # The gap is narrower than it was: the scan no longer pays for turnover,
     # so the bid it chooses is itself the cheapest that clears the filters.
     assert band.entry_t_buy > band.t_buy * 2, "leading cheap means waiting"
-    assert band.entry_monthly < band.monthly
+    assert band.entry_lam < band.lam, "and catching fewer sales"
 
 
 def _stocked(name="★ Specialist Gloves | Big Swell (Field-Tested)"):
@@ -705,7 +705,7 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
                             "an_max_per_item": "1"}).status_code == 200
 
         scored = c.get("/api/analysis").get_json()["items"]
-        best = {i["item"]: max([b["monthly"] for b in i["bands"] if b["take"]]
+        best = {i["item"]: max([b["margin"] for b in i["bands"] if b["take"]]
                                or [0.0]) for i in scored}
         assert len(set(best.values())) > 1, "the items must differ to rank them"
 
@@ -781,26 +781,3 @@ def test_every_settings_group_is_actually_saved():
     assert missing == [], f"accepted and dropped: {missing}"
 
 
-def test_the_trade_lock_settings_survive_a_save():
-    """The lock is the largest single correction in the model, and one of its
-    two settings is a flag - which is exactly the shape that gets shown,
-    accepted and never stored."""
-    c = _app()
-    r = c.post("/api/analysis/params",
-               json={"an_trade_lock": "7", "an_list_locked": "1"})
-    assert r.status_code == 200
-    body = r.get_json()["params"]
-    assert body["trade_lock_days"] == 7.0
-    assert body["list_during_lock"] is True
-
-    back = c.get("/api/analysis").get_json()["params"]
-    assert back["trade_lock_days"] == 7.0 and back["list_during_lock"] is True
-
-    off = c.post("/api/analysis/params", json={"an_list_locked": "0"})
-    assert off.get_json()["params"]["list_during_lock"] is False
-
-
-def test_the_lock_defaults_to_a_week_rather_than_to_nothing():
-    """Zero is the value that flatters every band, so it is not the default."""
-    c = _app()
-    assert c.get("/api/analysis").get_json()["params"]["trade_lock_days"] == 7.0

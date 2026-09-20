@@ -162,8 +162,7 @@ def rank(band: Band) -> float:
 def select(bands: Sequence[Band], limits: Limits,
            spent: float = 0.0, placed: int = 0) -> list[Band]:
     """The bands worth holding for one item, best first, within its caps."""
-    take = sorted((b for b in bands if b.take),
-                  key=lambda b: -(b.monthly or 0))
+    take = sorted((b for b in bands if b.take), key=lambda b: -rank(b))
     room_orders = min(limits.max_orders_per_item, limits.max_orders - placed)
     budget = limits.budget
     cap = limits.per_item_capital or budget
@@ -315,7 +314,8 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
             continue
         actions.append(Action(
             PLACE, item, key[0], key[1], band.bid, band.ceiling,
-            f"{(band.monthly or 0) * 100:.0f}%/мес, запас {band.wars} перебив."))
+            f"маржа {(band.margin or 0) * 100:.1f}%, "
+            f"запас {band.wars} перебив."))
 
     order = {CANCEL: 0, RAISE: 1, PLACE: 2, KEEP: 3}
     actions.sort(key=lambda a: (order[a.kind], a.float_min))

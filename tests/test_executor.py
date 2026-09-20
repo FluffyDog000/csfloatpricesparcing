@@ -9,9 +9,9 @@ from src.executor import CANCEL, KEEP, PLACE, RAISE, Action, Limits, reconcile, 
 from src.pricing import Band
 
 
-def band(lo, hi, bid, ceiling, monthly=0.5, lam=1.0, wars=5):
+def band(lo, hi, bid, ceiling, margin=0.5, lam=1.0, wars=5):
     return Band(float_min=lo, float_max=hi, bid=bid, ceiling=ceiling,
-                monthly=monthly, lam=lam, wars=wars, take=True)
+                margin=margin, lam=lam, wars=wars, take=True)
 
 
 def row(lo, hi, price, ceiling, oid=1):
@@ -27,7 +27,7 @@ def test_nothing_is_placed_without_a_budget():
 
 def test_one_item_cannot_crowd_out_the_rest():
     bands = [band(round(0.15 + i / 100, 4), round(0.16 + i / 100, 4),
-                  100.0, 110.0, monthly=1 - i / 10) for i in range(6)]
+                  100.0, 110.0, margin=1 - i / 10) for i in range(6)]
     got = select(bands, Limits(total_capital=1000.0, max_orders_per_item=3))
     assert len(got) == 3, "the per-item cap binds before the money does"
     assert [b.float_min for b in got] == [0.15, 0.16, 0.17], "best first"
@@ -167,7 +167,7 @@ def test_the_plan_stays_under_what_the_balance_allows():
 
 def test_selection_spends_the_allowed_budget_not_the_asked_one():
     bands = [Band(float_min=0.0 + i / 100, float_max=0.01 + i / 100,
-                  bid=100.0, monthly=1.0 - i / 100, take=True)
+                  bid=100.0, margin=1.0 - i / 100, take=True)
              for i in range(10)]
     # Asked for $5000, balance only covers $300 of outstanding orders.
     got = select(bands, Limits(total_capital=5000.0, balance=30.0,
@@ -253,15 +253,13 @@ def test_ranking_discounts_a_margin_resting_on_a_shaky_price():
     assert list(got) == ["solid"]
 
 
-def test_bands_are_ranked_by_margin_not_by_how_fast_they_turn_over():
-    """An annualised return divides a margin we trust by a cycle time built
-    from a measured flow, an assumed sale rate and a trade lock. Dividing a
-    number we trust by one we do not is how a band filling in two days beat
-    one paying twice as much."""
+def test_bands_are_ranked_by_margin_discounted_for_doubt():
+    """No rate to rank by any more: a rate needs a cycle, and a cycle needs
+    the trade lock and the payout wait - a fortnight nothing here measures."""
     from src.executor import rank
 
-    fat_and_slow = Band(float_min=0.1, float_max=0.12, bid=100.0, take=True,
-                        margin=0.20, monthly=0.30, market_error=0.0)
-    thin_and_fast = Band(float_min=0.2, float_max=0.22, bid=100.0, take=True,
-                         margin=0.05, monthly=0.90, market_error=0.0)
-    assert rank(fat_and_slow) > rank(thin_and_fast)
+    fat = Band(float_min=0.1, float_max=0.12, bid=100.0, take=True,
+               margin=0.20, market_error=0.0)
+    thin = Band(float_min=0.2, float_max=0.22, bid=100.0, take=True,
+                margin=0.05, market_error=0.0)
+    assert rank(fat) > rank(thin)

@@ -83,14 +83,6 @@ class Params:
     # has too few of its own. Past this the neighbours are a different item in
     # all but name. 0 switches the borrowing off.
     max_reach: float = 0.05
-    # A bought item cannot be traded on straight away: CS2 holds it, and the
-    # hold sits between the two halves of the trade. Nothing in the order book
-    # or the sales history shows it, so it has to be stated - and left out, it
-    # was the single largest overstatement in the whole model.
-    trade_lock_days: float = 7.0
-    # Whether a held item may be listed while the lock runs. If it may, the
-    # lock and the wait for a buyer overlap instead of stacking.
-    list_during_lock: bool = False
     # A thin margin is not the same trade as a fat one at the same return: it
     # is far more exposed to the exit price being wrong. The median of a
     # band's sales carries its own error, so require the margin to clear that
@@ -134,17 +126,15 @@ class Band:
     lam: float | None = None
     queue: int = 0
     t_buy: float | None = None
+    # How long until someone buys in this band at all. Reported, never
+    # divided by: turning a margin into a rate needs the trade lock and the
+    # payout wait, a fortnight that nothing here measures.
     t_sell: float | None = None
-    # The whole round trip, trade lock included: what the return is figured
-    # over, and not the same thing as buying plus selling.
-    cycle: float | None = None
-    monthly: float | None = None
     # What the cheapest leading price would have given, so the surcharge the
     # scan paid for flow is visible beside the price it chose rather than
     # having to be taken on trust.
     entry_lam: float | None = None
     entry_t_buy: float | None = None
-    entry_monthly: float | None = None
     # When a band had too few sales of its own and borrowed from its
     # neighbours: how many it used and how far it had to reach for them.
     borrowed: int = 0
@@ -294,23 +284,6 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
             len(near), slope)
 
 
-def _cycle(t_buy: float, t_sell: float, p: Params) -> float:
-    """How long the money is tied up for one round trip.
-
-    Buying and selling are not back to back. A bought item is trade locked,
-    and the lock is dead time in the middle: it is not in the order book, not
-    in the sales history, and nothing measures it - so it has to be told.
-
-    Whether it stacks on top of the wait for a buyer or runs alongside it
-    depends on whether a locked item may be listed at all, which is a fact
-    about the marketplace rather than about the trade.
-    """
-    hold = max(0.0, p.trade_lock_days)
-    if p.list_during_lock:
-        return t_buy + max(t_sell, hold)
-    return t_buy + hold + t_sell
-
-
 def _iqr(values: Sequence[float]) -> float:
     ordered = sorted(values)
     n = len(ordered)
@@ -448,15 +421,13 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
                     and lam_sell > 0
                     and margin >= p.sigma_k * error):
                 t_sell = 1.0 / lam_sell
-                cycle = _cycle(t_buy, t_sell, p)
-                monthly = margin * 30.0 / cycle
                 found.append(Band(
                     float_min=lo, float_max=hi, sample=len(band),
                     market=market, market_error=error,
                     priced_from=source, top=top, entry=entry,
                     ceiling=ceiling, bid=bid, step=step, margin=margin,
                     wars=wars, lam=lam, queue=queue, t_buy=t_buy,
-                    t_sell=t_sell, cycle=cycle, monthly=monthly, take=True))
+                    t_sell=t_sell, take=True))
             elif (lam >= p.min_lambda and wars >= p.min_wars
                   and 0 < margin < p.sigma_k * error):
                 # Everything else about this price is fine; only the margin is
@@ -472,11 +443,6 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
         entry_queue = sum(int(o.get("qty") or 1) for o in rivals
                           if o["price"] >= entry)
         entry_t_buy = (1 + entry_queue) / entry_lam if entry_lam > 0 else None
-        entry_monthly = None
-        if entry_t_buy is not None and lam_sell > 0:
-            entry_monthly = ((net - entry) / entry) * 30.0 / _cycle(
-                entry_t_buy, 1.0 / lam_sell, p)
-
         if found:
             # The cheapest price that passes. Margin falls as the bid rises,
             # so the cheapest qualifying price is also the fattest margin, and
@@ -489,7 +455,6 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
             best = min(found, key=lambda b: b.bid)
             best.entry_lam = entry_lam
             best.entry_t_buy = entry_t_buy
-            best.entry_monthly = entry_monthly
             out.append(best)
         else:
             if thin:
@@ -498,7 +463,6 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
             row.reason = blocked
             row.entry_lam = entry_lam
             row.entry_t_buy = entry_t_buy
-            row.entry_monthly = entry_monthly
             out.append(row)
 
     return out[0]
@@ -519,5 +483,6 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
         return []
     out = [evaluate(lo, hi, sales, orders, span, depth, p)
            for lo, hi in _bands(span, p.band_step, orders)]
-    out.sort(key=lambda r: (not r.take, -(r.monthly or 0), r.float_min))
+    # Best margin first, the same order the portfolio is chosen in.
+    out.sort(key=lambda r: (not r.take, -(r.margin or 0), r.float_min))
     return out
