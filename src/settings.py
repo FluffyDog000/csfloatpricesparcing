@@ -15,6 +15,7 @@ from typing import Any
 
 from .executor import Limits
 from .pricing import Params
+from .screen import Screen
 
 PARAM_BOUNDS = {
     "fee": (0.0, 0.20), "min_margin": (0.0, 1.0),
@@ -44,6 +45,25 @@ LIMIT_KEYS = (
     ("an_max_per_item", "max_orders_per_item", int),
     ("an_patience_min", "patience_minutes", float),
     ("an_balance", "balance", float),
+)
+
+# The free pass over sales history, before any request is spent. Wide by
+# default on purpose: a screen that drops items before anyone has chosen its
+# thresholds reads as the market saying no.
+SCREEN_BOUNDS = {
+    "min_price": (0.0, 100_000.0), "max_price": (0.0, 100_000.0),
+    "min_flow": (0.0, 100.0), "max_quiet_days": (0.0, 3650.0),
+    "max_spread": (0.0, 10.0), "min_gap": (0.0, 10.0),
+    "min_sales": (0, 100_000),
+}
+SCREEN_KEYS = (
+    ("scr_min_price", "min_price", float),
+    ("scr_max_price", "max_price", float),
+    ("scr_min_flow", "min_flow", float),
+    ("scr_quiet", "max_quiet_days", float),
+    ("scr_spread", "max_spread", float),
+    ("scr_gap", "min_gap", float),
+    ("scr_min_sales", "min_sales", int),
 )
 
 # How often the defence looks, and the floor under it. Each pass re-reads the
@@ -83,6 +103,10 @@ def limits(db) -> Limits:
         except (TypeError, ValueError):
             pass
     return out
+
+
+def screen_limits(db) -> Screen:
+    return _fill(db, Screen(), SCREEN_KEYS, SCREEN_BOUNDS)
 
 
 def defend_minutes(db) -> float:

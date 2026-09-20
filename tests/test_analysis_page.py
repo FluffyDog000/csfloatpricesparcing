@@ -57,8 +57,7 @@ def test_items_are_added_listed_and_removed():
 
 def test_the_sweep_button_queues_work_instead_of_fetching():
     name = "★ Specialist Gloves | Fade (Field-Tested)"
-    c = _app([name])
-    c.post("/api/analysis/items", json={"market_hash_name": name})
+    c = _many_items([name])       # with history, so the screen lets it through
     body = c.post("/api/analysis/sweep", json={}).get_json()
     assert body["queued"] == [name]
 
@@ -193,16 +192,17 @@ def test_every_button_reports_what_it_is_doing():
 
 
 def test_an_item_with_no_history_is_explained_not_left_blank():
-    """A freshly added item has no sales, so every band is "мало данных" and
-    the report looks broken unless the page says why."""
+    """A freshly added item has no sales. Twelve rows of "мало данных: 0
+    продаж" is not an explanation - the screen says it once, before the bands
+    are computed at all."""
     name = "★ Driver Gloves | Snow Leopard (Field-Tested)"
     c = _app([name])
     c.post("/api/analysis/items", json={"market_hash_name": name})
     it = c.get("/api/analysis").get_json()["items"][0]
 
     assert it["sales"] == 0 and it["orders"] == 0
-    assert len(it["bands"]) == 12, "bands still reported, each with its reason"
-    assert all("мало данных" in b["reason"] for b in it["bands"])
+    assert it["bands"] == []
+    assert "нет истории продаж" in it["screened_out"]
 
     import pathlib
     js = pathlib.Path("static/analysis.js").read_text()
@@ -714,3 +714,66 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
         assert best[won] == max(best.values()), \
             f"{won} won on {best[won]:.3f} while {max(best.values()):.3f} existed"
         assert won != order[0], "and not by being first in the list"
+
+
+def test_the_sweep_skips_what_the_history_already_rules_out():
+    """One book costs about six requests through the cookie and the
+    residential route. Three hundred items is over an hour of asking on the
+    path that once drew "too many requests from too many IPs" - so an item the
+    free pass already rejected must not buy a place in that queue."""
+    good = "A Good | One (Field-Tested)"
+    c = _many_items([good])
+    c.post("/api/analysis/items",
+           json={"market_hash_name": "★ Nothing | Known (Field-Tested)"})
+
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.add_item("★ Nothing | Known (Field-Tested)")
+    db.close()
+    c.post("/api/analysis/items",
+           json={"market_hash_name": "★ Nothing | Known (Field-Tested)"})
+
+    body = c.post("/api/analysis/sweep", json={}).get_json()
+    assert body["queued"] == [good]
+    assert [s["item"] for s in body["skipped"]] == \
+        ["★ Nothing | Known (Field-Tested)"]
+    assert "нет истории продаж" in body["skipped"][0]["reason"]
+    assert "запросов" in body["note"], "the saving is worth saying out loud"
+
+
+def test_a_price_ceiling_keeps_expensive_items_out_of_the_queue():
+    """"Не берёт предмет от определённой суммы" - and it costs nothing to
+    decide, so it happens before the sweep rather than after it."""
+    c = _many_items(["A Cheap | One (Field-Tested)",
+                     "B Middling | Two (Field-Tested)",
+                     "C Rich | Three (Field-Tested)"])
+    # The helper prices them at roughly 100, 150 and 200.
+    assert c.post("/api/analysis/params",
+                  json={"scr_max_price": "160"}).status_code == 200
+
+    body = c.post("/api/analysis/sweep", json={}).get_json()
+    assert "C Rich | Three (Field-Tested)" not in body["queued"]
+    assert len(body["queued"]) == 2
+    assert "дороже" in body["skipped"][0]["reason"]
+
+
+def test_every_settings_group_is_actually_saved():
+    """The save endpoint loops over the groups it knows about. A group left
+    out is a field the page shows, accepts, echoes back - and never stores."""
+    from src.settings import (LIMIT_BOUNDS, LIMIT_KEYS, PARAM_BOUNDS,
+                              PARAM_KEYS, SCREEN_BOUNDS, SCREEN_KEYS)
+
+    c = _app()
+    sent = {}
+    for keys, bounds in ((PARAM_KEYS, PARAM_BOUNDS), (LIMIT_KEYS, LIMIT_BOUNDS),
+                         (SCREEN_KEYS, SCREEN_BOUNDS)):
+        for key, attr, cast in keys:
+            lo, hi = bounds[attr]
+            sent[key] = str(cast(lo + (min(hi, lo + 10.0) - lo) / 2))
+    assert c.post("/api/analysis/params", json=sent).get_json()["rejected"] == []
+
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    missing = [k for k in sent if db.get_setting(k) in (None, "")]
+    db.close()
+    assert missing == [], f"accepted and dropped: {missing}"

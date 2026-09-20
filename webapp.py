@@ -767,7 +767,9 @@ def _analysis_items(db) -> list[str]:
 from src.settings import (LIMIT_BOUNDS, LIMIT_KEYS, PARAM_BOUNDS,
                           PARAM_KEYS, defend_minutes, defending)
 from src.settings import limits as _analysis_limits
-from src.settings import params as _analysis_params
+from src.settings import (SCREEN_BOUNDS, SCREEN_KEYS,
+                          params as _analysis_params,
+                          screen_limits as _analysis_screen)
 
 ANALYSIS_BOUNDS = PARAM_BOUNDS
 ANALYSIS_KEYS = PARAM_KEYS
@@ -823,20 +825,45 @@ def api_analysis_sweep():
 
     The web process never talks to CSFloat: the collector owns the routes and
     the rate limits, so it does the fetching and this only asks."""
+    from src.screen import look
+
     _require_admin()
     db = get_db()
+    params = _analysis_params(db)
+    screen = _analysis_screen(db)
     names = _analysis_items(db)
-    queued = [n for n in names if db.request_orders(n)]
+
+    # The whole point of the free pass: one book costs about six requests
+    # through the cookie and the residential route, so three hundred items is
+    # over an hour of asking on the path that once drew "too many requests
+    # from too many IPs". An item the history already rules out must not be
+    # bought a place in that queue.
+    wanted, skipped = [], []
+    for name in names:
+        item_id = db.get_item_id(name)
+        if item_id is None:
+            continue
+        verdict = look(_sales_for(db, item_id, params), screen,
+                       params.window_days, params.fee)
+        (wanted if verdict.passed else skipped).append((name, verdict.reason))
+
+    queued = [n for n, _ in wanted if db.request_orders(n)]
     db.set_setting("orders_error", "")
     db.set_setting("orders_error_at", "")
     waiting = _why_waiting(db)
-    log.info("Analysis sweep queued for %d item(s)%s", len(queued),
-             f" (ожидает: {'; '.join(waiting)})" if waiting else "")
+    log.info("Analysis sweep queued for %d of %d item(s)%s", len(queued),
+             len(names), f" (ожидает: {'; '.join(waiting)})" if waiting else "")
+    saved = len(skipped)
     return jsonify({
         "queued": queued, "waiting": waiting,
+        "skipped": [{"item": n, "reason": r} for n, r in skipped],
         "note": (f"Обход начнётся, когда снимется пауза: {'; '.join(waiting)}"
                  if waiting else
-                 f"Обхожу стакан по {len(queued)} предмет(ам) — до минуты на каждый."),
+                 f"Обхожу стакан по {len(queued)} предмет(ам) — до минуты на "
+                 f"каждый."
+                 + (f" Отсев по истории снял {saved} — это примерно "
+                    f"{saved * 6} запросов, которые не придётся тратить."
+                    if saved else "")),
     })
 
 
@@ -877,8 +904,11 @@ def api_analysis():
     from src.orders import wear_range
     from src.pricing import plan
 
+    from src.screen import look
+
     db = get_db()
     params = _analysis_params(db)
+    screen = _analysis_screen(db)
     out = []
     for name in _analysis_items(db):
         item_id = db.get_item_id(name)
@@ -886,6 +916,19 @@ def api_analysis():
             out.append({"item": name, "error": "предмет больше не отслеживается"})
             continue
         sales = _sales_for(db, item_id, params)
+
+        # The free pass first. Scoring an item is cheap, but the order book it
+        # needs is not, and an item that fails here would have failed after
+        # the requests too.
+        verdict = look(sales, screen, params.window_days, params.fee)
+        if not verdict.passed:
+            out.append({"item": name, "sales": len(sales), "orders": 0,
+                        "depth": 0, "bands": [], "capital": 0.0,
+                        "monthly": 0.0, "swept_at": None,
+                        "screen": verdict.as_dict(),
+                        "screened_out": verdict.reason})
+            continue
+
         orders = db.buy_orders(item_id)
         try:
             depth = db.listing_depth(item_id)
@@ -896,6 +939,8 @@ def api_analysis():
         take = [b for b in bands if b["take"]]
         out.append({
             "item": name,
+            "screen": verdict.as_dict(),
+            "screened_out": "",
             "sales": len(sales),
             "orders": len(orders),
             "swept_at": orders[0]["fetched_at"] if orders else None,
@@ -907,6 +952,7 @@ def api_analysis():
     return jsonify({
         "items": out,
         "params": params.__dict__,
+        "screen": screen.as_dict(),
         "error": db.get_setting("orders_error") or "",
         "waiting": _why_waiting(db),
     })
@@ -976,6 +1022,7 @@ def api_analysis_plan():
     return jsonify({
         "actions": actions,
         "limits": limits.as_dict(),
+        "screen": _analysis_screen(db).as_dict(),
         "held": held,
         "by_item": after,
         "planned_total": round(total, 2),
@@ -1208,34 +1255,27 @@ def api_analysis_params():
     data = request.get_json(silent=True) or {}
     db = get_db()
     rejected = []
-    for key, attr, cast in ANALYSIS_KEYS:
-        if key not in data:
-            continue
-        raw = str(data[key]).strip().replace(",", ".")
-        try:
-            value = cast(raw)
-        except (TypeError, ValueError):
-            rejected.append(f"{key}: '{raw}' — не число")
-            continue
-        lo, hi = ANALYSIS_BOUNDS[attr]
-        if not lo <= value <= hi:
-            rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
-        db.set_setting(key, str(cast(min(max(value, lo), hi))))
-    for key, attr, cast in LIMIT_KEYS:
-        if key not in data:
-            continue
-        raw = str(data[key]).strip().replace(",", ".")
-        try:
-            value = cast(float(raw))
-        except (TypeError, ValueError):
-            rejected.append(f"{key}: '{raw}' — не число")
-            continue
-        lo, hi = LIMIT_BOUNDS[attr]
-        if not lo <= value <= hi:
-            rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
-        db.set_setting(key, str(cast(min(max(value, lo), hi))))
+    # One loop over all three groups: a group left out of this list is a field
+    # the page shows, accepts, and never saves.
+    for keys, bounds in ((ANALYSIS_KEYS, ANALYSIS_BOUNDS),
+                         (LIMIT_KEYS, LIMIT_BOUNDS),
+                         (SCREEN_KEYS, SCREEN_BOUNDS)):
+        for key, attr, cast in keys:
+            if key not in data:
+                continue
+            raw = str(data[key]).strip().replace(",", ".")
+            try:
+                value = cast(float(raw))
+            except (TypeError, ValueError):
+                rejected.append(f"{key}: '{raw}' — не число")
+                continue
+            lo, hi = bounds[attr]
+            if not lo <= value <= hi:
+                rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
+            db.set_setting(key, str(cast(min(max(value, lo), hi))))
     return jsonify({"params": _analysis_params(db).__dict__,
                     "limits": _analysis_limits(db).as_dict(),
+                    "screen": _analysis_screen(db).as_dict(),
                     "rejected": rejected})
 
 

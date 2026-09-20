@@ -109,6 +109,7 @@ function deepText(node) {
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,
     funnel: (nodes["an-funnel"] || el("div")).children.length,
+    funnelText: deepText(nodes["an-funnel"]),
     planSync: (nodes["plan-sync"] || el("div")).textContent,
     step: (nodes["p-step"] || el("div")).value,
     budget: (nodes["l-total"] || el("div")).value,

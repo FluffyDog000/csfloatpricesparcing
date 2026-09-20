@@ -75,9 +75,12 @@ def test_a_failure_midway_does_not_blank_the_list():
     c = _app([name])
     c.post("/api/analysis/items", json={"market_hash_name": name})
     body = _api(c)
-    # A band missing the fields the row renderer reads.
-    body["items"][0]["bands"][0] = {"float_min": 0.15, "float_max": 0.17,
-                                    "take": True}
+    # A band missing the fields the row renderer reads. The item has no sales,
+    # so the screen reports it instead of scoring it - the malformed band is
+    # put in by hand, which is the point of the test either way.
+    body["items"][0]["screened_out"] = ""
+    body["items"][0]["bands"] = [{"float_min": 0.15, "float_max": 0.17,
+                                  "take": True}]
     result = _run(body, expect_ok=False)
     assert result["chips"] == 1, "the list survives a broken report"
     assert "Ошибка" in result["status"], \
@@ -401,3 +404,37 @@ def test_a_found_listing_path_is_reported():
     })
     assert "нашёлся" in got["sync"] and "/api/v1/me/buy-orders" in got["sync"]
     assert "1 совпало" in got["sync"]
+
+
+def test_a_screened_out_item_renders_as_one_line_not_a_table():
+    """Three hundred items, most of them dropped before any request: the
+    report has to say which rule dropped each one, once, without pretending to
+    have scored bands it never computed."""
+    from tests.test_analysis_page import _app
+
+    c = _app()
+    body = {
+        "items": [
+            {"item": "A (FT)", "sales": 40, "orders": 0, "depth": 0,
+             "bands": [], "capital": 0.0, "monthly": 0.0, "swept_at": None,
+             "screened_out": "медиана $412.00 дороже $150.00",
+             "screen": {"median": 412.0, "flow": 0.3, "quiet_days": 2.0,
+                        "spread": 0.1, "gap": 0.2, "sales": 40,
+                        "passed": False, "reason": ""}},
+            {"item": "B (FT)", "sales": 40, "orders": 0, "depth": 0,
+             "bands": [], "capital": 0.0, "monthly": 0.0, "swept_at": None,
+             "screened_out": "медиана $900.00 дороже $150.00",
+             "screen": {"median": 900.0, "flow": 0.3, "quiet_days": 2.0,
+                        "spread": 0.1, "gap": 0.2, "sales": 40,
+                        "passed": False, "reason": ""}},
+        ],
+        "params": {"fee": 0.02, "band_step": 0.02},
+        "screen": {"max_price": 150.0},
+        "error": "", "waiting": [],
+    }
+    got = _run(body)
+    assert "Ошибка" not in got["status"], got["status"]
+    assert got["sections"] == 2, "one collapsed line each"
+    # Grouped by the rule, not by the value: two prices, one reason.
+    assert "2 — медиана … дороже …" in got["funnelText"], got["funnelText"]
+    assert "запросов" in got["funnelText"]

@@ -300,10 +300,11 @@
     const holder = $("an-funnel-block");
     if (holder) holder.hidden = !data.items.length;
     const total = data.items.length;
-    const scored = data.items.filter((i) => !i.error && i.sales);
+    const screened = data.items.filter((i) => i.screened_out);
+    const scored = data.items.filter((i) => !i.error && !i.screened_out);
     const withBids = scored.filter(
       (i) => (i.bands || []).some((b) => b.take));
-    const noBook = data.items.filter((i) => !i.error && i.sales && !i.orders);
+    const noBook = scored.filter((i) => i.sales && !i.orders);
     const capital = withBids.reduce((n, i) => n + (i.capital || 0), 0);
     const orders = withBids.reduce(
       (n, i) => n + (i.bands || []).filter((b) => b.take).length, 0);
@@ -312,7 +313,8 @@
     tiles.className = "journal-summary";
     [
       ["в списке", total, ""],
-      ["отсеяно", total - withBids.length, (total - withBids.length) ? " bad" : ""],
+      ["снято до запросов", screened.length, screened.length ? " muted-tile" : ""],
+      ["разобрано", scored.length, ""],
       ["с ордерами", withBids.length, ""],
       ["полос под ордера", orders, ""],
       ["капитал", "$" + capital.toFixed(0), ""],
@@ -324,16 +326,30 @@
     });
     box.appendChild(tiles);
 
+    // What the free pass threw out, grouped by the threshold that did it.
+    if (screened.length) {
+      const why = {};
+      screened.forEach((i) => {
+        // "медиана $412.00 дороже $150.00" — group by the rule, not the value.
+        const key = (i.screened_out || "").replace(/[\d.,$%]+/g, "…");
+        why[key] = (why[key] || 0) + 1;
+      });
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "Снято отсевом по истории, без единого запроса: "
+        + Object.keys(why).sort((a, b) => why[b] - why[a])
+          .map((k) => `${why[k]} — ${k}`).join("; ")
+        + `. Это примерно ${screened.length * 6} запросов, которые не `
+        + "пришлось тратить.";
+      box.appendChild(p);
+    }
+
     // Two reasons for an empty report that are not the market saying no.
-    const reasons = [];
-    const noSales = data.items.filter((i) => !i.error && !i.sales).length;
-    if (noSales) reasons.push(`${noSales} — истории продаж ещё нет`);
-    if (noBook.length) reasons.push(`${noBook.length} — стакан не собран, `
-      + "нажми «Обойти стаканы»");
-    if (reasons.length) {
+    if (noBook.length) {
       const p = document.createElement("p");
       p.className = "err";
-      p.textContent = "Из отсеянных: " + reasons.join("; ") + ".";
+      p.textContent = `${noBook.length} предмет(ов) прошли отсев, но стакан не `
+        + "собран — нажми «Обойти стаканы».";
       box.appendChild(p);
     }
   }
@@ -355,6 +371,7 @@
       sec.className = "settings-block item-report";
       const head = document.createElement("summary");
       head.textContent = it.item + (it.error ? " — " + it.error
+        : it.screened_out ? "  ·  снят отсевом: " + it.screened_out
         : take.length ? `  ·  ${take.length} ордер(ов), ${money(it.capital)}`
         : "  ·  нет подходящих полос");
       if (take.length) head.className = "ok-summary";
@@ -365,6 +382,29 @@
       if (it.error) {
         meta.textContent = it.error;
         sec.appendChild(meta);
+        box.appendChild(sec);
+        return;
+      }
+      const sc = it.screen;
+      if (sc) {
+        const line = document.createElement("div");
+        line.className = "muted";
+        line.textContent = "по истории: "
+          + [sc.median !== null ? `медиана ${money(sc.median)}` : null,
+             sc.flow !== null ? `поток ${sc.flow.toFixed(2)}/сут` : null,
+             sc.quiet_days !== null
+               ? `последняя продажа ${sc.quiet_days.toFixed(0)} дн назад` : null,
+             sc.spread !== null ? `разброс ${sc.spread.toFixed(2)}` : null,
+             sc.gap !== null ? `зазор ${(sc.gap * 100).toFixed(1)}%` : null,
+            ].filter(Boolean).join(" · ");
+        sec.appendChild(line);
+      }
+      if (it.screened_out) {
+        const p = document.createElement("p");
+        p.className = "muted";
+        p.textContent = "Отсеян до обхода стакана: " + it.screened_out
+          + ". Пороги отсева — в «Пороги расчёта и лимиты».";
+        sec.appendChild(p);
         box.appendChild(sec);
         return;
       }
@@ -511,6 +551,7 @@
     // Loaded into the form, not just used: left showing the markup's
     // defaults, the next "save" posted a budget of zero over a real one.
     fillLimits(d.limits);
+    fillScreen(d.screen);
     $("plan-arm").checked = !!d.armed;
     $("plan-dry").checked = d.dry_run !== false;
     $("plan-defend").checked = !!d.defend;
@@ -726,6 +767,21 @@
         + `${money(l.allowance)}. Твой лимит ${money(l.total_capital)} — в него `
         + `укладывается. Учти: исполнится только то, на что хватит баланса.`;
     }
+  }
+
+  const SCREEN_FIELDS = [
+    ["s-minprice", "min_price", 1], ["s-maxprice", "max_price", 1],
+    ["s-flow", "min_flow", 1], ["s-quiet", "max_quiet_days", 1],
+    ["s-spread", "max_spread", 1], ["s-gap", "min_gap", 100],
+    ["s-minsales", "min_sales", 1],
+  ];
+
+  function fillScreen(s) {
+    if (!s) return;
+    SCREEN_FIELDS.forEach(([id, key, scale]) => {
+      const el = $(id);
+      if (el) el.value = Math.round((s[key] || 0) * scale * 1000) / 1000;
+    });
   }
 
   function fillParams(p) {
@@ -965,9 +1021,18 @@
       an_max_per_item: $("l-maxitem").value,
       an_patience_min: $("l-patience").value,
       an_balance: $("l-balance").value,
+      scr_min_price: $("s-minprice").value,
+      scr_max_price: $("s-maxprice").value,
+      scr_min_flow: $("s-flow").value,
+      scr_quiet: $("s-quiet").value,
+      scr_spread: $("s-spread").value,
+      // Typed as a percentage, stored as a fraction, like the other margins.
+      scr_gap: (parseFloat($("s-gap").value) || 0) / 100,
+      scr_min_sales: $("s-minsales").value,
       }, token());
       fillParams(r.params);
       if (r.limits) fillLimits(r.limits);
+      if (r.screen) fillScreen(r.screen);
       await loadItems(true);
       await loadPlan();
       say((r.rejected && r.rejected.length)

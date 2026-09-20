@@ -104,6 +104,38 @@
         <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
         <small class="muted">меньше — медиана ничего не значит</small></label>
     </div>
+    <h3>Отсев до обхода стаканов</h3>
+    <p class="muted">Считается по истории продаж, <b>не тратя ни одного
+      запроса</b>. Один стакан — это около шести запросов, так что на 300
+      предметах этот отсев решает, займёт обход десять минут или час.
+      <b>0 — проверка выключена</b>, так и стоит по умолчанию.</p>
+    <div class="field-grid analysis-params">
+      <label>цена не ниже, $
+        <input type="number" id="s-minprice" class="input" step="1" min="0" value="0">
+        <small class="muted">на дешёвке шаг сетки цен сопоставим с маржой</small></label>
+      <label>цена не выше, $
+        <input type="number" id="s-maxprice" class="input" step="10" min="0" value="0">
+        <small class="muted">«не берём предмет дороже этого»</small></label>
+      <label>поток не ниже, сделок в сутки
+        <input type="number" id="s-flow" class="input" step="0.05" min="0" value="0">
+        <small class="muted">считается за окно истории, а не за всё время</small></label>
+      <label>последняя продажа не старше, дней
+        <input type="number" id="s-quiet" class="input" step="1" min="0" value="0">
+        <small class="muted">мёртвый предмет с хорошей историей<br>
+          выглядит отлично и не торгуется</small></label>
+      <label>разброс цены не выше
+        <input type="number" id="s-spread" class="input" step="0.05" min="0" value="0">
+        <small class="muted">IQR ÷ медиана. 0.35 — умеренно,<br>
+          выше — цену не приколотить</small></label>
+      <label>зазор не ниже, %
+        <input type="number" id="s-gap" class="input" step="1" min="0" value="0">
+        <small class="muted">насколько медиана за вычетом комиссии выше<br>
+          дешёвого края рынка. Нет зазора — нечего ловить</small></label>
+      <label>продаж в базе не меньше
+        <input type="number" id="s-minsales" class="input" step="10" min="0" value="0">
+        <small class="muted">по всей истории, любого возраста</small></label>
+    </div>
+
     <h3>Лимиты капитала</h3>
     <div class="field-grid analysis-params">
       <label>баланс на CSFloat, $
