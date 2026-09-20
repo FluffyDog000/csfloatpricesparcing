@@ -297,14 +297,25 @@ def _iqr(values: Sequence[float]) -> float:
 
 def _exit_price(history: float, depth: Sequence[dict],
                 lo: float, hi: float, source: str) -> tuple[float, str]:
-    """What the lot sells for. The live book wins over the history: to sell
-    promptly we undercut the cheapest ask, and no history changes that."""
+    """What the lot sells for, and it is the live book that says so.
+
+    To sell promptly you have to be the cheapest listing, and matching the
+    cheapest ask does not make you the cheapest - it puts you level with it
+    and therefore behind it. Selling first means going under, by the one step
+    the price grid allows. Taking the ask itself was claiming the front of a
+    queue while standing second in it, and the whole return is figured on
+    getting out at that price.
+    """
     asks = [d["cheapest"] for d in depth
             if d.get("cheapest") is not None
             and not (d["float_max"] <= lo or d["float_min"] >= hi)]
-    if asks and min(asks) < history:
-        return min(asks), "аск"
-    return history, source
+    if not asks:
+        return history, source
+    best = min(asks)
+    under = snap_down(best - increment(best))
+    if under <= 0:
+        return history, source
+    return (under, "аск") if under < history else (history, source)
 
 
 def evaluate(lo: float, hi: float, sales: Sequence[dict],

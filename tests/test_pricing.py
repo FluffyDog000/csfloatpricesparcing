@@ -215,7 +215,10 @@ def test_the_live_book_prices_the_exit_when_it_is_cheaper():
               "listings": 4}]
     band = plan(_sales(rows), [], (0.15, 0.17), depth=depth,
                 params=Params(min_sample=5))[0]
-    assert band.market == 190.0 and band.priced_from == "аск", \
+    # $189, not $190: matching the cheapest ask does not make us the cheapest,
+    # it puts us level with it and so behind it. Selling first means going
+    # under, by the one step the grid allows.
+    assert band.market == 189.0 and band.priced_from == "аск", \
         "we undercut the cheapest ask to sell, whatever history says"
 
 
@@ -391,3 +394,35 @@ def test_a_wide_band_is_priced_lower_than_a_narrow_one_inside_it():
     wide = evaluate(0.20, 0.28, sales, [], (0.15, 0.38), (), Params())
     narrow = evaluate(0.20, 0.22, sales, [], (0.15, 0.38), (), Params())
     assert wide.market < narrow.market
+
+
+def test_matching_the_cheapest_ask_is_not_being_the_cheapest():
+    """The whole return is figured on getting out at the exit price. Taking
+    the ask itself claimed the front of the queue while standing second in
+    it - and the second listing sells after the first, not with it."""
+    from src.pricing import Params, plan
+
+    rows = [(200.0, 0.16, float(i)) for i in range(20)]
+    for ask, expect in ((190.0, 189.0),      # $10-100 tier is $0.10; this is $1
+                        (60.0, 59.9),
+                        (9.0, 8.95)):
+        depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": ask,
+                  "listings": 4}]
+        band = plan([{"price": p, "float_value": f, "age_days": a}
+                     for p, f, a in [(ask * 1.5, 0.16, float(i))
+                                     for i in range(20)]],
+                    [], (0.15, 0.17), depth=depth,
+                    params=Params(min_sample=5))[0]
+        assert band.market == expect, f"ask {ask} -> {band.market}, want {expect}"
+
+
+def test_an_ask_above_the_history_does_not_raise_the_exit_price():
+    """Undercutting a dear ask is not evidence the lot sells for more."""
+    from src.pricing import Params, plan
+
+    rows = [(100.0, 0.16, float(i)) for i in range(20)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 500.0,
+              "listings": 1}]
+    band = plan(_sales(rows), [], (0.15, 0.17), depth=depth,
+                params=Params(min_sample=5))[0]
+    assert band.market == 100.0 and band.priced_from != "аск"
