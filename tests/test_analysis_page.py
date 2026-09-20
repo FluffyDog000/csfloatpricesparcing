@@ -591,3 +591,55 @@ def test_the_picker_keeps_the_order_ticked_and_drops_repeats():
                  json={"action": "set",
                        "names": ["B (FT)", "A (FT)", "B (FT)", "  "]})
     assert got.get_json()["items"] == ["B (FT)", "A (FT)"]
+
+
+def test_the_journal_tab_renders_and_reports_nothing_having_happened():
+    c = _app()
+    assert c.get("/journal").status_code == 200
+    body = c.get("/api/analysis/journal").get_json()
+    assert body["events"] == [] and body["held"] == 0
+
+
+def test_the_journal_serves_newest_first_and_filters():
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    c = _app([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.record_order_event(name=name, kind="place", ok=True, dry=False,
+                          source="plan", item_id=item_id, price=150.0,
+                          float_min=0.15, float_max=0.17, reason="проба")
+    db.record_order_event(name=name, kind="raise", ok=True, dry=False,
+                          source="defence", item_id=item_id, price=151.0,
+                          was=150.0, float_min=0.15, float_max=0.17,
+                          reason="перебили")
+    db.record_order_event(name="B (FT)", kind="place", ok=False, dry=True,
+                          source="plan", price=10.0, reason="проба")
+    db.close()
+
+    body = c.get("/api/analysis/journal").get_json()
+    # Newest first: three events written in one second tie on the timestamp,
+    # so the id breaks the tie rather than leaving the order to chance.
+    assert [e["id"] for e in body["events"]] == sorted(
+        (e["id"] for e in body["events"]), reverse=True)
+    assert body["events"][0]["market_hash_name"] == "B (FT)"
+    assert len(body["events"]) == 3
+    assert set(body["items"]) == {name, "B (FT)"}
+
+    only_real = c.get("/api/analysis/journal?dry=0").get_json()["events"]
+    assert len(only_real) == 2, "a rehearsal is not a position"
+
+    one = c.get(f"/api/analysis/journal?item={name}").get_json()["events"]
+    assert len(one) == 2 and all(e["market_hash_name"] == name for e in one)
+
+
+def test_the_journal_never_confuses_a_rehearsal_with_a_placement():
+    """A dry run logged like a live one reads as money committed."""
+    c = _app(["A (FT)"])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.record_order_event(name="A (FT)", kind="place", ok=True, dry=True,
+                          source="plan", price=10.0, reason="проба")
+    db.close()
+    ev = c.get("/api/analysis/journal").get_json()["events"][0]
+    assert ev["dry"] is True and ev["ok"] is True

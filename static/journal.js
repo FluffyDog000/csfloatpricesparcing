@@ -88,21 +88,34 @@
       if (e.dry) tr.classList.add("row-dry");
       const band = (e.float_min === null || e.float_max === null) ? "—"
         : e.float_min.toFixed(4) + "–" + e.float_max.toFixed(4);
-      const price = e.was ? `${cash(e.price)} <span class="muted">было `
-        + `${cash(e.was)}</span>` : cash(e.price);
-      tr.innerHTML = `<td class="mono">${when(e.at)}</td>
-        <td><b>${(KIND[e.kind] || [e.kind])[0]}</b>${e.dry
-          ? ' <span class="muted">вхолостую</span>' : ""}${e.ok
-          ? "" : ' <span class="err">отказ</span>'}</td>
-        <td>${e.market_hash_name}</td>
-        <td class="mono">${band}</td>
-        <td>${price}</td>
-        <td class="muted"></td>
-        <td class="muted">${e.source === "defence" ? "защита" : "план"}</td>`;
-      // The reason and whatever the server said are text from outside.
-      const why = tr.children[5];
-      why.textContent = e.ok ? (e.reason || "") : (e.detail || e.reason || "");
+      // Built cell by cell rather than as one innerHTML string: every other
+      // column here is text from outside - an item name, a reason, whatever
+      // the server said when it refused - and pasting that in as markup is
+      // how a stray angle bracket eats the rest of the row.
+      const cell = (text, cls) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (cls) td.className = cls;
+        tr.appendChild(td);
+        return td;
+      };
+      cell(when(e.at), "mono");
+
+      const what = cell((KIND[e.kind] || [e.kind])[0]);
+      what.innerHTML = `<b>${(KIND[e.kind] || [e.kind])[0]}</b>`
+        + (e.dry ? ' <span class="muted">вхолостую</span>' : "")
+        + (e.ok ? "" : ' <span class="err">отказ</span>');
+
+      cell(e.market_hash_name);
+      cell(band, "mono");
+      const price = cell(cash(e.price));
+      if (e.was) price.innerHTML = `${cash(e.price)} `
+        + `<span class="muted">было ${cash(e.was)}</span>`;
+
+      const why = cell(e.ok ? (e.reason || "") : (e.detail || e.reason || ""),
+                       "muted");
       if (e.ok && e.detail) why.title = e.detail;
+      cell(e.source === "defence" ? "защита" : "план", "muted");
       tb.appendChild(tr);
     });
     t.appendChild(tb);

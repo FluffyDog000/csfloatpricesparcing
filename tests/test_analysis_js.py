@@ -105,7 +105,7 @@ def test_the_page_scripts_share_one_scope_without_colliding():
 
     common = declared("static/common.js")
     for page in ("analysis.js", "index.js", "item.js", "load.js",
-                 "settings.js"):
+                 "journal.js", "settings.js"):
         path = f"static/{page}"
         if not pathlib.Path(path).exists():
             continue
@@ -251,3 +251,54 @@ def test_a_failed_row_shows_the_server_text_as_text():
     assert "why.textContent" in table
     assert 'class="muted">${r.detail' not in table, \
         "the server's own words must not be pasted in as markup"
+
+
+def _run_script(script, api_response):
+    """The same stand-in DOM, pointed at another page's script."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                     encoding="utf-8") as fh:
+        json.dump(api_response, fh, ensure_ascii=False)
+        path = fh.name
+    try:
+        out = subprocess.run([NODE, "tests/js/dom_stub.js", script, path],
+                             capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, f"скрипт упал:\n{out.stderr}"
+        return json.loads(out.stdout.strip().splitlines()[-1])
+    finally:
+        os.unlink(path)
+
+
+def test_the_journal_page_script_renders_what_the_endpoint_returns():
+    """The analysis tab shipped dead once - a parse error, a page that looked
+    fine and did nothing. A second page deserves the same check before it goes
+    out, not after."""
+    reply = {
+        "events": [
+            {"id": 2, "at": "2026-09-19T13:55:00", "item_id": 1,
+             "market_hash_name": "★ Gloves | Fade (FT)", "float_min": 0.15,
+             "float_max": 0.17, "kind": "raise", "price": 151.0, "was": 150.0,
+             "ceiling": 160.0, "remote_id": "r1", "ok": True, "dry": False,
+             "source": "defence", "reason": "перебили", "detail": "цена изменена"},
+            {"id": 1, "at": "2026-09-19T12:49:00", "item_id": 1,
+             "market_hash_name": "★ Gloves | Fade (FT)", "float_min": 0.15,
+             "float_max": 0.17, "kind": "place", "price": 150.0, "was": None,
+             "ceiling": 160.0, "remote_id": "r1", "ok": True, "dry": False,
+             "source": "plan", "reason": "полоса проходит", "detail": "поставлен"},
+        ],
+        "held": 1, "items": ["★ Gloves | Fade (FT)"],
+        "defend": True, "defend_minutes": 60, "defend_at": "2026-09-19T14:00:00",
+    }
+    got = _run_script("static/journal.js", reply)
+    assert "Ошибка" not in got["status"], got["status"]
+    assert got["journalRows"] == 2, "both events must reach the table"
+    assert got["tiles"] >= 5, "the summary tiles must render"
+    assert "60" in got["defence"], "the defence interval must be stated"
+
+
+def test_the_journal_says_so_when_nothing_has_happened():
+    got = _run_script("static/journal.js",
+                      {"events": [], "held": 0, "items": [], "defend": False,
+                       "defend_minutes": 60, "defend_at": None})
+    assert "Ошибка" not in got["status"], got["status"]
+    assert got["journalRows"] == 0
+    assert "выключена" in got["defence"]

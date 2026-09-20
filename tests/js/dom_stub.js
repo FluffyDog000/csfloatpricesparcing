@@ -4,13 +4,25 @@
 const fs = require("fs");
 
 function el(tag) {
-  return {
+  const node = {
     tag, id: "", value: "", innerHTML: "", textContent: "", className: "",
-    disabled: false, title: "", children: [], onclick: null,
-    appendChild(c) { this.children.push(c); return c; },
+    disabled: false, title: "", checked: false, children: [], onclick: null,
+    style: {},
+    appendChild(c) { this.children.push(c); c.parentElement = this; return c; },
+    removeChild(c) { this.children = this.children.filter((x) => x !== c); },
+    remove() { if (this.parentElement) this.parentElement.removeChild(this); },
     addEventListener() {},
     querySelectorAll: () => [],
   };
+  node.classList = {
+    add(c) { node.className = (node.className + " " + c).trim(); },
+    remove(c) {
+      node.className = node.className.split(/\s+/).filter((x) => x !== c)
+        .join(" ");
+    },
+    contains: (c) => node.className.split(/\s+/).includes(c),
+  };
+  return node;
 }
 
 const nodes = {};
@@ -28,6 +40,13 @@ const doc = {
 
 global.document = doc;
 global.window = { addEventListener() {} };
+// A page that polls must not keep node alive after the report is printed.
+const realInterval = global.setInterval;
+global.setInterval = (fn, ms) => {
+  const t = realInterval(fn, ms);
+  if (t && t.unref) t.unref();
+  return t;
+};
 global.localStorage = { getItem: () => "" };
 global.confirm = () => true;
 
@@ -61,10 +80,21 @@ vm.runInThisContext(source, { filename: "page.js" });
 (async () => {
   if (doc._ready) await doc._ready();
   await new Promise((r) => setTimeout(r, 50));
-  const note = nodes["an-note"] || el("div");
+  // Either page's status line: whichever one the script under test uses.
+  const note = nodes["an-note"] && nodes["an-note"].textContent
+    ? nodes["an-note"] : (nodes["j-note"] || el("div"));
+  const tableOf = (id) => {
+    const box = nodes[id] || el("div");
+    const t = box.children[0];
+    const body = t && t.children[0];
+    return body ? body.children.length : 0;
+  };
   console.log(JSON.stringify({
     status: note.textContent,
     kind: note.className,
+    journalRows: tableOf("j-table"),
+    tiles: (nodes["j-summary"] || el("div")).children.length,
+    defence: (nodes["j-state"] || el("div")).textContent,
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,
