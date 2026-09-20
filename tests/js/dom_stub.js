@@ -98,6 +98,7 @@ vm.runInThisContext(source, { filename: "page.js" });
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,
+    funnel: (nodes["an-funnel"] || el("div")).children.length,
     step: (nodes["p-step"] || el("div")).value,
     budget: (nodes["l-total"] || el("div")).value,
   }));

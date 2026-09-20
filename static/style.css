@@ -416,3 +416,9 @@ tr.act-keep td { opacity: .6; }
 .picker footer .grow { flex: 1 1 auto; color: var(--muted); font-size: 13px; }
 .picker-group { color: var(--muted); font-size: 11px; text-transform: uppercase;
                 letter-spacing: 0.06em; margin: 14px 0 4px; }
+
+/* Разбор по предметам: по строке на предмет, пока не раскрыт */
+.item-report { margin: 10px 0; }
+.item-report > summary { cursor: pointer; font-weight: 600; }
+.item-report > summary.ok-summary { color: var(--good); }
+#an-detail > summary { font-size: 18px; font-weight: 700; cursor: pointer; }

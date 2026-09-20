@@ -7,6 +7,7 @@
 остальные. Постановка не выполняется, только расчёт.</p>
 
 <section class="settings-block">
+  <h2>1 · Предметы</h2>
   <div class="analysis-add">
     <button class="btn primary" id="an-pick">Выбрать предметы…</button>
     <input type="text" id="an-name" class="input" list="an-known"
@@ -23,9 +24,50 @@
   <div class="muted" id="an-note"></div>
 </section>
 
+<section class="settings-block" id="an-funnel-block" hidden>
+  <h2>2 · Итог разбора</h2>
+  <div id="an-funnel"></div>
+</section>
+
+<section class="settings-block">
+  <h2>3 · План и выставление</h2>
+  <p class="muted">Что бот сделал бы прямо сейчас. Ничего не отправляется.</p>
+  <details id="place-block">
+    <summary>Запрос постановки (настройка)</summary>
+    <p class="muted">Сняты с сайта: <code>POST /api/v1/buy-orders</code> и
+      <code>PATCH /api/v1/buy-orders/{order_id}</code>. Отмена и тело правки
+      пока выведены по форме — проверь в DevTools → Network, прежде чем
+      сохранять. Без отмены нельзя уйти с позиции, которую перебили выше
+      потолка. Ничего не отправляется, пока не нажата «Сохранить запрос».</p>
+    <div class="field-grid analysis-params" id="place-fields"></div>
+    <button class="btn" id="place-save">Сохранить запрос</button>
+    <button class="btn" id="place-suggest">Подставить выведенные</button>
+    <div class="muted" id="place-msg"></div>
+  </details>
+  <div id="plan-state" class="muted"></div>
+  <button class="btn" id="plan-run">Пересчитать план</button>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-dry" checked> вхолостую (ничего не отправлять)
+  </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-arm"> <b>разрешить выставление</b>
+    <span class="muted">— тратится при применении</span>
+  </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-defend"> <b>защищать автоматически</b>
+    каждые <input type="number" id="plan-defend-min" class="input inline-num"
+                  step="10" min="10" max="1440" value="60"> мин
+    <span class="muted">— только перебить или снять, новые ордера не ставит</span>
+  </label>
+  <button class="btn danger" id="plan-apply">Применить план</button>
+  <div id="plan-out"></div>
+  <div id="plan-defence" class="muted"></div>
+  <div id="plan-result"></div>
+</section>
+
 <section class="settings-block">
   <details>
-    <summary>Пороги расчёта</summary>
+    <summary>4 · Пороги расчёта и лимиты</summary>
     <div class="field-grid analysis-params">
       <label>комиссия CSFloat при продаже, %
         <input type="number" id="p-fee" class="input" step="0.1" min="0" max="20" value="2">
@@ -89,42 +131,15 @@
 </section>
 
 <section class="settings-block">
-  <h2>План действий</h2>
-  <p class="muted">Что бот сделал бы прямо сейчас. Ничего не отправляется.</p>
-  <details id="place-block">
-    <summary>Запрос постановки (настройка)</summary>
-    <p class="muted">Сняты с сайта: <code>POST /api/v1/buy-orders</code> и
-      <code>PATCH /api/v1/buy-orders/{order_id}</code>. Отмена и тело правки
-      пока выведены по форме — проверь в DevTools → Network, прежде чем
-      сохранять. Без отмены нельзя уйти с позиции, которую перебили выше
-      потолка. Ничего не отправляется, пока не нажата «Сохранить запрос».</p>
-    <div class="field-grid analysis-params" id="place-fields"></div>
-    <button class="btn" id="place-save">Сохранить запрос</button>
-    <button class="btn" id="place-suggest">Подставить выведенные</button>
-    <div class="muted" id="place-msg"></div>
+  <details id="an-detail">
+    <summary>5 · Разбор по предметам</summary>
+    <label class="arm-line">
+      <input type="checkbox" id="an-only-take"> показывать только предметы с ордерами
+    </label>
+    <div id="an-results"></div>
   </details>
-  <div id="plan-state" class="muted"></div>
-  <button class="btn" id="plan-run">Пересчитать план</button>
-  <label class="arm-line">
-    <input type="checkbox" id="plan-dry" checked> вхолостую (ничего не отправлять)
-  </label>
-  <label class="arm-line">
-    <input type="checkbox" id="plan-arm"> <b>разрешить выставление</b>
-    <span class="muted">— тратится при применении</span>
-  </label>
-  <label class="arm-line">
-    <input type="checkbox" id="plan-defend"> <b>защищать автоматически</b>
-    каждые <input type="number" id="plan-defend-min" class="input inline-num"
-                  step="10" min="10" max="1440" value="60"> мин
-    <span class="muted">— только перебить или снять, новые ордера не ставит</span>
-  </label>
-  <button class="btn danger" id="plan-apply">Применить план</button>
-  <div id="plan-out"></div>
-  <div id="plan-defence" class="muted"></div>
-  <div id="plan-result"></div>
 </section>
 
-<div id="an-results"></div>
 {% endblock %}
 {% block scripts %}
 <script>

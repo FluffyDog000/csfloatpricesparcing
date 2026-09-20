@@ -22,6 +22,9 @@
   const days = (v) => (v === null || v === undefined) ? "—" : v.toFixed(1) + " д";
 
   let busy = false;
+  // The last scored reply, kept so a filter can re-render without asking the
+  // server to score a hundred items again.
+  let lastData = null;
 
   const BUILD = (document.currentScript && document.currentScript.src || "")
     .split("?v=")[1] || "?";
@@ -64,6 +67,7 @@
 
   async function loadItems(quiet) {
     const data = await getJSON("/api/analysis");
+    lastData = data;
     const names = data.items.map((i) => i.item);
     renderList(names);
     renderResults(data);
@@ -291,8 +295,10 @@
    * the wrong way to answer "did this run find anything".
    */
   function renderFunnel(data) {
-    const box = document.createElement("section");
-    box.className = "settings-block";
+    const box = $("an-funnel");
+    box.innerHTML = "";
+    const holder = $("an-funnel-block");
+    if (holder) holder.hidden = !data.items.length;
     const total = data.items.length;
     const scored = data.items.filter((i) => !i.error && i.sales);
     const withBids = scored.filter(
@@ -330,20 +336,28 @@
       p.textContent = "Из отсеянных: " + reasons.join("; ") + ".";
       box.appendChild(p);
     }
-    return box;
   }
 
   function renderResults(data) {
     const box = $("an-results");
     box.innerHTML = "";
+    renderFunnel(data);
     if (!data.items.length) return;
-    box.appendChild(renderFunnel(data));
+    const onlyTake = ($("an-only-take") || {}).checked;
 
     data.items.forEach((it) => {
-      const sec = document.createElement("section");
-      sec.className = "settings-block";
-      const head = document.createElement("h2");
-      head.textContent = it.item;
+      const take = (it.bands || []).filter((b) => b.take);
+      if (onlyTake && !take.length) return;
+
+      // One <details> per item rather than one open panel: a hundred items
+      // is a hundred tables, and the answer for each of them is one line.
+      const sec = document.createElement("details");
+      sec.className = "settings-block item-report";
+      const head = document.createElement("summary");
+      head.textContent = it.item + (it.error ? " — " + it.error
+        : take.length ? `  ·  ${take.length} ордер(ов), ${money(it.capital)}`
+        : "  ·  нет подходящих полос");
+      if (take.length) head.className = "ok-summary";
       sec.appendChild(head);
 
       const meta = document.createElement("div");
@@ -376,7 +390,6 @@
         sec.appendChild(warn);
       }
 
-      const take = it.bands.filter((b) => b.take);
       const sum = document.createElement("p");
       sum.innerHTML = take.length
         ? `<b>${take.length}</b> ордер(ов) · капитал <b>${money(it.capital)}</b>`
@@ -790,6 +803,16 @@
       await loadItems();
       await loadPlan();
     });
+
+    // Re-rendered from what is already loaded: scoring a hundred items again
+    // to hide some of them is a filter nobody presses twice.
+    const filter = $("an-only-take");
+    if (filter) {
+      filter.onchange = () => {
+        if (lastData) renderResults(lastData);
+        else action("Считаю", () => loadItems(true));
+      };
+    }
 
     $("plan-run").onclick = () => action("Строю план", async () => {
       await loadPlan();

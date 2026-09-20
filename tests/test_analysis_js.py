@@ -51,9 +51,8 @@ def test_the_page_script_runs_against_a_real_response():
     assert "Ошибка" not in result["status"], result["status"]
     assert result["kind"] != "err"
     assert result["chips"] == 1, "the item added must appear in the list"
-    # The funnel above the per-item panels is a section too: one summary,
-    # one report.
-    assert result["sections"] == 2, "the funnel and the item's own report"
+    assert result["sections"] == 1, "and its report must render"
+    assert result["funnel"] >= 1, "the summary above it must render too"
     assert "сборка" in result["status"], \
         "the status names the build, so a screenshot says which script ran"
 
@@ -302,3 +301,23 @@ def test_the_journal_says_so_when_nothing_has_happened():
     assert "Ошибка" not in got["status"], got["status"]
     assert got["journalRows"] == 0
     assert "выключена" in got["defence"]
+
+
+def test_only_items_with_orders_can_be_shown():
+    """A hundred items is a hundred tables, and most of them say "no". The
+    filter re-renders what is already loaded rather than asking the server to
+    score everything again."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    assert "an-only-take" in source
+    assert "lastData" in source, "the reply is kept for re-rendering"
+    handler = source.split('const filter = $("an-only-take");')[1][:400]
+    assert "renderResults(lastData)" in handler
+    assert "/api/analysis" not in handler, "a filter must not re-score"
+
+
+def test_each_item_report_collapses():
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    body = source.split("function renderResults")[1]
+    assert 'createElement("details")' in body, \
+        "one open panel per item is the layout that made the tab unusable"
+    assert 'createElement("summary")' in body
