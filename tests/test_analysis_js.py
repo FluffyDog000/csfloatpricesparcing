@@ -545,3 +545,17 @@ def test_a_finished_probe_reports_what_was_sent():
     })
     assert "Проверка правки" in got["positions"]
     assert "max_price" in got["positions"], "what went out, not just the verdict"
+
+
+def test_the_amend_probe_says_why_it_is_greyed_out():
+    """A disabled button with no reason beside it reads as a button that is
+    not there, and that is what it was asked about."""
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 0, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync": None, "sync_at": None, "sync_pending": False,
+        "positions": {"orders": [], "outbid": 0, "checking": False,
+                      "test_amend": None, "test_pending": False},
+    })
+    assert got["probeOff"]
+    assert "нужен ордер" in got["probeLabel"], got["probeLabel"]

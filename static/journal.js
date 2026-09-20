@@ -194,19 +194,28 @@
     box.innerHTML = "";
     const rows = d.orders || [];
     const probe = $("p-amend");
+    // A greyed-out button with no reason beside it reads as a missing button.
+    const why = (text) => {
+      probe.disabled = !!text;
+      probe.textContent = text
+        ? "Проверить правку цены — " + text : "Проверить правку цены";
+      probe.title = text || "";
+    };
     if (!rows.length) {
-      box.innerHTML = '<p class="muted">Ордеров нет.</p>';
-      probe.disabled = true;
+      box.innerHTML = '<p class="muted">Ордеров нет. Поставь хотя бы один — '
+        + 'тогда можно будет проверить запрос правки цены.</p>';
+      why("нужен ордер на сайте");
       return;
     }
     // The probe amends a real order to the price it already has, so it needs
     // one that exists on the site.
     const live = rows.filter((r) => r.remote_id && r.state !== "manual");
-    probe.disabled = !live.length;
     probe.dataset.order = live.length ? live[0].id : "";
-    probe.title = live.length
-      ? `Отправит PATCH на «${live[0].item}» с той же ценой ${money(live[0].price)}`
-      : "Нужен ордер, стоящий на сайте";
+    why(live.length ? "" : "ни один ордер не стоит на сайте");
+    if (live.length) {
+      probe.title = `Отправит PATCH на «${live[0].item}» с той же ценой `
+        + money(live[0].price);
+    }
 
     const t = document.createElement("table");
     t.className = "stat journal";

@@ -112,6 +112,13 @@ class Spec:
         return dict(self.__dict__)
 
 
+# Captured from the site: GET /api/v1/me/buy-orders?page=0&limit=10&order=desc
+# It is paged, which matters more than the path. Ten rows a page against an
+# account allowed a thousand orders means a single request sees a tenth of
+# them, and every order it did not see reads as one taken down - the exact
+# mistake that marks live positions gone and places them all again.
+DEFAULT_LIST_PATH = "/api/v1/me/buy-orders?page={page}&limit=100&order=desc"
+
 # Captured from the browser, one request at a time:
 #
 #   POST   https://csfloat.com/api/v1/buy-orders             create
@@ -129,7 +136,7 @@ SUGGESTED = Spec(
     update_body=DEFAULT_UPDATE_BODY,               # confirmed
     cancel_method="DELETE",                        # confirmed
     cancel_path="/api/v1/buy-orders/{order_id}",   # confirmed
-    list_path="/api/v1/buy-orders",                # guessed
+    list_path=DEFAULT_LIST_PATH,                   # confirmed, paged
 )
 
 CONFIRMED = {"create_path", "create_method", "create_body",
@@ -145,7 +152,8 @@ CONFIRMED = {"create_path", "create_method", "create_body",
 # would be taken for the right one, and an empty list is exactly the reply that
 # marks every held order gone.
 LIST_CANDIDATES = (
-    "/api/v1/me/buy-orders?page=0&limit=100",
+    DEFAULT_LIST_PATH,
+    "/api/v1/me/buy-orders?page={page}&limit=10&order=desc",
     "/api/v1/me/buy-orders",
     "/api/v1/users/me/buy-orders",
     "/api/v1/me/orders",

@@ -680,6 +680,38 @@ class Collector:
             log.info("Order sync: %s", result["counts"])
         return result
 
+    def _all_pages(self, base: str, path: str, cap: int = 20) -> list[dict]:
+        """Every order on the path, following its pages if it has any.
+
+        The captured request takes page and limit, and ten rows a page against
+        an account allowed a thousand orders means one request sees a tenth of
+        them. An order the reply did not reach is indistinguishable from one
+        that is gone, so a half-read list would mark live positions cancelled
+        and place them all a second time. Reading to the end is not an
+        optimisation here, it is the difference between right and dangerous.
+        """
+        from .placement import parse_order_list
+
+        if "{page}" not in path:
+            return parse_order_list(self.client.fetch_json(base + path))
+
+        out: list[dict] = []
+        seen: set[str] = set()
+        for page in range(cap):
+            rows = parse_order_list(
+                self.client.fetch_json(base + path.format(page=page)))
+            fresh = [r for r in rows if r["remote_id"] not in seen]
+            seen.update(r["remote_id"] for r in fresh)
+            out.extend(fresh)
+            # A short page is the last one; a page that repeats what the last
+            # one held means the parameter is not honoured, and asking again
+            # would loop.
+            if not rows or not fresh:
+                break
+        else:
+            log.warning("Stopped reading buy orders at %d pages", cap)
+        return out
+
     def _read_their_orders(self, spec, discover: bool):
         """Fetch the account's buy orders. Returns (orders, error, path).
 
@@ -696,8 +728,7 @@ class Collector:
 
         if spec.list_path:
             try:
-                payload = self.client.fetch_json(base + spec.list_path)
-                return parse_order_list(payload), "", spec.list_path
+                return self._all_pages(base, spec.list_path), "", spec.list_path
             except Exception as exc:  # noqa: BLE001
                 detail = f"{type(exc).__name__}: {exc}"
                 tried.append(f"{spec.list_path} — {detail}")
@@ -709,11 +740,10 @@ class Collector:
             if path == spec.list_path:
                 continue
             try:
-                payload = self.client.fetch_json(base + path)
+                orders = self._all_pages(base, path)
             except Exception as exc:  # noqa: BLE001 - a 404 here is an answer
                 tried.append(f"{path} — {type(exc).__name__}: {exc}")
                 continue
-            orders = parse_order_list(payload)
             if orders:
                 return orders, "", path
             tried.append(f"{path} — ответил, но ордеров в ответе нет")

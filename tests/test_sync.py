@@ -196,13 +196,16 @@ def test_the_listing_endpoint_is_looked_for_when_the_configured_one_refuses():
             raise requests.HTTPError("HTTP 405 для " + url)
         if "/me/buy-orders?page=0" in url:
             return {"data": [_site_order("r1")]}
+        if "/me/buy-orders?page=" in url:
+            return {"data": []}      # one page and no more
         raise requests.HTTPError("HTTP 404 для " + url)
 
     col.client.fetch_json = answer
     out = col.sync_our_orders(discover=True)
 
     assert out["error"] == ""
-    assert out["found_path"] == "/api/v1/me/buy-orders?page=0&limit=100"
+    assert out["found_path"] == \
+        "/api/v1/me/buy-orders?page={page}&limit=100&order=desc"
     assert out["counts"]["matched"] == 1
     # Found by asking, and asking costs requests, so it is kept.
     assert load(db.get_setting(PLACEMENT_KEY)).list_path == out["found_path"]
@@ -266,4 +269,60 @@ def test_a_configured_path_that_works_is_not_second_guessed():
 
     assert asked == ["https://csfloat.com/api/v1/me/buy-orders"]
     assert out["error"] == "" and out["seen"] == 0
+    db.close()
+
+
+def test_every_page_of_orders_is_read():
+    """Ten rows a page against an account allowed a thousand orders means one
+    request sees a tenth of them - and an order the reply never reached is
+    indistinguishable from one that is gone. A half-read list marks live
+    positions cancelled and places them all a second time."""
+    col, db = _collector(
+        list_path="/api/v1/me/buy-orders?page={page}&limit=2&order=desc")
+    item_id = db.add_item(NAME)
+    for i in range(5):
+        db.upsert_our_order(item_id, 0.15 + i / 100, 0.16 + i / 100, 150.0,
+                            160.0, state="live", remote_id=f"r{i}")
+
+    pages = {
+        0: [_site_order("r0", lo=0.15, hi=0.16),
+            _site_order("r1", lo=0.16, hi=0.17)],
+        1: [_site_order("r2", lo=0.17, hi=0.18),
+            _site_order("r3", lo=0.18, hi=0.19)],
+        2: [_site_order("r4", lo=0.19, hi=0.20)],
+        3: [],
+    }
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        page = int(url.split("page=")[1].split("&")[0])
+        return {"data": pages.get(page, [])}
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders()
+
+    assert out["seen"] == 5, f"asked {asked}"
+    assert out["counts"]["gone"] == 0, "nothing was missed and called gone"
+    assert len(db.our_orders()) == 5
+    db.close()
+
+
+def test_a_page_parameter_the_server_ignores_does_not_loop():
+    """If every page answers with the same rows, asking again forever is the
+    failure mode. One repeat is enough to know."""
+    col, db = _collector(
+        list_path="/api/v1/me/buy-orders?page={page}&limit=2")
+    db.add_item(NAME)
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        return {"data": [_site_order("r0"), _site_order("r1")]}
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders()
+
+    assert len(asked) == 2, f"stopped after a repeat, asked {len(asked)}"
+    assert out["seen"] == 2, "and the repeats are not counted twice"
     db.close()
