@@ -9,6 +9,8 @@ a band fills nothing when the front of that band sits far below the market:
 came in under the top-of-book, and calling that band illiquid was wrong.
 """
 
+import pytest
+
 
 def test_only_prices_on_the_tier_grid_exist():
     from src.pricing import increment, next_above, snap_down, snap_up
@@ -257,3 +259,64 @@ def test_the_cheapest_price_within_reach_of_the_best_is_preferred():
     assert thrifty.bid == thrifty.entry, "nothing above the entry earned its cost"
     assert thrifty.wars > greedy.wars, "and the headroom is kept"
     assert thrifty.monthly > greedy.monthly * 0.9, "for a couple of points"
+
+
+def test_a_thin_band_borrows_from_its_neighbours_instead_of_being_dropped():
+    """Eight sales in a 0.02 slice of a wear is a lot to ask, and "мало
+    данных" was the commonest reason a band was dropped. Price moves with
+    float smoothly, so the sales either side say a great deal about the ones
+    inside - throwing them away to honour an edge we invented throws away most
+    of the evidence."""
+    from src.pricing import Params, evaluate
+
+    # Priced from 200 down to 100 across the wear, two sales per 0.02 band -
+    # never enough for a band to stand on its own.
+    sales = [{"price": 200.0 - (f := 0.15 + i * 0.01) * 333.3, "float_value": f,
+              "age_days": i % 14}
+             for i in range(30)]
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.45}]
+
+    got = evaluate(0.30, 0.32, sales, book, (0.15, 0.38), (),
+                   Params(min_sample=8, max_reach=0.05))
+    assert got.sample < 8, "it really does not have its own"
+    assert got.borrowed >= 8 and got.reach is not None
+    assert got.priced_from == "соседи"
+    # 0.31 on a line from 200 at 0.15: 200 - 0.31*333.3 ≈ 96.7
+    assert got.market == pytest.approx(200.0 - 0.31 * 333.3, rel=0.02)
+
+
+def test_borrowing_stops_where_the_neighbours_stop_being_the_same_thing():
+    from src.pricing import Params, evaluate
+
+    sales = [{"price": 100.0, "float_value": 0.15 + i * 0.001,
+              "age_days": 1} for i in range(40)]
+    got = evaluate(0.40, 0.42, sales, [], (0.15, 0.38), (),
+                   Params(min_sample=8, max_reach=0.05))
+    assert not got.take and "за" in got.reason and "float" in got.reason
+
+
+def test_a_borrowed_price_carries_more_doubt_than_a_measured_one():
+    """Reaching is itself a doubt. Sales lying exactly on a line say the line
+    fits, not that it keeps holding a dozen bands further out."""
+    from src.pricing import neighbourhood
+
+    tight = [{"price": 200.0 - i * 0.333, "float_value": 0.15 + i * 0.001}
+             for i in range(300)]
+    close = neighbourhood(tight, 0.30, 0.32, 12)
+    sparse = [{"price": 200.0 - i * 6.0, "float_value": 0.15 + i * 0.02}
+              for i in range(16)]
+    far = neighbourhood(sparse, 0.30, 0.32, 12)
+
+    assert far[2] > close[2], "the sparse one had to reach further"
+    assert far[1] > close[1], "and says so in its error"
+
+
+def test_a_band_with_its_own_sales_does_not_borrow():
+    from src.pricing import Params, evaluate
+
+    sales = [{"price": 100.0 + (i % 5), "float_value": 0.305 + (i % 10) * 0.001,
+              "age_days": i % 14} for i in range(40)]
+    got = evaluate(0.30, 0.32, sales, [], (0.15, 0.38), (),
+                   Params(min_sample=8))
+    assert got.sample == 40 and got.borrowed == 0
+    assert got.priced_from == "история"

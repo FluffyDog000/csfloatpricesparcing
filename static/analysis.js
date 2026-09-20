@@ -281,7 +281,12 @@
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
       <td>${b.wars}</td>
-      <td>${money(b.market)}<span class="muted"> ${b.priced_from}</span></td>
+      <td>${money(b.market)}<span class="muted"${
+        b.borrowed ? ` title="своих продаж ${b.sample}, взято ${b.borrowed} `
+          + `ближайших, дальняя за ${b.reach.toFixed(3)} по float. `
+          + `Погрешность ${(b.market_error * 100).toFixed(1)}%"` : ""
+        }> ${b.priced_from}${b.borrowed ? " ±" + (b.market_error * 100).toFixed(0)
+          + "%" : ""}</span></td>
       <td>${pct(b.margin)}</td>
       <td>${b.lam.toFixed(2)}</td>
       <td>${days(b.t_buy)}</td>
@@ -793,6 +798,7 @@
     $("p-wars").value = p.min_wars;
     $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
+    $("p-reach").value = p.max_reach;
     $("p-bidtol").value = Math.round(p.bid_tolerance * 100);
     $("p-sigma").value = p.sigma_k;
   }
@@ -1013,7 +1019,8 @@
         an_min_wars: $("p-wars").value,
         an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
-      an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
+        an_reach: $("p-reach").value,
+        an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
       an_sigma_k: $("p-sigma").value,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,

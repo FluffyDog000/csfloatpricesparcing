@@ -438,3 +438,12 @@ def test_a_screened_out_item_renders_as_one_line_not_a_table():
     # Grouped by the rule, not by the value: two prices, one reason.
     assert "2 — медиана … дороже …" in got["funnelText"], got["funnelText"]
     assert "запросов" in got["funnelText"]
+
+
+def test_a_borrowed_price_is_labelled_as_borrowed():
+    """A price worked out from neighbouring bands looks exactly like a
+    measured one in a table, and it is not the same claim."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.borrowed" in row and "b.reach" in row
+    assert "priced_from" in row

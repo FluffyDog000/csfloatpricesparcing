@@ -72,6 +72,10 @@ class Params:
     min_wars: int = 2              # outbids we must be able to answer
     max_fill_days: float = 21.0
     min_sample: int = 8            # sales needed before a median means anything
+    # How far, in float, a band may borrow sales from to price itself when it
+    # has too few of its own. Past this the neighbours are a different item in
+    # all but name. 0 switches the borrowing off.
+    max_reach: float = 0.05
     # Raising the bid does buy flow - every listing at or under it executes
     # against the order - but the last dollars of that often buy very little.
     # Among prices that come within this fraction of the best return, take the
@@ -128,6 +132,10 @@ class Band:
     entry_lam: float | None = None
     entry_t_buy: float | None = None
     entry_monthly: float | None = None
+    # When a band had too few sales of its own and borrowed from its
+    # neighbours: how many it used and how far it had to reach for them.
+    borrowed: int = 0
+    reach: float | None = None
     take: bool = False
     reason: str = ""
 
@@ -187,17 +195,88 @@ def _bands(span: tuple[float, float], step: float,
     return out
 
 
-def _exit_price(band_sales: list[float], depth: Sequence[dict],
-                lo: float, hi: float) -> tuple[float, str]:
-    """What the lot sells for. The live book wins over the sales median: to
-    sell promptly we undercut the cheapest ask, and no history changes that."""
-    median = st.median(band_sales)
+def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
+                  want: int) -> tuple[float | None, float, float, int]:
+    """What the band is worth, borrowing from the sales nearest to it.
+
+    A band's own sales are usually too few to place it - eight in a 0.02 slice
+    of a wear is a lot to ask - and that is the single commonest reason a band
+    is dropped. But price moves with float *smoothly*: the sales just outside
+    a band say a great deal about the ones inside it, and throwing them away
+    to honour a band edge we invented is throwing away most of the evidence.
+
+    So the window widens from the band's centre until it holds `want` sales,
+    and the price is read off a line fitted through them rather than off their
+    median: a widened window is lopsided when the band sits near the end of a
+    wear, and its median would then be the price of the wrong float.
+
+    The slope is a Theil-Sen estimate - the median of the pairwise slopes -
+    which ignores a freak sale instead of being dragged by it. Returns the
+    price, the relative width of the window it needed, and how many sales it
+    used; a wide window is a weaker answer and the caller is told so.
+    """
+    rows = [(float(s["float_value"]), float(s["price"])) for s in sales
+            if s.get("float_value") is not None and s.get("price")]
+    if len(rows) < 2:
+        return None, 1.0, len(rows)
+
+    centre = (lo + hi) / 2.0
+    rows.sort(key=lambda r: abs(r[0] - centre))
+    near = rows[:max(want, 2)]
+    reach = max(abs(f - centre) for f, _ in near)
+
+    # Pairwise slopes, capped: at n=40 that is 780 pairs, and the estimate is
+    # not improved by more.
+    use = near[:40]
+    slopes = [(p2 - p1) / (f2 - f1)
+              for i, (f1, p1) in enumerate(use)
+              for f2, p2 in use[i + 1:]
+              if abs(f2 - f1) > 1e-9]
+    slope = st.median(slopes) if slopes else 0.0
+    # Robust intercept: the median of price - slope*float over the window.
+    level = st.median([p - slope * f for f, p in near])
+    price = level + slope * centre
+
+    floor = min(p for _, p in near) * 0.5
+    cap = max(p for _, p in near) * 2.0
+    price = min(max(price, floor), cap)
+
+    # How well the line holds: the scatter left over after it, read the same
+    # way a median's error is read, and widened by how far the window had to
+    # reach. Borrowing from three bands away is an answer, but a softer one.
+    residuals = [pr - (level + slope * f) for f, pr in near]
+    spread = _iqr(residuals) / 1.349 if len(residuals) >= 4 else None
+    # How many band widths the window had to reach past the band itself.
+    stretch = max(0.0, reach - (hi - lo) / 2.0) / max(hi - lo, 1e-6)
+    if spread is None or price <= 0:
+        error = 1.0
+    else:
+        error = (1.2533 * spread / math.sqrt(len(near))) / price
+        error *= 1.0 + stretch
+    # Sales lying exactly on a line say the line fits, not that it keeps
+    # holding a dozen bands further out. Reaching is itself a doubt, and a
+    # multiplier on a residual of zero records none of it.
+    return price, min(max(error, 0.01 * stretch), 1.0), reach, len(near)
+
+
+def _iqr(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    n = len(ordered)
+    q1 = ordered[n // 4]
+    q3 = ordered[(3 * n) // 4 - (1 if n % 4 == 0 else 0)]
+    return q3 - q1
+
+
+def _exit_price(history: float, depth: Sequence[dict],
+                lo: float, hi: float, source: str) -> tuple[float, str]:
+    """What the lot sells for. The live book wins over the history: to sell
+    promptly we undercut the cheapest ask, and no history changes that."""
     asks = [d["cheapest"] for d in depth
             if d.get("cheapest") is not None
             and not (d["float_max"] <= lo or d["float_min"] >= hi)]
-    if asks and min(asks) < median:
+    if asks and min(asks) < history:
         return min(asks), "аск"
-    return median, "история"
+    return history, source
 
 
 def evaluate(lo: float, hi: float, sales: Sequence[dict],
@@ -218,13 +297,32 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
         band = [s["price"] for s in sales
                 if s.get("float_value") is not None and lo <= s["float_value"] < hi]
         row = Band(float_min=lo, float_max=hi, sample=len(band))
-        if len(band) < p.min_sample:
-            row.reason = f"мало данных: {len(band)} продаж"
-            out.append(row)
-            continue
 
-        market, source = _exit_price(band, depth, lo, hi)
-        error = _median_error(band)
+        if len(band) >= p.min_sample:
+            history, source = st.median(band), "история"
+            error = _median_error(band)
+        else:
+            # Not enough of its own. Price moves with float smoothly, so the
+            # sales either side of the band say a great deal about the ones
+            # inside it - dropping the band to honour an edge we invented
+            # throws away most of the evidence, and it is the commonest reason
+            # a band is dropped at all.
+            history, error, reach, used = neighbourhood(
+                sales, lo, hi, p.min_sample)
+            row.borrowed = used
+            row.reach = reach
+            if history is None:
+                row.reason = f"мало данных: {len(band)} продаж, занять не у кого"
+                out.append(row)
+                continue
+            if p.max_reach and reach > p.max_reach:
+                row.reason = (f"мало данных: {len(band)} продаж, ближайшие "
+                              f"{used} — за {reach:.3f} по float")
+                out.append(row)
+                continue
+            source = "соседи"
+
+        market, source = _exit_price(history, depth, lo, hi, source)
         net = market * (1.0 - p.fee)
         step = increment(market)
         ceiling = snap_down(net / (1.0 + p.min_margin))

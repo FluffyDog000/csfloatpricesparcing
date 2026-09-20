@@ -102,7 +102,12 @@
           погрешности медианы; 0 — не проверять</small></label>
       <label>минимальная выборка, продаж в полосе
         <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
-        <small class="muted">меньше — медиана ничего не значит</small></label>
+        <small class="muted">меньше — занимаем у соседних полос</small></label>
+      <label>занимать у соседей не дальше, float
+        <input type="number" id="p-reach" class="input" step="0.01" min="0" max="0.5" value="0.05">
+        <small class="muted">полосе не хватает своих продаж — берём ближайшие<br>
+          и строим по ним линию. Дальше этого соседи — уже другой предмет.<br>
+          0 — не занимать</small></label>
     </div>
     <h3>Отсев до обхода стаканов</h3>
     <p class="muted">Считается по истории продаж, <b>не тратя ни одного
