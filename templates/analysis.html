@@ -89,6 +89,15 @@
       <label>минимальный запас, перебиваний
         <input type="number" id="p-wars" class="input" step="1" min="0" max="100" value="2">
         <small class="muted">сколько раз сможем ответить конкуренту</small></label>
+      <label>торговый бан, дней
+        <input type="number" id="p-lock" class="input" step="1" min="0" max="30" value="7">
+        <small class="muted">купленный предмет нельзя перепродать сразу.<br>
+          Мёртвое время посреди каждой сделки — в стакане<br>
+          и в истории продаж его не видно</small></label>
+      <label>во время бана можно выставлять
+        <span class="lock-line"><input type="checkbox" id="p-locklist">
+          <small class="muted">тогда бан и ожидание покупателя идут<br>
+            параллельно, а не подряд</small></span></label>
       <label>максимальный срок набора, дней
         <input type="number" id="p-fill" class="input" step="1" min="1" max="365" value="21">
         <small class="muted">дольше — капитал стоит мёртво</small></label>

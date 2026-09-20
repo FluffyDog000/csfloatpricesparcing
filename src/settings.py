@@ -24,6 +24,7 @@ PARAM_BOUNDS = {
     "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
     "bid_tolerance": (0.0, 1.0), "sigma_k": (0.0, 5.0),
     "max_reach": (0.0, 0.5),
+    "trade_lock_days": (0.0, 30.0),
 }
 PARAM_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
@@ -32,6 +33,7 @@ PARAM_KEYS = (
     ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
     ("an_bid_tol", "bid_tolerance", float), ("an_sigma_k", "sigma_k", float),
     ("an_reach", "max_reach", float),
+    ("an_trade_lock", "trade_lock_days", float),
 )
 
 LIMIT_BOUNDS = {
@@ -90,7 +92,11 @@ def _fill(db, target: Any, keys, bounds) -> Any:
 
 
 def params(db) -> Params:
-    return _fill(db, Params(), PARAM_KEYS, PARAM_BOUNDS)
+    out = _fill(db, Params(), PARAM_KEYS, PARAM_BOUNDS)
+    # A flag, not a number: casting "0" through float() would make every
+    # stored value true, including the one that means false.
+    out.list_during_lock = (db.get_setting("an_list_locked") or "0") == "1"
+    return out
 
 
 def limits(db) -> Limits:

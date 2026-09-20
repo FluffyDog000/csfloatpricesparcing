@@ -253,10 +253,14 @@ def test_the_cheapest_price_within_reach_of_the_best_is_preferred():
     orders = [{"price": 86.9, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
     sales = _sales(rows)
 
+    # No trade lock here: this is about the tolerance, and a week of dead time
+    # in the middle of every cycle flattens the speed the greedy bid buys.
     greedy = plan(sales, orders, (0.27, 0.29),
-                  params=Params(min_sample=5, bid_tolerance=0.0))[0]
+                  params=Params(min_sample=5, bid_tolerance=0.0,
+                                trade_lock_days=0.0))[0]
     thrifty = plan(sales, orders, (0.27, 0.29),
-                   params=Params(min_sample=5, bid_tolerance=0.10))[0]
+                   params=Params(min_sample=5, bid_tolerance=0.10,
+                                 trade_lock_days=0.0))[0]
 
     assert greedy.bid == 89.0 and thrifty.bid == 87.0
     assert thrifty.bid == thrifty.entry, "nothing above the entry earned its cost"
@@ -495,3 +499,47 @@ def test_one_listing_says_nothing_about_where_in_its_band_it_sits():
     # $200 sits in the $100-500 tier, where the grid step is a dollar.
     assert one == 199.0, "middle of the band is our own float: no carry"
     assert many > one, "twenty lots: its cheapest is near the worst float"
+
+
+def test_the_trade_lock_is_dead_time_in_the_middle_of_every_trade():
+    """A bought item cannot be traded on: CS2 holds it for a week. Nothing in
+    the order book or the sales history shows that, so left out it was the
+    single largest overstatement in the model - on one AK band, 118%/month
+    against a real 21%."""
+    from src.pricing import Params, plan
+
+    rows = [(100.0, 0.16, float(i % 14)) for i in range(40)]
+    rows += [(80.0, 0.16, float(i % 14)) for i in range(20)]
+    orders = [{"price": 79.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    sales = _sales(rows)
+
+    free = plan(sales, orders, (0.15, 0.17),
+                params=Params(min_sample=5, trade_lock_days=0.0))[0]
+    locked = plan(sales, orders, (0.15, 0.17),
+                  params=Params(min_sample=5, trade_lock_days=7.0))[0]
+
+    assert free.take and locked.take
+    assert locked.cycle == pytest.approx(free.cycle + 7.0)
+    assert locked.monthly < free.monthly / 2, \
+        "a week of dead time is not a rounding error"
+
+
+def test_a_lock_that_may_be_listed_through_runs_alongside_the_wait():
+    """Whether the lock stacks on the wait for a buyer or overlaps it is a
+    fact about the marketplace, not about the trade, so it is told rather
+    than guessed."""
+    from src.pricing import Params, plan
+
+    rows = [(100.0, 0.16, float(i % 14)) for i in range(40)]
+    rows += [(80.0, 0.16, float(i % 14)) for i in range(20)]
+    orders = [{"price": 79.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    sales = _sales(rows)
+
+    stacked = plan(sales, orders, (0.15, 0.17),
+                   params=Params(min_sample=5, trade_lock_days=7.0))[0]
+    overlapped = plan(sales, orders, (0.15, 0.17),
+                      params=Params(min_sample=5, trade_lock_days=7.0,
+                                    list_during_lock=True))[0]
+    assert overlapped.cycle < stacked.cycle
+    assert overlapped.cycle == pytest.approx(
+        stacked.cycle - min(stacked.t_sell, 7.0))

@@ -1273,6 +1273,14 @@ def api_analysis_params():
             if not lo <= value <= hi:
                 rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
             db.set_setting(key, str(cast(min(max(value, lo), hi))))
+    # A flag rather than a number, so it is not in the loops above: put
+    # through them, "0" would come back through float() as a stored value that
+    # reads as true. A setting the page shows and never saves is the failure
+    # this whole endpoint has had twice.
+    if "an_list_locked" in data:
+        db.set_setting("an_list_locked",
+                       "1" if str(data["an_list_locked"]).strip() in
+                       ("1", "true", "True", "on") else "0")
     return jsonify({"params": _analysis_params(db).__dict__,
                     "limits": _analysis_limits(db).as_dict(),
                     "screen": _analysis_screen(db).as_dict(),

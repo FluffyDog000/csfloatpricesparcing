@@ -458,3 +458,16 @@ def test_the_surcharge_says_what_the_cheap_price_would_have_earned():
     assert "cheapWhy" in row
     assert "по ней сделок нет" in row, "the case where the minimum fills nothing"
     assert "%/мес`" in row
+
+
+def test_the_table_shows_the_whole_cycle_not_just_the_fill():
+    """"Набор 1.3 д" reads as the whole trade, and it is not: a week of trade
+    lock sits between buying and selling, and the return is figured over the
+    lot."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.cycle" in row
+    header = source.split("<th>float</th>")[1][:600]
+    assert "круг" in header
+    # A row that skips spans the table; a new column means a new span.
+    assert 'colspan="10"' in row, "the skipped-band row must span every column"

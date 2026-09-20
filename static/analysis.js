@@ -263,7 +263,7 @@
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="10" class="muted">${b.reason}</td>`;
       return tr;
     }
     tr.className = "band-take";
@@ -297,6 +297,8 @@
       <td>${pct(b.margin)}</td>
       <td>${b.lam.toFixed(2)}</td>
       <td>${days(b.t_buy)}</td>
+      <td title="набор ${days(b.t_buy)} + бан + продажа ${days(b.t_sell)}"
+        >${days(b.cycle)}</td>
       <td><b>${(b.monthly * 100).toFixed(0)}%</b></td>`;
     return tr;
   }
@@ -456,7 +458,9 @@
         <th>float</th>
         <th title="минимальная цена, которая ставит нас первыми в полосе">минимум</th>
         <th>ставить</th><th>потолок</th><th>запас</th>
-        <th>рынок</th><th>маржа</th><th>λ/сут</th><th>набор</th><th>%/мес</th>
+        <th>рынок</th><th>маржа</th><th>λ/сут</th><th>набор</th>
+        <th title="весь круг: набор + торговый бан + продажа">круг</th>
+        <th>%/мес</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
       it.bands.forEach((b) => tb.appendChild(bandRow(b)));
@@ -806,6 +810,8 @@
     $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
     $("p-reach").value = p.max_reach;
+    $("p-lock").value = p.trade_lock_days;
+    $("p-locklist").checked = !!p.list_during_lock;
     $("p-bidtol").value = Math.round(p.bid_tolerance * 100);
     $("p-sigma").value = p.sigma_k;
   }
@@ -1027,6 +1033,8 @@
         an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
         an_reach: $("p-reach").value,
+        an_trade_lock: $("p-lock").value,
+        an_list_locked: $("p-locklist").checked ? "1" : "0",
         an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
       an_sigma_k: $("p-sigma").value,
       an_total_capital: $("l-total").value,

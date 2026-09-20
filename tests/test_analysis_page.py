@@ -777,3 +777,28 @@ def test_every_settings_group_is_actually_saved():
     missing = [k for k in sent if db.get_setting(k) in (None, "")]
     db.close()
     assert missing == [], f"accepted and dropped: {missing}"
+
+
+def test_the_trade_lock_settings_survive_a_save():
+    """The lock is the largest single correction in the model, and one of its
+    two settings is a flag - which is exactly the shape that gets shown,
+    accepted and never stored."""
+    c = _app()
+    r = c.post("/api/analysis/params",
+               json={"an_trade_lock": "7", "an_list_locked": "1"})
+    assert r.status_code == 200
+    body = r.get_json()["params"]
+    assert body["trade_lock_days"] == 7.0
+    assert body["list_during_lock"] is True
+
+    back = c.get("/api/analysis").get_json()["params"]
+    assert back["trade_lock_days"] == 7.0 and back["list_during_lock"] is True
+
+    off = c.post("/api/analysis/params", json={"an_list_locked": "0"})
+    assert off.get_json()["params"]["list_during_lock"] is False
+
+
+def test_the_lock_defaults_to_a_week_rather_than_to_nothing():
+    """Zero is the value that flatters every band, so it is not the default."""
+    c = _app()
+    assert c.get("/api/analysis").get_json()["params"]["trade_lock_days"] == 7.0
