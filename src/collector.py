@@ -576,7 +576,7 @@ class Collector:
                  " (вхолостую)" if dry else "")
         return summary
 
-    def sync_our_orders(self) -> dict:
+    def sync_our_orders(self, discover: bool = False) -> dict:
         """Read the account's buy orders and make our record agree with it.
 
         our_orders is the bot's own bookkeeping, and bookkeeping is not truth:
@@ -597,27 +597,34 @@ class Collector:
         result: dict[str, Any] = {"at": utcnow_iso(), "error": "",
                                   "changes": [], "counts": {}, "seen": 0}
         spec = load(self.db.get_setting(PLACEMENT_KEY))
-        if not spec.list_path:
+        if not spec.list_path and not discover:
             result["error"] = ("не настроен запрос списка ордеров — нужен путь "
                                "вроде /api/v1/buy-orders")
             self.db.set_setting("orders_sync_result",
                                 _json.dumps(result, ensure_ascii=False))
             return result
 
-        url = self.config.http.base_url.rstrip("/") + spec.list_path
         self.client.pool.pin(for_orders=True)
         try:
-            payload = self.client.fetch_json(url)
-        except Exception as exc:  # noqa: BLE001 - reported, never raised on
-            result["error"] = f"{type(exc).__name__}: {exc}"
-            log.warning("Could not read our buy orders: %s", exc)
-            self.db.set_setting("orders_sync_result",
-                                _json.dumps(result, ensure_ascii=False))
-            return result
+            theirs, error, found = self._read_their_orders(spec, discover)
         finally:
             self.client.pool.unpin()
 
-        theirs = parse_order_list(payload)
+        if theirs is None:
+            result["error"] = error
+            result["tried"] = found
+            self.db.set_setting("orders_sync_result",
+                                _json.dumps(result, ensure_ascii=False))
+            return result
+
+        if found and found != spec.list_path:
+            # Worth keeping: it was found by asking, and asking costs requests.
+            spec.list_path = found
+            self.db.set_setting(PLACEMENT_KEY,
+                                _json.dumps(spec.as_dict(), ensure_ascii=False))
+            result["found_path"] = found
+            log.info("Buy orders are listed at %s", found)
+
         result["seen"] = len(theirs)
 
         ours = []
@@ -672,6 +679,49 @@ class Collector:
         if result["changes"]:
             log.info("Order sync: %s", result["counts"])
         return result
+
+    def _read_their_orders(self, spec, discover: bool):
+        """Fetch the account's buy orders. Returns (orders, error, path).
+
+        A path that answers with no orders in it is not proof of anything: it
+        is equally what a wrong path returns, and an empty list is exactly the
+        reply that would mark every held order gone. So a candidate counts as
+        found only when orders come back, and a configured path is trusted on
+        its own - by then someone has looked at it.
+        """
+        from .placement import LIST_CANDIDATES, parse_order_list
+
+        base = self.config.http.base_url.rstrip("/")
+        tried: list[str] = []
+
+        if spec.list_path:
+            try:
+                payload = self.client.fetch_json(base + spec.list_path)
+                return parse_order_list(payload), "", spec.list_path
+            except Exception as exc:  # noqa: BLE001
+                detail = f"{type(exc).__name__}: {exc}"
+                tried.append(f"{spec.list_path} — {detail}")
+                log.warning("Could not read our buy orders: %s", exc)
+                if not discover:
+                    return None, detail, tried
+
+        for path in LIST_CANDIDATES:
+            if path == spec.list_path:
+                continue
+            try:
+                payload = self.client.fetch_json(base + path)
+            except Exception as exc:  # noqa: BLE001 - a 404 here is an answer
+                tried.append(f"{path} — {type(exc).__name__}: {exc}")
+                continue
+            orders = parse_order_list(payload)
+            if orders:
+                return orders, "", path
+            tried.append(f"{path} — ответил, но ордеров в ответе нет")
+
+        return None, ("не нашёл, где CSFloat отдаёт список ордеров. "
+                      "Открой на сайте страницу своих ордеров, в DevTools → "
+                      "Network найди GET-запрос, который их возвращает, и "
+                      "впиши его путь в «путь списка»"), tried
 
     def _note_holding(self, change, kind: str) -> None:
         """One journal line per difference the account turned out to have."""

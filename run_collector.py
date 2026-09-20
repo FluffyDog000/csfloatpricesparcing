@@ -183,7 +183,10 @@ def run_forever(collector: Collector) -> None:
             if collector.db.get_setting("orders_sync_requested") == "1":
                 collector.db.set_setting("orders_sync_requested", "0")
                 try:
-                    collector.sync_our_orders()
+                    # Asked for by hand, so it may go looking for the listing
+                    # endpoint; the pass before each defence may not, because
+                    # that one runs unattended and every probe is a request.
+                    collector.sync_our_orders(discover=True)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Order sync failed: %s", exc)
 

@@ -173,3 +173,97 @@ def test_a_failed_request_never_empties_our_record():
     assert len(db.our_orders()) == 1
     assert db.order_events() == []
     db.close()
+
+
+def test_the_listing_endpoint_is_looked_for_when_the_configured_one_refuses():
+    """GET /api/v1/buy-orders answers 405: the path exists, but it is where
+    orders are created, not where they are listed. A GET spends nothing but a
+    request, so the likely paths are tried rather than the feature stopping."""
+    import requests
+
+    from src.placement import PLACEMENT_KEY, load
+
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 160.0, state="live",
+                        remote_id="r1")
+
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        if url.endswith("/api/v1/buy-orders"):
+            raise requests.HTTPError("HTTP 405 для " + url)
+        if "/me/buy-orders?page=0" in url:
+            return {"data": [_site_order("r1")]}
+        raise requests.HTTPError("HTTP 404 для " + url)
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders(discover=True)
+
+    assert out["error"] == ""
+    assert out["found_path"] == "/api/v1/me/buy-orders?page=0&limit=100"
+    assert out["counts"]["matched"] == 1
+    # Found by asking, and asking costs requests, so it is kept.
+    assert load(db.get_setting(PLACEMENT_KEY)).list_path == out["found_path"]
+    db.close()
+
+
+def test_a_path_that_answers_with_nothing_is_not_taken_for_the_right_one():
+    """The dangerous find. An empty list is what a wrong path returns and also
+    exactly the reply that marks every held order gone."""
+    import requests
+
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 160.0, state="live",
+                        remote_id="r1")
+
+    def answer(url, headers=None):
+        if url.endswith("/api/v1/buy-orders"):
+            raise requests.HTTPError("HTTP 405")
+        return {"data": []}        # every candidate answers, none with orders
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders(discover=True)
+
+    assert "не нашёл" in out["error"]
+    assert len(db.our_orders()) == 1, "nothing was declared gone"
+    assert any("ордеров в ответе нет" in t for t in out["tried"])
+    db.close()
+
+
+def test_the_unattended_pass_does_not_go_probing():
+    """The pass before each defence runs with nobody watching, and every
+    candidate is a request against the same account."""
+    import requests
+
+    col, db = _collector()
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        raise requests.HTTPError("HTTP 405")
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders()           # discover defaults to off
+
+    assert len(asked) == 1, asked
+    assert "405" in out["error"]
+    db.close()
+
+
+def test_a_configured_path_that_works_is_not_second_guessed():
+    col, db = _collector(list_path="/api/v1/me/buy-orders")
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        return []
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders(discover=True)
+
+    assert asked == ["https://csfloat.com/api/v1/me/buy-orders"]
+    assert out["error"] == "" and out["seen"] == 0
+    db.close()

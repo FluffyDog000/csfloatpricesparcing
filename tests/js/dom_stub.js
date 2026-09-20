@@ -77,6 +77,15 @@ const source = fs.readFileSync("static/common.js", "utf8") + "\n"
   + fs.readFileSync(process.argv[2], "utf8");
 vm.runInThisContext(source, { filename: "page.js" });
 
+// In a browser textContent is the text of a node AND everything under it.
+// The stub keeps them apart, so reading one property missed anything a script
+// appended as a child - a list of what a failed request tried, for instance.
+function deepText(node) {
+  if (!node) return "";
+  return (node.textContent || "")
+    + (node.children || []).map(deepText).join(" ");
+}
+
 (async () => {
   if (doc._ready) await doc._ready();
   await new Promise((r) => setTimeout(r, 50));
@@ -94,8 +103,8 @@ vm.runInThisContext(source, { filename: "page.js" });
     kind: note.className,
     journalRows: tableOf("j-table"),
     tiles: (nodes["j-summary"] || el("div")).children.length,
-    defence: (nodes["j-state"] || el("div")).textContent,
-    sync: (nodes["j-sync-state"] || el("div")).textContent,
+    defence: deepText(nodes["j-state"]),
+    sync: deepText(nodes["j-sync-state"]),
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,

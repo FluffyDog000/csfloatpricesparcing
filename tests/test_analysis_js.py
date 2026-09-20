@@ -371,3 +371,33 @@ def test_an_unverified_holding_count_is_flagged_without_blocking_placement():
     assert "сверялись" in result["planSync"]
     assert "сверялись" not in result.get("status", ""), \
         "a warning is not a blocker"
+
+
+def test_a_failed_search_lists_what_was_asked():
+    """Without the attempts, the next step is guessing at the same paths by
+    hand."""
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 1, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
+        "sync": {"seen": 0, "counts": {},
+                 "error": "не нашёл, где CSFloat отдаёт список ордеров",
+                 "tried": ["/api/v1/buy-orders — HTTPError: HTTP 405",
+                           "/api/v1/me/buy-orders — HTTPError: HTTP 404"]},
+    })
+    assert "не нашёл" in got["sync"]
+    assert "405" in got["sync"] and "404" in got["sync"]
+
+
+def test_a_found_listing_path_is_reported():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 1, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
+        "sync": {"seen": 1, "error": "",
+                 "found_path": "/api/v1/me/buy-orders",
+                 "counts": {"matched": 1, "gone": 0, "filled": 0,
+                            "repriced": 0, "adopted": 0}},
+    })
+    assert "нашёлся" in got["sync"] and "/api/v1/me/buy-orders" in got["sync"]
+    assert "1 совпало" in got["sync"]

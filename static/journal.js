@@ -130,6 +130,8 @@
   function syncState(d) {
     const el = $("j-sync-state");
     if (!el) return;
+    // Cleared rather than appended to: this runs again every minute.
+    el.textContent = "";
     el.className = "muted";
     if (d.sync_pending) {
       el.textContent = "Сверка поставлена в очередь, жду сборщик…";
@@ -145,7 +147,23 @@
     if (s.error) {
       el.className = "err";
       el.textContent = "Сверка не удалась: " + s.error;
+      // What was asked and what came back: without it the next step is
+      // guessing at the same paths by hand.
+      if (s.tried && s.tried.length) {
+        const list = document.createElement("ul");
+        list.className = "muted";
+        s.tried.forEach((line) => {
+          const li = document.createElement("li");
+          li.textContent = line;
+          list.appendChild(li);
+        });
+        el.appendChild(list);
+      }
       return;
+    }
+    if (s.found_path) {
+      el.className = "ok";
+      el.textContent = `Список ордеров нашёлся: ${s.found_path} — сохранил. `;
     }
     const c = s.counts || {};
     const bits = [];
@@ -154,7 +172,8 @@
     if (c.filled) bits.push(`${c.filled} исполнено`);
     if (c.repriced) bits.push(`${c.repriced} с другой ценой`);
     if (c.adopted) bits.push(`${c.adopted} не наших`);
-    el.textContent = `Сверено ${when(d.sync_at)}: на аккаунте ${s.seen} `
+    el.textContent = (el.textContent || "")
+      + `Сверено ${when(d.sync_at)}: на аккаунте ${s.seen} `
       + `ордер(ов)` + (bits.length ? " — " + bits.join(", ") : "") + ".";
     if (c.gone || c.adopted) el.className = "err";
   }

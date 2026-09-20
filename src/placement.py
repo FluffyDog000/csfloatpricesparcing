@@ -115,6 +115,22 @@ SUGGESTED = Spec(
 CONFIRMED = {"create_path", "create_method", "update_path", "update_method",
              "cancel_path", "cancel_method"}
 
+# GET /api/v1/buy-orders answers 405: the path exists, but it is where orders
+# are created, not where they are listed. The listing is somewhere else, and
+# since a GET spends nothing but a request, these are tried in order until one
+# of them answers with buy orders in it.
+#
+# "Answers" has to mean orders, not 200. A wrong path returning an empty list
+# would be taken for the right one, and an empty list is exactly the reply that
+# marks every held order gone.
+LIST_CANDIDATES = (
+    "/api/v1/me/buy-orders?page=0&limit=100",
+    "/api/v1/me/buy-orders",
+    "/api/v1/users/me/buy-orders",
+    "/api/v1/me/orders",
+    "/api/v1/buy-orders/me",
+)
+
 
 def endpoint(path: str, order_id: str | None = None) -> str:
     """Fill {order_id} in a configured path."""
