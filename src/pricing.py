@@ -203,38 +203,54 @@ def _bands(span: tuple[float, float], step: float,
 
 
 def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
-                  want: int) -> tuple[float | None, float, float, int]:
-    """What the band is worth, borrowing from the sales nearest to it.
+                  want: int, at: float | None = None
+                  ) -> tuple[float | None, float, float, int]:
+    """What a band's lot is worth, priced off a line fitted through its sales.
 
-    A band's own sales are usually too few to place it - eight in a 0.02 slice
-    of a wear is a lot to ask - and that is the single commonest reason a band
-    is dropped. But price moves with float *smoothly*: the sales just outside
-    a band say a great deal about the ones inside it, and throwing them away
-    to honour a band edge we invented is throwing away most of the evidence.
+    Two problems, one answer.
 
-    So the window widens from the band's centre until it holds `want` sales,
-    and the price is read off a line fitted through them rather than off their
-    median: a widened window is lopsided when the band sits near the end of a
-    wear, and its median would then be the price of the wrong float.
+    A band's own sales are often too few to place it - eight in a 0.02 slice
+    of a wear is a lot to ask - and that was the commonest reason a band was
+    dropped. Price moves with float smoothly, so the sales just outside say a
+    great deal about the ones inside, and the window widens past the band's
+    edges until it holds `want` of them.
+
+    And a band is not one price. An order filters on a float range, and the
+    sellers who take it are the ones your bid suits - the cheap end of the
+    range, which for float means the high end. You are systematically handed
+    the worst lot the filter allows, so the band's median is the price of an
+    item you will not receive. That is what `at` is for: price the band where
+    it will actually be filled, which is its high-float edge, and the bias
+    disappears without anyone having to guess at its size. On an item whose
+    price ignores float the slope is flat and nothing changes; on one where
+    float drives the price the correction is exactly as large as the slope.
 
     The slope is a Theil-Sen estimate - the median of the pairwise slopes -
     which ignores a freak sale instead of being dragged by it. Returns the
-    price, the relative width of the window it needed, and how many sales it
-    used; a wide window is a weaker answer and the caller is told so.
+    price, how far the window reached, and how many sales it used; a wide
+    window is a weaker answer and the caller is told so.
     """
     rows = [(float(s["float_value"]), float(s["price"])) for s in sales
             if s.get("float_value") is not None and s.get("price")]
     if len(rows) < 2:
-        return None, 1.0, len(rows)
+        return None, 1.0, 1.0, len(rows)
 
     centre = (lo + hi) / 2.0
+    at = hi if at is None else at
     rows.sort(key=lambda r: abs(r[0] - centre))
-    near = rows[:max(want, 2)]
+
+    # Everything inside the band, and only then outward until there is enough.
+    # Taking the `want` nearest outright would throw away a well-stocked
+    # band's own evidence to honour a count.
+    radius = max((hi - lo) / 2.0,
+                 abs(rows[min(want, len(rows)) - 1][0] - centre))
+    near = [r for r in rows if abs(r[0] - centre) <= radius + 1e-12]
     reach = max(abs(f - centre) for f, _ in near)
 
     # Pairwise slopes, capped: at n=40 that is 780 pairs, and the estimate is
-    # not improved by more.
-    use = near[:40]
+    # not improved by more. Spread across the window rather than taken from
+    # its middle, so the slope is measured over the whole span.
+    use = near if len(near) <= 40 else near[::max(1, len(near) // 40)][:40]
     slopes = [(p2 - p1) / (f2 - f1)
               for i, (f1, p1) in enumerate(use)
               for f2, p2 in use[i + 1:]
@@ -242,7 +258,7 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
     slope = st.median(slopes) if slopes else 0.0
     # Robust intercept: the median of price - slope*float over the window.
     level = st.median([p - slope * f for f, p in near])
-    price = level + slope * centre
+    price = level + slope * at
 
     floor = min(p for _, p in near) * 0.5
     cap = max(p for _, p in near) * 2.0
@@ -310,23 +326,22 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
                 if s.get("float_value") is not None and lo <= s["float_value"] < hi]
         row = Band(float_min=lo, float_max=hi, sample=len(band))
 
+        # One path for both cases. The band's own sales are used when it has
+        # them and the window widens past its edges when it does not, and
+        # either way the price is read off the fitted line at the band's
+        # high-float edge rather than off a median in its middle: an order
+        # filters on a range, and the sellers who take it hand over the worst
+        # lot the filter allows.
+        history, error, reach, used = neighbourhood(sales, lo, hi, p.min_sample)
+        if history is None:
+            row.reason = f"мало данных: {len(band)} продаж, занять не у кого"
+            out.append(row)
+            continue
         if len(band) >= p.min_sample:
-            history, source = st.median(band), "история"
-            error = _median_error(band)
+            source = "история"
         else:
-            # Not enough of its own. Price moves with float smoothly, so the
-            # sales either side of the band say a great deal about the ones
-            # inside it - dropping the band to honour an edge we invented
-            # throws away most of the evidence, and it is the commonest reason
-            # a band is dropped at all.
-            history, error, reach, used = neighbourhood(
-                sales, lo, hi, p.min_sample)
             row.borrowed = used
             row.reach = reach
-            if history is None:
-                row.reason = f"мало данных: {len(band)} продаж, занять не у кого"
-                out.append(row)
-                continue
             if p.max_reach and reach > p.max_reach:
                 row.reason = (f"мало данных: {len(band)} продаж, ближайшие "
                               f"{used} — за {reach:.3f} по float")

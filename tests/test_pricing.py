@@ -281,8 +281,9 @@ def test_a_thin_band_borrows_from_its_neighbours_instead_of_being_dropped():
     assert got.sample < 8, "it really does not have its own"
     assert got.borrowed >= 8 and got.reach is not None
     assert got.priced_from == "соседи"
-    # 0.31 on a line from 200 at 0.15: 200 - 0.31*333.3 ≈ 96.7
-    assert got.market == pytest.approx(200.0 - 0.31 * 333.3, rel=0.02)
+    # Priced at 0.32, the band's high-float edge, not at its middle: that is
+    # the lot the filter will actually be handed.
+    assert got.market == pytest.approx(200.0 - 0.32 * 333.3, rel=0.02)
 
 
 def test_borrowing_stops_where_the_neighbours_stop_being_the_same_thing():
@@ -348,3 +349,45 @@ def test_reaching_further_still_costs_more():
               for i in range(16)]
     assert neighbourhood(sparse, 0.30, 0.32, 12)[1] > \
         neighbourhood(dense, 0.30, 0.32, 12)[1]
+
+
+def test_a_band_is_priced_at_the_lot_it_will_actually_be_handed():
+    """An order filters on a float range, and the sellers who take it are the
+    ones your bid suits - the cheap end of the range, which for float means
+    the high end. Pricing the band at its median is pricing an item you will
+    not receive, and on a float-sensitive skin that gap is the whole margin."""
+    from src.pricing import Params, evaluate
+
+    # 0.15 -> $200, 0.38 -> $100: float drives the price hard, as on gloves.
+    sales = [{"price": 200.0 - (f := 0.15 + i * 0.0023) * 434.8 + 65.2,
+              "float_value": f, "age_days": i % 14} for i in range(100)]
+    got = evaluate(0.20, 0.24, sales, [], (0.15, 0.38), (), Params())
+
+    centre = 200.0 - (0.22 * 434.8 - 65.2)
+    edge = 200.0 - (0.24 * 434.8 - 65.2)
+    assert got.market == pytest.approx(edge, rel=0.03)
+    assert got.market < centre * 0.98, "the middle would have flattered it"
+
+
+def test_a_skin_whose_price_ignores_float_is_not_penalised_for_it():
+    """The correction is exactly as large as the slope. Flat prices, no
+    slope, nothing to correct - so the fix costs nothing where it is not
+    needed, and no threshold has to be guessed at."""
+    from src.pricing import Params, evaluate
+
+    sales = [{"price": 100.0 + (i % 5), "float_value": 0.15 + (i % 23) * 0.01,
+              "age_days": i % 14} for i in range(200)]
+    got = evaluate(0.20, 0.24, sales, [], (0.15, 0.38), (), Params())
+    assert got.market == pytest.approx(102.0, rel=0.03)
+
+
+def test_a_wide_band_is_priced_lower_than_a_narrow_one_inside_it():
+    """Which is the real cost of a wide band: one price for a range means the
+    price of the worst thing in the range."""
+    from src.pricing import Params, evaluate
+
+    sales = [{"price": 200.0 - (f := 0.15 + i * 0.0023) * 434.8 + 65.2,
+              "float_value": f, "age_days": i % 14} for i in range(100)]
+    wide = evaluate(0.20, 0.28, sales, [], (0.15, 0.38), (), Params())
+    narrow = evaluate(0.20, 0.22, sales, [], (0.15, 0.38), (), Params())
+    assert wide.market < narrow.market
