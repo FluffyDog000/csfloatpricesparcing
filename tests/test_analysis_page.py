@@ -643,3 +643,74 @@ def test_the_journal_never_confuses_a_rehearsal_with_a_placement():
     db.close()
     ev = c.get("/api/analysis/journal").get_json()["events"][0]
     assert ev["dry"] is True and ev["ok"] is True
+
+
+def _many_items(names, sales_per_item=60):
+    """Items with enough history for the scorer to have an opinion."""
+    import datetime as dt
+
+    c = _app(names)
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    now = dt.datetime.now(dt.timezone.utc)
+    for idx, name in enumerate(names):
+        item_id = db.get_item_id(name)
+        rows = []
+        base = 100.0 + idx * 50    # later items are worth more
+        for i in range(sales_per_item):
+            # Spread around the base, so a bid under the median still catches
+            # some of the flow - otherwise every band fails on "no flow" and
+            # the test passes without ever ranking anything.
+            price = round(base * (0.80 + (i % 10) / 25.0), 2)
+            rows.append((f"{idx}-{i}", item_id, name, int(price * 100), price,
+                         0.36, (now - dt.timedelta(days=i % 14)).isoformat()))
+        # Not OR IGNORE: scraped_at is NOT NULL with no default, and a silent
+        # skip here leaves every band reading "мало данных" while the test
+        # passes for the wrong reason.
+        db.conn.executemany(
+            "INSERT INTO sales (sale_id, item_id, market_hash_name, "
+            "price_cents, price, float_value, sold_at, sold_at_estimated, "
+            "scraped_at) VALUES (?,?,?,?,?,?,?,0,?)",
+            [r + (r[-1],) for r in rows])
+        # The competition thins out down the list, so later items really are
+        # the better trade rather than merely the later one. Without this the
+        # returns tie and "the best won" proves only the sort order.
+        db.replace_buy_orders(item_id, [
+            {"price": round(base * (0.86 - idx * 0.07), 2), "qty": 1,
+             "float_min": 0.35, "float_max": 0.38}])
+        db.conn.commit()
+        c.post("/api/analysis/items", json={"market_hash_name": name})
+    db.close()
+    return c
+
+
+def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
+    """With three items nobody notices. With three hundred it decides
+    everything: at twenty orders and three per item the first seven names take
+    the lot, and the other two hundred and ninety-three are scored for nothing.
+
+    The helper makes the competition thin out down the list, so the first item
+    is always the worst trade. One slot, three items: under the old per-item
+    loop the first one took it every time, whatever it was worth.
+    """
+    names = ["A Cheap | One (Field-Tested)",
+             "B Middling | Two (Field-Tested)",
+             "C Rich | Three (Field-Tested)"]
+    for order in (names, list(reversed(names))):
+        c = _many_items(order)
+        assert c.post("/api/analysis/params",
+                      json={"an_total_capital": "2000", "an_max_orders": "1",
+                            "an_max_per_item": "1"}).status_code == 200
+
+        scored = c.get("/api/analysis").get_json()["items"]
+        best = {i["item"]: max([b["monthly"] for b in i["bands"] if b["take"]]
+                               or [0.0]) for i in scored}
+        assert len(set(best.values())) > 1, "the items must differ to rank them"
+
+        places = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
+                  if a["kind"] == "place"]
+        assert len(places) == 1, places
+        won = places[0]["item"]
+        assert best[won] == max(best.values()), \
+            f"{won} won on {best[won]:.3f} while {max(best.values()):.3f} existed"
+        assert won != order[0], "and not by being first in the list"

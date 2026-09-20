@@ -60,6 +60,11 @@ KEEP = "keep"
 LEVERAGE = 10.0
 MAX_ORDERS_CSFLOAT = 1000
 
+# How far down from a band's estimated return to rank it. One standard error
+# is deliberately mild: this orders candidates, it does not decide whether to
+# take them - the thresholds do that.
+RANK_Z = 1.0
+
 
 @dataclass
 class Limits:
@@ -130,6 +135,24 @@ def _key(row: Any) -> tuple[float, float]:
     return (round(float(row["float_min"]), 4), round(float(row["float_max"]), 4))
 
 
+def rank(band: Band) -> float:
+    """What a band is worth, for choosing between them.
+
+    The lower end of the return rather than the estimate itself. Scoring three
+    hundred items means testing thousands of bands, and the ones that come out
+    on top are disproportionately the ones a small sample flattered: pick by
+    the point estimate and the winners are selected for luck as much as for
+    margin. A band whose median is well pinned down keeps most of its number;
+    one resting on eight sales gives most of it back.
+    """
+    if band.monthly is None:
+        return -1.0
+    # The return moves with the exit price, so the median's relative error
+    # carries straight through to it.
+    error = band.market_error if band.market_error is not None else 1.0
+    return band.monthly * max(0.0, 1.0 - RANK_Z * error)
+
+
 def select(bands: Sequence[Band], limits: Limits,
            spent: float = 0.0, placed: int = 0) -> list[Band]:
     """The bands worth holding for one item, best first, within its caps."""
@@ -149,6 +172,65 @@ def select(bands: Sequence[Band], limits: Limits,
             continue
         chosen.append(band)
         used += band.bid
+    return chosen
+
+
+def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
+                     held: Sequence[tuple[str, float, float]] = ()
+                     ) -> dict[str, list[Band]]:
+    """Which bands to hold, chosen across every item at once.
+
+    The per-item version spent the budget in the order items happened to be
+    listed. With three items nobody notices; with three hundred it decides the
+    whole result - at twenty orders and three per item, the first seven names
+    on the list take everything and the other two hundred and ninety-three are
+    scored for nothing. A band returning 40%/month loses to one returning 4%
+    because it was typed in later.
+
+    Bands we already hold are seeded first, before anything is ranked. Dropping
+    a standing order because a marginally better one turned up somewhere else
+    costs a cancel, a replacement, and the queue position that came with it -
+    and the replacement may not fill at all. Churn is a real expense, and
+    "slightly better on paper" does not cover it.
+    """
+    chosen: dict[str, list[Band]] = {}
+    spent = 0.0
+    per_item_spent: dict[str, float] = {}
+    placed = 0
+    budget = limits.budget
+    item_cap = limits.per_item_capital or budget
+
+    def room_for(item: str, band: Band) -> bool:
+        if band.bid is None:
+            return False
+        if placed >= limits.max_orders:
+            return False
+        if len(chosen.get(item, ())) >= limits.max_orders_per_item:
+            return False
+        if spent + band.bid > budget + 1e-9:
+            return False
+        return per_item_spent.get(item, 0.0) + band.bid <= item_cap + 1e-9
+
+    def take(item: str, band: Band) -> None:
+        nonlocal spent, placed
+        chosen.setdefault(item, []).append(band)
+        spent += band.bid
+        per_item_spent[item] = per_item_spent.get(item, 0.0) + band.bid
+        placed += 1
+
+    holding = {(name, round(lo, 4), round(hi, 4)) for name, lo, hi in held}
+    ranked = sorted((c for c in candidates if c[1].take),
+                    key=lambda c: -rank(c[1]))
+
+    for item, band in ranked:
+        if (item, round(band.float_min, 4), round(band.float_max, 4)) in holding \
+                and room_for(item, band):
+            take(item, band)
+    for item, band in ranked:
+        if band in chosen.get(item, ()):
+            continue
+        if room_for(item, band):
+            take(item, band)
     return chosen
 
 

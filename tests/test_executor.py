@@ -174,3 +174,80 @@ def test_selection_spends_the_allowed_budget_not_the_asked_one():
                                max_orders=10, max_orders_per_item=10))
     assert sum(b.bid for b in got) <= 300.0
     assert len(got) == 3
+
+
+def _cand(item, lo, bid, monthly, error=0.0):
+    return (item, Band(float_min=lo, float_max=lo + 0.02, bid=bid,
+                       ceiling=bid * 1.2, step=0.10, monthly=monthly,
+                       market_error=error, take=True))
+
+
+def test_the_budget_goes_to_the_best_bands_not_the_first_item_listed():
+    """The bug three hundred items exposes. At twenty orders and three per
+    item, the first seven names took everything and the rest were scored for
+    nothing - a band returning 40%/month losing to one returning 4% because it
+    was typed in earlier."""
+    from src.executor import select_portfolio
+
+    poor = [_cand("A", 0.10 + i / 100, 100.0, 0.04) for i in range(3)]
+    rich = [_cand("Z", 0.10 + i / 100, 100.0, 0.40) for i in range(3)]
+    limits = Limits(total_capital=300.0, max_orders=3, max_orders_per_item=3)
+
+    got = select_portfolio(poor + rich, limits)
+    assert list(got) == ["Z"], "the better item wins whatever order it arrived in"
+    assert len(got["Z"]) == 3
+
+
+def test_the_per_item_cap_still_holds_across_the_whole_portfolio():
+    from src.executor import select_portfolio
+
+    one = [_cand("A", 0.10 + i / 100, 100.0, 0.40 - i / 100) for i in range(5)]
+    two = [_cand("B", 0.10 + i / 100, 100.0, 0.30 - i / 100) for i in range(5)]
+    got = select_portfolio(one + two, Limits(total_capital=10000.0,
+                                             max_orders=8,
+                                             max_orders_per_item=2))
+    assert len(got["A"]) == 2 and len(got["B"]) == 2, \
+        "concentration is a cap, not something the ranking may override"
+
+
+def test_a_standing_order_is_not_dropped_for_a_marginally_better_one():
+    """Churn is a real expense: a cancel, a replacement, and the queue
+    position that came with it - and the replacement may not fill."""
+    from src.executor import select_portfolio
+
+    mine = _cand("A", 0.10, 100.0, 0.20)
+    better = _cand("B", 0.10, 100.0, 0.22)
+    limits = Limits(total_capital=100.0, max_orders=1, max_orders_per_item=1)
+
+    without = select_portfolio([mine, better], limits)
+    assert list(without) == ["B"], "with nothing held, the better one wins"
+
+    with_held = select_portfolio([mine, better], limits,
+                                 held=[("A", 0.10, 0.12)])
+    assert list(with_held) == ["A"], "holding it is worth more than 2%"
+
+
+def test_a_band_that_stopped_qualifying_is_not_kept_just_because_it_is_held():
+    from src.executor import select_portfolio
+
+    dead = ("A", Band(float_min=0.10, float_max=0.12, bid=100.0, take=False,
+                      reason="полоса больше не проходит"))
+    got = select_portfolio([dead], Limits(total_capital=1000.0),
+                           held=[("A", 0.10, 0.12)])
+    assert got == {}, "seeding the held is not a reason to hold a bad band"
+
+
+def test_ranking_discounts_a_return_resting_on_a_shaky_median():
+    """Testing thousands of bands means the top of the list is selected for
+    luck as much as for margin."""
+    from src.executor import rank, select_portfolio
+
+    solid = _cand("solid", 0.10, 100.0, 0.20, error=0.02)
+    shaky = _cand("shaky", 0.10, 100.0, 0.30, error=0.50)
+    assert rank(solid[1]) > rank(shaky[1]), \
+        "30% give or take half of it is worth less than a measured 20%"
+
+    got = select_portfolio([shaky, solid],
+                           Limits(total_capital=100.0, max_orders=1,
+                                  max_orders_per_item=1))
+    assert list(got) == ["solid"]

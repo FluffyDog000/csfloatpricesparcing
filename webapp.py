@@ -920,7 +920,7 @@ def api_analysis_plan():
     documented and has to be captured from the browser, so until it is
     supplied this is the whole of the feature - and even once it is, the plan
     is produced first and acted on separately."""
-    from src.executor import exposure, reconcile, select
+    from src.executor import exposure, reconcile, select_portfolio
     from src.orders import wear_range
     from src.placement import PLACEMENT_KEY, describe, load
     from src.pricing import plan as plan_bands
@@ -930,10 +930,14 @@ def api_analysis_plan():
     limits = _analysis_limits(db)
     spec = load(db.get_setting(PLACEMENT_KEY))
 
+    # Everything is scored first and chosen afterwards. Choosing item by item
+    # spent the budget in the order the list happened to be typed in, which
+    # with three hundred items decides the whole result.
     held: dict[str, float] = {}
-    actions: list[dict] = []
-    spent = 0.0
-    placed = 0
+    books: dict[str, list] = {}
+    mine_by_item: dict[str, list] = {}
+    candidates: list[tuple[str, object]] = []
+    holding: list[tuple[str, float, float]] = []
     for name in _analysis_items(db):
         item_id = db.get_item_id(name)
         if item_id is None:
@@ -944,15 +948,22 @@ def api_analysis_plan():
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
-        bands = plan_bands(sales, orders, wear_range(name), depth, params)
+        books[name] = orders
         mine = db.our_orders(item_id)
+        mine_by_item[name] = mine
         held[name] = sum(float(r["price"]) for r in mine)
+        holding += [(name, float(r["float_min"]), float(r["float_max"]))
+                    for r in mine]
+        candidates += [(name, b) for b in
+                       plan_bands(sales, orders, wear_range(name), depth, params)]
 
-        wanted = select(bands, limits, spent=spent, placed=placed)
-        spent += sum(b.bid for b in wanted)
-        placed += len(wanted)
-        actions += [a.as_dict()
-                    for a in reconcile(name, wanted, mine, orders, limits)]
+    wanted_by_item = select_portfolio(candidates, limits, holding)
+
+    actions: list[dict] = []
+    for name in mine_by_item:
+        actions += [a.as_dict() for a in
+                    reconcile(name, wanted_by_item.get(name, []),
+                              mine_by_item[name], books[name], limits)]
 
     # What each item would hold once the plan is applied. Several orders on one
     # item are not several bets: they are one bet in pieces, and they fill
