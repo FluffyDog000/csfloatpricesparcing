@@ -320,3 +320,31 @@ def test_a_band_with_its_own_sales_does_not_borrow():
                    Params(min_sample=8))
     assert got.sample == 40 and got.borrowed == 0
     assert got.priced_from == "история"
+
+
+def test_the_doubt_in_a_borrowed_price_does_not_depend_on_the_band_step():
+    """How confidently a price extrapolates depends on how far it reached, not
+    on how finely we chose to slice. Counting the reach in band widths made
+    narrowing the step - a setting, not a fact about the market - inflate the
+    doubt on its own, and the ranking reads that doubt."""
+    from src.pricing import neighbourhood
+
+    sparse = [{"float_value": 0.15 + i * 0.02, "price": 200.0 - i * 6.0}
+              for i in range(16)]
+    wide = neighbourhood(sparse, 0.30, 0.32, 12)
+    narrow = neighbourhood(sparse, 0.305, 0.315, 12)
+
+    assert wide[2] == narrow[2], "both reached the same distance"
+    assert abs(wide[1] - narrow[1]) < 0.01, \
+        f"halving the band step changed the error: {wide[1]} vs {narrow[1]}"
+
+
+def test_reaching_further_still_costs_more():
+    from src.pricing import neighbourhood
+
+    dense = [{"float_value": 0.15 + i * 0.001, "price": 200.0 - i * 0.3}
+             for i in range(300)]
+    sparse = [{"float_value": 0.15 + i * 0.02, "price": 200.0 - i * 6.0}
+              for i in range(16)]
+    assert neighbourhood(sparse, 0.30, 0.32, 12)[1] > \
+        neighbourhood(dense, 0.30, 0.32, 12)[1]

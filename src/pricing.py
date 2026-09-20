@@ -36,6 +36,13 @@ PRICE_TIERS: tuple[tuple[float, float], ...] = (
 )
 TOP_TIER_STEP = 10.00
 
+# Borrowing a price from neighbouring sales is worth a point of doubt for
+# every hundredth of float the window had to reach past the band's own edge.
+# Both in float, so the band step - a setting, not a fact about the market -
+# does not change the answer.
+REACH_UNIT = 0.01
+REACH_DOUBT = 0.01
+
 
 def increment(price: float) -> float:
     """The step the order grid uses at this price."""
@@ -246,8 +253,13 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
     # reach. Borrowing from three bands away is an answer, but a softer one.
     residuals = [pr - (level + slope * f) for f, pr in near]
     spread = _iqr(residuals) / 1.349 if len(residuals) >= 4 else None
-    # How many band widths the window had to reach past the band itself.
-    stretch = max(0.0, reach - (hi - lo) / 2.0) / max(hi - lo, 1e-6)
+    # How far past its own edge the window had to reach, in float. Measured in
+    # float rather than in band widths: how confidently a price extrapolates
+    # depends on the distance, not on how finely we chose to slice. Counting
+    # band widths made narrowing the band step - a setting, not a fact about
+    # the market - inflate the doubt on its own.
+    beyond = max(0.0, reach - (hi - lo) / 2.0)
+    stretch = beyond / REACH_UNIT
     if spread is None or price <= 0:
         error = 1.0
     else:
@@ -256,7 +268,7 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
     # Sales lying exactly on a line say the line fits, not that it keeps
     # holding a dozen bands further out. Reaching is itself a doubt, and a
     # multiplier on a residual of zero records none of it.
-    return price, min(max(error, 0.01 * stretch), 1.0), reach, len(near)
+    return price, min(max(error, REACH_DOUBT * stretch), 1.0), reach, len(near)
 
 
 def _iqr(values: Sequence[float]) -> float:
