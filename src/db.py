@@ -121,6 +121,32 @@ CREATE TABLE IF NOT EXISTS our_orders (
 CREATE INDEX IF NOT EXISTS idx_our_orders_item
     ON our_orders(item_id, state);
 
+-- our_orders holds where a position stands; this holds how it got there.
+-- "placed at 12:49, raised at 13:55 because someone outbid us" is not in the
+-- first table at all - an update overwrites the price and the reason with it -
+-- and it is the only record that says whether the bot is working.
+CREATE TABLE IF NOT EXISTS order_events (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    at                  TEXT    NOT NULL,
+    item_id             INTEGER,
+    market_hash_name    TEXT    NOT NULL,
+    float_min           REAL,
+    float_max           REAL,
+    kind                TEXT    NOT NULL,   -- place/raise/cancel/keep
+    price               REAL,
+    was                 REAL,               -- the price before a raise
+    ceiling             REAL,
+    remote_id           TEXT,
+    ok                  INTEGER NOT NULL,
+    dry                 INTEGER NOT NULL,   -- a rehearsal, nothing was sent
+    source              TEXT    NOT NULL,   -- plan/defence
+    reason              TEXT,               -- why the bot decided it
+    detail              TEXT                -- what came back
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_events_at
+    ON order_events(at DESC);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -443,6 +469,55 @@ class Database:
             args.append(since)
         sql += " ORDER BY fetched_at, float_min"
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def record_order_event(self, *, name: str, kind: str, ok: bool,
+                           dry: bool, source: str,
+                           item_id: int | None = None,
+                           float_min: float | None = None,
+                           float_max: float | None = None,
+                           price: float | None = None,
+                           was: float | None = None,
+                           ceiling: float | None = None,
+                           remote_id: str | None = None,
+                           reason: str | None = None,
+                           detail: str | None = None) -> int:
+        """Append one thing that happened to one order. Never updated."""
+        cur = self.conn.execute(
+            "INSERT INTO order_events (at, item_id, market_hash_name, "
+            "float_min, float_max, kind, price, was, ceiling, remote_id, ok, "
+            "dry, source, reason, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (utcnow_iso(), item_id, name, float_min, float_max, kind, price,
+             was, ceiling, remote_id, 1 if ok else 0, 1 if dry else 0, source,
+             reason, detail))
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def order_events(self, limit: int = 200, name: str | None = None,
+                     include_dry: bool = True,
+                     since: str | None = None) -> list[dict[str, Any]]:
+        """The log, newest first."""
+        sql = ("SELECT id, at, item_id, market_hash_name, float_min, float_max, "
+               "kind, price, was, ceiling, remote_id, ok, dry, source, reason, "
+               "detail FROM order_events")
+        where, args = [], []
+        if name:
+            where.append("market_hash_name = ?")
+            args.append(name)
+        if not include_dry:
+            where.append("dry = 0")
+        if since:
+            where.append("at >= ?")
+            args.append(since)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY at DESC, id DESC LIMIT ?"
+        args.append(int(limit))
+        rows = [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+        for r in rows:
+            r["ok"] = bool(r["ok"])
+            r["dry"] = bool(r["dry"])
+        return rows
 
     def item_name(self, item_id: int) -> str | None:
         row = self.conn.execute(

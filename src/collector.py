@@ -546,6 +546,7 @@ class Collector:
             for action in actions:
                 out = sender.perform(action)
                 results.append(out.as_dict())
+                self._log_order_event(out, "plan", dry)
                 if not out.ok or dry:
                     continue
                 item_id = self.db.get_item_id(action.item)
@@ -648,6 +649,7 @@ class Collector:
                 for action in actions:
                     out = sender.perform(action)
                     results.append(out.as_dict())
+                    self._log_order_event(out, "defence", dry, item_id=item_id)
                     if not out.ok or dry:
                         continue
                     row = next((r for r in rows
@@ -677,6 +679,28 @@ class Collector:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    def _log_order_event(self, result, source: str, dry: bool,
+                         item_id: int | None = None) -> None:
+        """Append what just happened to the journal.
+
+        our_orders says where a position stands; an update there overwrites
+        the price and the reason with it, so "placed at 12:49, raised at 13:55
+        because someone outbid us" exists nowhere else. Failing to write the
+        log must not abort a plan that is already half sent, so it is caught.
+        """
+        a = result.action
+        try:
+            self.db.record_order_event(
+                name=a.item, kind=a.kind, ok=result.ok, dry=dry, source=source,
+                item_id=item_id if item_id is not None
+                else self.db.get_item_id(a.item),
+                float_min=a.float_min, float_max=a.float_max,
+                price=a.price, was=a.was, ceiling=a.ceiling,
+                remote_id=result.remote_id or a.remote_id,
+                reason=a.reason, detail=result.detail)
+        except Exception as exc:  # noqa: BLE001 - the plan matters more
+            log.warning("Could not write the order journal: %s", exc)
 
     def _sales_for_scoring(self, item_id: int, params) -> list[dict]:
         """Sales with ages attached, as the scoring reads them."""

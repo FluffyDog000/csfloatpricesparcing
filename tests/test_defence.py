@@ -183,3 +183,74 @@ def test_patience_set_in_days_is_not_read_as_minutes(tmp_path):
     # Once the new field is saved, the old one stops being consulted.
     db.set_setting("an_patience_min", "45")
     assert limits(db).patience_minutes == 45
+
+
+def test_the_journal_records_what_happened_and_when():
+    """our_orders holds where a position stands: raising it overwrites the
+    price and the reason with it. "Placed at 12:49, raised at 13:55 because
+    someone outbid us" exists nowhere else, and it is the only record that
+    says whether the bot is working at all."""
+    col, db = _collector()
+    rival = [{"price": 153.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=rival)
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    col.client.send_json = lambda m, u, b=None, h=None: {}
+    db.set_setting("an_patience_min", "720")
+
+    col.defend_orders()
+
+    events = db.order_events()
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["kind"] == "raise" and ev["source"] == "defence"
+    assert ev["market_hash_name"] == name and ev["item_id"] == item_id
+    assert ev["price"] == 154.0 and ev["was"] == 152.0
+    assert ev["remote_id"] == "r1" and ev["ok"] and not ev["dry"]
+    assert "перебива" in ev["reason"], "why, not just what"
+    assert ev["at"], "the time is the point of the record"
+    db.close()
+
+
+def test_a_rehearsal_is_logged_as_one():
+    """A dry run that looked identical in the journal would be the worst kind
+    of record: it reads as a position that exists."""
+    col, db = _collector()
+    rival = [{"price": 153.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=rival)
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    db.set_setting("an_patience_min", "720")
+    db.set_setting("analysis_dry_run", "1")
+
+    col.defend_orders()
+    assert [e["dry"] for e in db.order_events()] == [True]
+    assert db.order_events(include_dry=False) == []
+    db.close()
+
+
+def test_a_refusal_is_kept_too():
+    """A journal that only records successes cannot answer "why is there no
+    order" - the question it exists for."""
+    import requests
+
+    col, db = _collector()
+    rival = [{"price": 153.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=rival)
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    db.set_setting("an_patience_min", "720")
+
+    def refuse(*a, **k):
+        raise requests.HTTPError("HTTP 400 — {\"code\":5}")
+
+    col.client.send_json = refuse
+    col.defend_orders()
+
+    ev = db.order_events()[0]
+    assert not ev["ok"] and "400" in ev["detail"]
+    assert db.our_orders(item_id)[0]["price"] == 152.0, "and nothing was written"
+    db.close()

@@ -109,6 +109,151 @@
     chips.forEach((c) => box.appendChild(c));
   }
 
+  /** Tick boxes over every tracked item, answered in one go.
+
+   * Typing a market_hash_name by hand means getting "★" and "(Field-Tested)"
+   * exactly right, and a typo reads as "not tracked" rather than as a typo.
+   * The list is what we already collect sales for, which is the only set that
+   * can be analysed at all.
+   */
+  async function openPicker() {
+    const [all, current] = await Promise.all([
+      getJSON("/api/items"),
+      getJSON("/api/analysis"),
+    ]);
+    const chosen = new Set(current.items.map((i) => i.item));
+
+    const back = document.createElement("div");
+    back.className = "picker-backdrop";
+    const box = document.createElement("div");
+    box.className = "picker";
+    back.appendChild(box);
+
+    const head = document.createElement("header");
+    const search = document.createElement("input");
+    search.className = "input";
+    search.placeholder = "поиск по названию…";
+    const close = document.createElement("button");
+    close.className = "btn";
+    close.textContent = "×";
+    close.title = "закрыть";
+    head.appendChild(search);
+    head.appendChild(close);
+    box.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "picker-body";
+    box.appendChild(body);
+
+    const foot = document.createElement("footer");
+    const count = document.createElement("span");
+    count.className = "grow";
+    const allBtn = document.createElement("button");
+    allBtn.className = "btn";
+    allBtn.textContent = "Отметить видимые";
+    const noneBtn = document.createElement("button");
+    noneBtn.className = "btn";
+    noneBtn.textContent = "Снять все";
+    const save = document.createElement("button");
+    save.className = "btn primary";
+    save.textContent = "Готово";
+    foot.appendChild(count);
+    foot.appendChild(noneBtn);
+    foot.appendChild(allBtn);
+    foot.appendChild(save);
+    box.appendChild(foot);
+
+    // Sorted by how much history each one has: a band needs a sample before
+    // its median means anything, so the ones at the bottom cannot be scored.
+    const items = all.items.filter((i) => !i.hidden)
+      .sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
+    const rows = [];
+    let group = "";
+    items.forEach((it) => {
+      const name = it.market_hash_name;
+      const row = document.createElement("label");
+      row.className = "picker-row" + ((it.total_sales || 0) < 30 ? " thin" : "");
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = chosen.has(name);
+      tick.onchange = () => {
+        if (tick.checked) chosen.add(name); else chosen.delete(name);
+        refresh();
+      };
+      const label = document.createElement("span");
+      label.className = "grow";
+      label.textContent = name;
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = (it.total_sales || 0) + " прод.";
+      n.title = (it.total_sales || 0) < 30
+        ? "мало истории — большинство полос отвалится с «мало данных»"
+        : "продаж в базе";
+      row.appendChild(tick);
+      row.appendChild(label);
+      row.appendChild(n);
+      body.appendChild(row);
+      rows.push({ row, raw: name, name: name.toLowerCase(), tick });
+    });
+    if (!rows.length) {
+      body.innerHTML = '<p class="muted">Нет отслеживаемых предметов — '
+        + 'сначала добавь их на главной странице.</p>';
+    }
+
+    function refresh() {
+      count.textContent = `отмечено ${chosen.size} из ${items.length}`;
+    }
+    function filter() {
+      const q = search.value.trim().toLowerCase();
+      rows.forEach((r) => {
+        r.row.style.display = !q || r.name.includes(q) ? "" : "none";
+      });
+    }
+    search.oninput = filter;
+    allBtn.onclick = () => {
+      rows.forEach((r) => {
+        if (r.row.style.display === "none") return;
+        r.tick.checked = true;
+        chosen.add(r.raw);
+      });
+      refresh();
+    };
+    noneBtn.onclick = () => {
+      rows.forEach((r) => { r.tick.checked = false; });
+      chosen.clear();
+      refresh();
+    };
+
+    function shut() {
+      document.removeEventListener("keydown", onKey);
+      back.remove();
+    }
+    function onKey(e) { if (e.key === "Escape") shut(); }
+    document.addEventListener("keydown", onKey);
+    close.onclick = shut;
+    back.onclick = (e) => { if (e.target === back) shut(); };
+    save.onclick = () => {
+      shut();
+      // One answer, sent once: a stream of adds and removes would leave the
+      // list half changed if one of them failed.
+      action(`Сохраняю список (${chosen.size})`, async () => {
+        const r = await postJSON("/api/analysis/items",
+          { action: "set", names: Array.from(chosen) }, token());
+        await loadItems(true);
+        say(`В списке ${r.items.length} предмет(ов).`
+          + (r.unknown && r.unknown.length
+            ? " Не отслеживаются и пропущены: " + r.unknown.join(", ")
+            : " Дальше — «Обойти стаканы»."),
+          r.unknown && r.unknown.length ? "err" : "ok");
+      });
+    };
+
+    refresh();
+    filter();
+    document.body.appendChild(back);
+    search.focus();
+  }
+
   function bandRow(b) {
     const tr = document.createElement("tr");
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
@@ -140,10 +285,59 @@
     return tr;
   }
 
+  /** Where the list went: how many items, how many survived, what they cost.
+   *
+   * Scrolling a hundred item panels to count which ones produced a bid is
+   * the wrong way to answer "did this run find anything".
+   */
+  function renderFunnel(data) {
+    const box = document.createElement("section");
+    box.className = "settings-block";
+    const total = data.items.length;
+    const scored = data.items.filter((i) => !i.error && i.sales);
+    const withBids = scored.filter(
+      (i) => (i.bands || []).some((b) => b.take));
+    const noBook = data.items.filter((i) => !i.error && i.sales && !i.orders);
+    const capital = withBids.reduce((n, i) => n + (i.capital || 0), 0);
+    const orders = withBids.reduce(
+      (n, i) => n + (i.bands || []).filter((b) => b.take).length, 0);
+
+    const tiles = document.createElement("div");
+    tiles.className = "journal-summary";
+    [
+      ["в списке", total, ""],
+      ["отсеяно", total - withBids.length, (total - withBids.length) ? " bad" : ""],
+      ["с ордерами", withBids.length, ""],
+      ["полос под ордера", orders, ""],
+      ["капитал", "$" + capital.toFixed(0), ""],
+    ].forEach(([label, value, cls]) => {
+      const tile = document.createElement("div");
+      tile.className = "journal-tile" + cls;
+      tile.innerHTML = `<b>${value}</b><span>${label}</span>`;
+      tiles.appendChild(tile);
+    });
+    box.appendChild(tiles);
+
+    // Two reasons for an empty report that are not the market saying no.
+    const reasons = [];
+    const noSales = data.items.filter((i) => !i.error && !i.sales).length;
+    if (noSales) reasons.push(`${noSales} — истории продаж ещё нет`);
+    if (noBook.length) reasons.push(`${noBook.length} — стакан не собран, `
+      + "нажми «Обойти стаканы»");
+    if (reasons.length) {
+      const p = document.createElement("p");
+      p.className = "err";
+      p.textContent = "Из отсеянных: " + reasons.join("; ") + ".";
+      box.appendChild(p);
+    }
+    return box;
+  }
+
   function renderResults(data) {
     const box = $("an-results");
     box.innerHTML = "";
     if (!data.items.length) return;
+    box.appendChild(renderFunnel(data));
 
     data.items.forEach((it) => {
       const sec = document.createElement("section");
@@ -543,6 +737,7 @@
     $("an-name").addEventListener("keydown", (e) => {
       if (e.key === "Enter") $("an-add").click();
     });
+    $("an-pick").onclick = () => openPicker();
 
     $("an-sweep").onclick = () => action("Ставлю обход в очередь", async () => {
       const r = await postJSON("/api/analysis/sweep", {}, token());

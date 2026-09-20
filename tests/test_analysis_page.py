@@ -561,3 +561,33 @@ def test_the_calculator_is_gone_entirely():
     assert "calc_page" not in pathlib.Path("webapp.py").read_text(encoding="utf-8")
     base = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
     assert "Калькулятор" not in base, "a nav link to a route that is gone"
+
+
+def test_the_picker_replaces_the_whole_list_in_one_call():
+    """A dialog of tick boxes has one answer at the end. Sending it as a
+    stream of adds and removes would leave the list half changed if one of
+    them failed - and half a list still gets orders placed against it."""
+    c = _app(["A (FT)", "B (FT)", "C (FT)"])
+    c.post("/api/analysis/items", json={"market_hash_name": "A (FT)"})
+
+    got = c.post("/api/analysis/items",
+                 json={"action": "set", "names": ["B (FT)", "C (FT)"]})
+    assert got.status_code == 200
+    assert got.get_json()["items"] == ["B (FT)", "C (FT)"], "A was unticked"
+
+
+def test_the_picker_reports_names_it_does_not_track_rather_than_dropping_them():
+    c = _app(["A (FT)"])
+    got = c.post("/api/analysis/items",
+                 json={"action": "set", "names": ["A (FT)", "ghost"]})
+    body = got.get_json()
+    assert body["items"] == ["A (FT)"]
+    assert body["unknown"] == ["ghost"], "silently shorter is how a list lies"
+
+
+def test_the_picker_keeps_the_order_ticked_and_drops_repeats():
+    c = _app(["A (FT)", "B (FT)"])
+    got = c.post("/api/analysis/items",
+                 json={"action": "set",
+                       "names": ["B (FT)", "A (FT)", "B (FT)", "  "]})
+    assert got.get_json()["items"] == ["B (FT)", "A (FT)"]

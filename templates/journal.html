@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Журнал ордеров{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('analysis_page') }}">← к анализу</a>
+<h1>Журнал ордеров</h1>
+<p class="muted">Что бот сделал и когда. План — это что он <em>собирается</em>
+сделать; здесь только то, что уже произошло, по времени сверху вниз.</p>
+
+<section class="settings-block">
+  <div class="journal-controls">
+    <label>предмет
+      <select id="j-item" class="input"><option value="">все</option></select>
+    </label>
+    <label>показывать
+      <select id="j-limit" class="input">
+        <option value="100">100 последних</option>
+        <option value="300" selected>300 последних</option>
+        <option value="1000">1000 последних</option>
+      </select>
+    </label>
+    <label class="arm-line">
+      <input type="checkbox" id="j-dry" checked> показывать холостые
+    </label>
+    <button class="btn" id="j-reload">Обновить</button>
+  </div>
+  <div class="muted" id="j-note"></div>
+  <div class="muted" id="j-state"></div>
+</section>
+
+<section class="settings-block">
+  <div id="j-summary" class="journal-summary"></div>
+  <div id="j-table"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('common.js') }}"></script>
+<script src="{{ asset('journal.js') }}"></script>
+{% endblock %}

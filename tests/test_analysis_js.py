@@ -51,7 +51,9 @@ def test_the_page_script_runs_against_a_real_response():
     assert "Ошибка" not in result["status"], result["status"]
     assert result["kind"] != "err"
     assert result["chips"] == 1, "the item added must appear in the list"
-    assert result["sections"] == 1, "and its report must render"
+    # The funnel above the per-item panels is a section too: one summary,
+    # one report.
+    assert result["sections"] == 2, "the funnel and the item's own report"
     assert "сборка" in result["status"], \
         "the status names the build, so a screenshot says which script ran"
 

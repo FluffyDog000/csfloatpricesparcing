@@ -775,15 +775,35 @@ ANALYSIS_KEYS = PARAM_KEYS
 
 @app.route("/api/analysis/items", methods=["POST"])
 def api_analysis_items():
-    """Add or drop an item from the analysis list."""
+    """Add or drop items on the analysis list.
+
+    `set` replaces the whole list at once, which is what the picker sends: a
+    dialog where boxes are ticked and unticked has one answer at the end, and
+    applying it as a stream of adds and removes would leave the list half
+    changed if one of them failed."""
     _require_admin()
     data = request.get_json(silent=True) or {}
     name = (data.get("market_hash_name") or "").strip()
     action = data.get("action") or "add"
     db = get_db()
     names = _analysis_items(db)
+    unknown: list[str] = []
     if action == "clear":
         names = []
+    elif action == "set":
+        wanted = data.get("names")
+        if not isinstance(wanted, list):
+            abort(400, description="names must be a list")
+        seen: list[str] = []
+        for raw in wanted:
+            n = str(raw or "").strip()
+            if not n or n in seen:
+                continue
+            if db.get_item_id(n) is None:
+                unknown.append(n)
+                continue
+            seen.append(n)
+        names = seen
     elif not name:
         abort(400, description="market_hash_name is required")
     elif action == "remove":
@@ -794,7 +814,7 @@ def api_analysis_items():
         if name not in names:
             names.append(name)
     db.set_setting(ANALYSIS_KEY, json.dumps(names, ensure_ascii=False))
-    return jsonify({"items": names})
+    return jsonify({"items": names, "unknown": unknown})
 
 
 @app.route("/api/analysis/sweep", methods=["POST"])
@@ -1098,6 +1118,46 @@ def api_analysis_placement():
         "describe": describe(spec),
         "configured": spec.can_place,
     })
+
+
+@app.route("/api/analysis/journal")
+def api_analysis_journal():
+    """What the bot has actually done, newest first.
+
+    Separate from the plan: the plan is what it would do, and the two answer
+    different questions. "Did it place anything, and did it hold on to it" is
+    only answerable from the log."""
+    db = get_db()
+    try:
+        limit = min(max(int(request.args.get("limit", 200)), 1), 2000)
+    except (TypeError, ValueError):
+        limit = 200
+    name = (request.args.get("item") or "").strip() or None
+    include_dry = (request.args.get("dry") or "1") != "0"
+    events = db.order_events(limit=limit, name=name, include_dry=include_dry)
+
+    # The same band, over time: the rows for one order are its history, and
+    # the count is what says "it has been outbid nine times today".
+    live = db.our_orders()
+    by_name: dict[str, str] = {}
+    for row in live:
+        nm = db.item_name(int(row["item_id"]))
+        if nm:
+            by_name[nm] = nm
+    return jsonify({
+        "events": events,
+        "held": len(live),
+        "items": sorted({e["market_hash_name"] for e in events}),
+        "defend": defending(db),
+        "defend_minutes": defend_minutes(db),
+        "defend_at": db.get_setting("defend_last_at") or None,
+    })
+
+
+@app.route("/journal")
+def journal_page():
+    return render_template("journal.html",
+                           admin_required=bool(config.web.admin_token))
 
 
 @app.route("/api/analysis/params", methods=["POST"])
