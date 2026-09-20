@@ -559,3 +559,36 @@ def test_the_amend_probe_says_why_it_is_greyed_out():
     })
     assert got["probeOff"]
     assert "нужен ордер" in got["probeLabel"], got["probeLabel"]
+
+
+def test_the_probe_reports_both_prices():
+    """The whole point is that the price moves, so both ends of the move are
+    what the result has to show."""
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 1, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync": None, "sync_at": None, "sync_pending": False,
+        "positions": {
+            "outbid": 0, "checking": False, "test_pending": False,
+            "test_amend": {"ok": True, "confirmed": True, "was": 39.70,
+                           "price": 39.80,
+                           "detail": "цена изменена на $39.80",
+                           "sent": {"max_price": 3980, "quantity": 1,
+                                    "min_float": 0.15, "max_float": 0.17}},
+            "orders": [{"id": 1, "item": "A (FT)", "float_min": 0.15,
+                        "float_max": 0.17, "price": 39.8, "ceiling": 45.0,
+                        "state": "live", "remote_id": "r1", "top": 30.0,
+                        "ahead": 0, "first": True, "seen_in_book": True,
+                        "swept_at": "2026-09-20T10:00:00", "book": 2}],
+        },
+    })
+    assert "$39.70 → $39.80" in got["positions"], got["positions"]
+    assert "max_price" in got["positions"]
+
+
+def test_the_probe_button_does_not_understate_what_it_does():
+    """It changes a live price. A confirmation saying otherwise would be worse
+    than none at all."""
+    source = pathlib.Path("static/journal.js").read_text(encoding="utf-8")
+    assert "цена изменится" in source
+    assert "Цена не изменится" not in source

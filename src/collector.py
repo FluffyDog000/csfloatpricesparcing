@@ -885,13 +885,22 @@ class Collector:
         return summary
 
     def probe_amend(self) -> dict | None:
-        """Amend one order to the price it already has, and report the reply.
+        """Raise one order by a step, and report what came back.
 
         The amend body was captured from the browser, but a captured request
-        is still only a guess about how the server reads it - and the reply to
-        a real amendment is the only thing that settles it. Sending the price
-        that is already standing makes the test free: a request that works
-        changes nothing, and one that does not says so.
+        is still a guess about how the server reads it, and only a real
+        amendment settles it.
+
+        It has to move the price to prove anything. Sending the price already
+        standing looked free, and that was its flaw: a body the server quietly
+        ignores and a body it obeys produce the same order either way, so the
+        test could not tell them apart. One step up leaves evidence - on the
+        site, in the next sweep of the book, in the reply - and a step is
+        $0.10 between $10 and $100, which is what the grid allows there.
+
+        Up rather than down, because being outbid is the thing the amendment
+        exists to answer. Never past the ceiling: if a step up would cross it,
+        the step goes down instead, which costs nothing and proves the same.
         """
         import json as _json
 
@@ -918,13 +927,31 @@ class Collector:
                                 _json.dumps(out, ensure_ascii=False))
             return out
 
+        from .pricing import increment, snap_down
+
         name = self.db.item_name(int(row["item_id"])) or "?"
+        was = float(row["price"])
+        ceiling = float(row["ceiling"])
+        step = increment(was)
+        target = snap_down(was + step)
+        way = "вверх"
+        if target > ceiling + 1e-9:
+            # The ceiling is the price above which the trade stops being worth
+            # doing, and a test is not a reason to cross it.
+            target = snap_down(was - step)
+            way = "вниз (шаг вверх выше потолка)"
+        if target <= 0:
+            out["ok"] = False
+            out["detail"] = f"цена ${was:.2f} слишком мала, чтобы её двигать"
+            self.db.set_setting("amend_probe_result",
+                                _json.dumps(out, ensure_ascii=False))
+            return out
+
         action = Action(RAISE, name, float(row["float_min"]),
-                        float(row["float_max"]), float(row["price"]),
-                        float(row["ceiling"]),
-                        "проверка запроса правки: та же цена",
+                        float(row["float_max"]), target, ceiling,
+                        f"проверка запроса правки: {way} на ${abs(target - was):.2f}",
                         order_id=order_id, remote_id=row["remote_id"],
-                        was=float(row["price"]))
+                        was=was)
         spec = load(self.db.get_setting(PLACEMENT_KEY))
         self.client.pool.pin(for_orders=True)
         try:
@@ -941,12 +968,19 @@ class Collector:
 
         self._log_order_event(result, "проверка", dry=False,
                               item_id=int(row["item_id"]))
+        if result.ok:
+            # The price on the site moved, so ours has to follow: left behind,
+            # the next reconciliation would report it as someone else's doing.
+            self.db.set_our_order_price(
+                order_id, target,
+                f"проверка правки {was:.2f} → {target:.2f}")
         out["ok"] = result.ok
         out["confirmed"] = result.confirmed
         out["detail"] = result.detail
         out["sent"] = action.sent
         out["item"] = name
-        out["price"] = float(row["price"])
+        out["was"] = was
+        out["price"] = target
         self.db.set_setting("amend_probe_result",
                             _json.dumps(out, ensure_ascii=False))
         log.warning("Amend probe on %s: ok=%s confirmed=%s — %s",

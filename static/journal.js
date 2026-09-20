@@ -213,8 +213,8 @@
     probe.dataset.order = live.length ? live[0].id : "";
     why(live.length ? "" : "ни один ордер не стоит на сайте");
     if (live.length) {
-      probe.title = `Отправит PATCH на «${live[0].item}» с той же ценой `
-        + money(live[0].price);
+      probe.title = `Поднимет цену ордера «${live[0].item}» на шаг выше `
+        + `${money(live[0].price)} — настоящий перебив, цена изменится`;
     }
 
     const t = document.createElement("table");
@@ -270,7 +270,10 @@
       const a = d.test_amend;
       const line = document.createElement("div");
       line.className = a.ok && a.confirmed ? "ok" : "err";
-      line.textContent = "Проверка правки: " + (a.detail || "")
+      line.textContent = "Проверка правки: "
+        + (a.was !== undefined && a.price !== undefined
+          ? `${money(a.was)} → ${money(a.price)} · ` : "")
+        + (a.detail || "")
         + (a.sent ? " · отправлено: " + JSON.stringify(a.sent) : "");
       note.appendChild(line);
     }
@@ -341,8 +344,11 @@
       const btn = $("p-amend");
       const id = btn.dataset.order;
       if (!id) return;
-      if (!confirm("Отправить правку с той же ценой, что уже стоит? "
-        + "Цена не изменится ни при каком исходе.")) return;
+      // Said plainly: the whole point is that it moves. A confirmation that
+      // understated what the button does would be worse than none.
+      if (!confirm("Поднять цену ордера на шаг выше — это настоящий перебив, "
+        + "цена изменится. Если шаг вверх выше потолка, уйдёт вниз. "
+        + "Продолжить?")) return;
       btn.disabled = true;
       say("Проверяю запрос правки…");
       try {
