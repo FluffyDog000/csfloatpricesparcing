@@ -757,6 +757,7 @@ class Collector:
         import json as _json
 
         from .executor import CANCEL, RAISE, reconcile
+        from .holdings import strip_own
         from .placement import PLACEMENT_KEY, load
         from .pricing import evaluate
         from .sender import Sender
@@ -790,7 +791,9 @@ class Collector:
             # a fight that is already over, or miss one that is not.
             self.sweep_buy_orders(name, item_id)
             looked += 1
-            book = self.db.buy_orders(item_id)
+            # Without this the defence sees itself standing above itself and
+            # answers an outbid nobody made.
+            book = strip_own(self.db.buy_orders(item_id), rows)
             sales = self._sales_for_scoring(item_id, params)
             try:
                 depth = self.db.listing_depth(item_id)
@@ -850,6 +853,75 @@ class Collector:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    def probe_amend(self) -> dict | None:
+        """Amend one order to the price it already has, and report the reply.
+
+        The amend body was captured from the browser, but a captured request
+        is still only a guess about how the server reads it - and the reply to
+        a real amendment is the only thing that settles it. Sending the price
+        that is already standing makes the test free: a request that works
+        changes nothing, and one that does not says so.
+        """
+        import json as _json
+
+        from .executor import RAISE, Action
+        from .placement import PLACEMENT_KEY, load
+        from .sender import Sender
+
+        raw = self.db.get_setting("amend_probe_request")
+        if not raw:
+            return None
+        self.db.set_setting("amend_probe_request", "")
+        try:
+            order_id = int(raw)
+        except (TypeError, ValueError):
+            return None
+
+        row = next((r for r in self.db.our_orders(live_only=False)
+                    if int(r["id"]) == order_id), None)
+        out = {"at": utcnow_iso(), "order_id": order_id}
+        if row is None or not row["remote_id"]:
+            out["ok"] = False
+            out["detail"] = "ордера с id на сайте больше нет"
+            self.db.set_setting("amend_probe_result",
+                                _json.dumps(out, ensure_ascii=False))
+            return out
+
+        name = self.db.item_name(int(row["item_id"])) or "?"
+        action = Action(RAISE, name, float(row["float_min"]),
+                        float(row["float_max"]), float(row["price"]),
+                        float(row["ceiling"]),
+                        "проверка запроса правки: та же цена",
+                        order_id=order_id, remote_id=row["remote_id"],
+                        was=float(row["price"]))
+        spec = load(self.db.get_setting(PLACEMENT_KEY))
+        self.client.pool.pin(for_orders=True)
+        try:
+            # Never a dry run: a rehearsal proves nothing about how the server
+            # reads the request, which is the entire question.
+            sender = Sender(self.config.http.base_url, spec,
+                            self.client.send_json,
+                            headers=self.client.order_headers()
+                            if hasattr(self.client, "order_headers") else None,
+                            dry_run=False)
+            result = sender.perform(action)
+        finally:
+            self.client.pool.unpin()
+
+        self._log_order_event(result, "проверка", dry=False,
+                              item_id=int(row["item_id"]))
+        out["ok"] = result.ok
+        out["confirmed"] = result.confirmed
+        out["detail"] = result.detail
+        out["sent"] = action.sent
+        out["item"] = name
+        out["price"] = float(row["price"])
+        self.db.set_setting("amend_probe_result",
+                            _json.dumps(out, ensure_ascii=False))
+        log.warning("Amend probe on %s: ok=%s confirmed=%s — %s",
+                    row["remote_id"], result.ok, result.confirmed, result.detail)
+        return out
 
     def _log_order_event(self, result, source: str, dry: bool,
                          item_id: int | None = None) -> None:

@@ -109,6 +109,55 @@ def reconcile_holdings(ours: Sequence[dict], theirs: Sequence[dict],
     return changes
 
 
+def strip_own(book: Sequence[dict], ours: Sequence[dict]) -> list[dict]:
+    """The order book with our own orders taken out of it.
+
+    The book read off a listing is the public one, and our orders are in it.
+    Left there, every count of "who is ahead of us" includes us: an order
+    alone in its band reads as having one rival at exactly its own price, the
+    wait to fill doubles, and the defence answers an outbid that never
+    happened.
+
+    Orders carry no id in the book, so ours are found by price and bounds -
+    one entry removed per order held, never more. A real rival standing at
+    exactly our price and exactly our range would be dropped instead of ours,
+    which undercounts by one; counting ourselves overcounts by one every time.
+    """
+    def key(row, price_field="price"):
+        def num(v, default):
+            try:
+                return round(float(v), 4)
+            except (TypeError, ValueError):
+                return default
+        return (round(float(row[price_field]), 2),
+                num(row.get("float_min"), 0.0), num(row.get("float_max"), 1.0))
+
+    wanted: dict[tuple, int] = {}
+    for row in ours:
+        try:
+            wanted[key(row)] = wanted.get(key(row), 0) + 1
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    out = []
+    for row in book:
+        try:
+            k = key(row)
+        except (KeyError, TypeError, ValueError):
+            out.append(row)
+            continue
+        if wanted.get(k):
+            wanted[k] -= 1
+            # One order of ours, one entry removed - a qty above one leaves
+            # the rest of that entry standing, because the rest is not ours.
+            if int(row.get("qty") or 1) > 1:
+                row = dict(row, qty=int(row["qty"]) - 1)
+                out.append(row)
+            continue
+        out.append(row)
+    return out
+
+
 def summary(changes: Iterable[Change]) -> dict[str, int]:
     out = {GONE: 0, FILLED: 0, REPRICED: 0, ADOPTED: 0, MATCHED: 0}
     for change in changes:

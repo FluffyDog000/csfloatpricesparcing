@@ -969,6 +969,7 @@ def api_analysis_plan():
     supplied this is the whole of the feature - and even once it is, the plan
     is produced first and acted on separately."""
     from src.executor import exposure, reconcile, select_portfolio
+    from src.holdings import strip_own
     from src.orders import wear_range
     from src.placement import PLACEMENT_KEY, describe, load
     from src.pricing import plan as plan_bands
@@ -996,8 +997,11 @@ def api_analysis_plan():
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
-        books[name] = orders
         mine = db.our_orders(item_id)
+        # Our own orders are in the public book. Left there, every count of
+        # who is ahead of us includes us.
+        orders = strip_own(orders, mine)
+        books[name] = orders
         mine_by_item[name] = mine
         held[name] = sum(float(r["price"]) for r in mine)
         holding += [(name, float(r["float_min"]), float(r["float_max"]))
@@ -1249,6 +1253,115 @@ def api_analysis_sync():
         "queued": True, "waiting": waiting,
         "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
                 "Сверяю с аккаунтом — ответ через несколько секунд.",
+    })
+
+
+@app.route("/api/analysis/positions")
+def api_analysis_positions():
+    """Every order we hold, and where it stands in its own book right now.
+
+    The plan says what would be done and the journal says what was done;
+    neither answers "am I still first". That needs the book read against each
+    order's own float range, because a rival whose range merely overlaps ours
+    takes the same lots.
+    """
+    from src.holdings import strip_own
+    from src.orders import wear_range
+    from src.pricing import _competing
+
+    db = get_db()
+    rows = []
+    books: dict[int, list] = {}
+    for row in db.our_orders(live_only=False):
+        if row["state"] not in ("planned", "live", "manual"):
+            continue
+        item_id = int(row["item_id"])
+        name = db.item_name(item_id) or "?"
+        if item_id not in books:
+            books[item_id] = strip_own(db.buy_orders(item_id),
+                                       db.our_orders(item_id))
+        book = books[item_id]
+        lo, hi = float(row["float_min"]), float(row["float_max"])
+        price = float(row["price"])
+
+        rivals = _competing(book, lo, hi, wear_range(name))
+        above = [o for o in rivals if float(o["price"]) > price]
+        top = max((float(o["price"]) for o in rivals), default=0.0)
+        ahead = sum(int(o.get("qty") or 1) for o in above)
+        rows.append({
+            "id": row["id"], "item": name, "float_min": lo, "float_max": hi,
+            "price": price, "ceiling": float(row["ceiling"]),
+            "state": row["state"], "remote_id": row["remote_id"],
+            "placed_at": row["placed_at"], "note": row["note"],
+            "top": top, "ahead": ahead,
+            "first": ahead == 0,
+            "swept_at": book[0]["fetched_at"] if book else None,
+            "book": len(book),
+        })
+    rows.sort(key=lambda r: (r["first"], r["item"], r["float_min"]))
+    return jsonify({
+        "orders": rows,
+        "outbid": sum(1 for r in rows if not r["first"]),
+        "checking": bool(db.pending_order_requests()),
+        "test_amend": _json_setting(db, "amend_probe_result"),
+        "test_pending": bool(db.get_setting("amend_probe_request")),
+    })
+
+
+@app.route("/api/analysis/test-amend", methods=["POST"])
+def api_analysis_test_amend():
+    """Ask the collector to amend one order to the price it already has.
+
+    The amend body was the last piece captured, and a captured request is
+    still only a guess about how the server reads it. This proves it without
+    risking anything: the price sent is the price standing, so a request that
+    works changes nothing and a request that does not says so in the reply.
+    """
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    try:
+        order_id = int(data.get("order_id"))
+    except (TypeError, ValueError):
+        abort(400, description="order_id is required")
+    row = next((r for r in db.our_orders(live_only=False)
+                if int(r["id"]) == order_id), None)
+    if row is None:
+        abort(404, description="такого ордера у нас нет")
+    if not row["remote_id"]:
+        abort(400, description="у ордера нет id на сайте — нечего править")
+    db.set_setting("amend_probe_result", "")
+    db.set_setting("amend_probe_request", str(order_id))
+    return jsonify({
+        "queued": order_id, "waiting": _why_waiting(db),
+        "note": "Проверяю правку: шлю ту же цену, что стоит. "
+                "Ничего не изменится в любом случае.",
+    })
+
+
+@app.route("/api/analysis/positions/refresh", methods=["POST"])
+def api_analysis_positions_refresh():
+    """Re-read the book of every item we hold an order on.
+
+    Asked for by hand: knowing whether a standing order has been outbid is not
+    something the defence should be the only route to, because the defence
+    also acts, and looking is not the same decision as answering."""
+    _require_admin()
+    db = get_db()
+    names = set()
+    for row in db.our_orders(live_only=False):
+        if row["state"] not in ("planned", "live", "manual"):
+            continue
+        name = db.item_name(int(row["item_id"]))
+        if name:
+            names.add(name)
+    queued = [n for n in sorted(names) if db.request_orders(n)]
+    waiting = _why_waiting(db)
+    return jsonify({
+        "queued": queued, "waiting": waiting,
+        "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
+                (f"Читаю стаканы по {len(queued)} предмет(ам)."
+                 if queued else "Нет ордеров, по которым смотреть."),
     })
 
 

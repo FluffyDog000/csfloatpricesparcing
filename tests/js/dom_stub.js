@@ -7,7 +7,7 @@ function el(tag) {
   const node = {
     tag, id: "", value: "", innerHTML: "", textContent: "", className: "",
     disabled: false, title: "", checked: false, children: [], onclick: null,
-    style: {},
+    style: {}, dataset: {},
     appendChild(c) { this.children.push(c); c.parentElement = this; return c; },
     removeChild(c) { this.children = this.children.filter((x) => x !== c); },
     remove() { if (this.parentElement) this.parentElement.removeChild(this); },
@@ -62,6 +62,10 @@ global.fetch = async (url) => ({
   ok: true,
   statusText: "OK",
   json: async () => {
+    if (url.startsWith("/api/analysis/positions")) {
+      return api.positions || { orders: [], outbid: 0, checking: false,
+                                test_amend: null, test_pending: false };
+    }
     if (url.startsWith("/api/analysis/plan")) return plan;
     if (url.startsWith("/api/analysis")) return api;
     return { items: [] };
@@ -105,6 +109,14 @@ function deepText(node) {
     tiles: (nodes["j-summary"] || el("div")).children.length,
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),
+    positions: deepText(nodes["p-note"]),
+    positionRows: (() => {
+      const box = nodes["p-table"] || el("div");
+      const t = box.children[0];
+      const body = t && t.children[0];
+      return body ? body.children.length : 0;
+    })(),
+    probeOff: (nodes["p-amend"] || el("div")).disabled,
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,

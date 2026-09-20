@@ -477,3 +477,71 @@ def test_the_report_states_no_monthly_rate():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "%/мес" not in row and "monthly" not in row
+
+
+def test_the_journal_shows_where_each_order_stands():
+    """"Am I still first" is not answered by the plan or by the log, and the
+    only other route to it was the defence - which also acts."""
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 2, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync": None, "sync_at": None, "sync_pending": False,
+        "positions": {
+            "outbid": 1, "checking": False, "test_pending": False,
+            "test_amend": None,
+            "orders": [
+                {"id": 1, "item": "A (FT)", "float_min": 0.15,
+                 "float_max": 0.17, "price": 100.0, "ceiling": 120.0,
+                 "state": "live", "remote_id": "r1", "top": 90.0, "ahead": 0,
+                 "first": True, "swept_at": "2026-09-20T10:00:00", "book": 3},
+                {"id": 2, "item": "B (FT)", "float_min": 0.20,
+                 "float_max": 0.22, "price": 50.0, "ceiling": 60.0,
+                 "state": "live", "remote_id": "r2", "top": 55.0, "ahead": 2,
+                 "first": False, "swept_at": "2026-09-20T10:00:00", "book": 4},
+            ],
+        },
+    })
+    assert "Ошибка" not in got["status"], got["status"]
+    assert got["positionRows"] == 2
+    assert "Перебили 1 из 2" in got["positions"]
+    assert not got["probeOff"], "there is a live order to probe with"
+
+
+def test_the_amend_probe_needs_an_order_that_exists_on_the_site():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 0, "manual": 1, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync": None, "sync_at": None, "sync_pending": False,
+        "positions": {
+            "outbid": 0, "checking": False, "test_pending": False,
+            "test_amend": None,
+            "orders": [{"id": 9, "item": "C (FT)", "float_min": 0.15,
+                        "float_max": 0.17, "price": 10.0, "ceiling": 12.0,
+                        "state": "manual", "remote_id": "x9", "top": 0,
+                        "ahead": 0, "first": True, "swept_at": None,
+                        "book": 0}],
+        },
+    })
+    assert got["probeOff"], "an order the bot does not drive is not a probe"
+
+
+def test_a_finished_probe_reports_what_was_sent():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 1, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync": None, "sync_at": None, "sync_pending": False,
+        "positions": {
+            "outbid": 0, "checking": False, "test_pending": False,
+            "test_amend": {"ok": True, "confirmed": True,
+                           "detail": "цена изменена на $39.70",
+                           "sent": {"max_price": 3970, "quantity": 1,
+                                    "min_float": 0.15, "max_float": 0.17}},
+            "orders": [{"id": 1, "item": "A (FT)", "float_min": 0.15,
+                        "float_max": 0.17, "price": 39.7, "ceiling": 45.0,
+                        "state": "live", "remote_id": "r1", "top": 30.0,
+                        "ahead": 0, "first": True,
+                        "swept_at": "2026-09-20T10:00:00", "book": 2}],
+        },
+    })
+    assert "Проверка правки" in got["positions"]
+    assert "max_price" in got["positions"], "what went out, not just the verdict"

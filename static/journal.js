@@ -11,6 +11,7 @@
     try { return localStorage.getItem("csfloat_admin_token") || ""; } catch (e) { return ""; }
   }
   const cash = (v) => (v === null || v === undefined) ? "—" : "$" + v.toFixed(2);
+  const money = cash;
 
   const KIND = {
     place: ["поставить", "act-place"],
@@ -187,6 +188,75 @@
       : "Автозащита выключена — перебитые ордера останутся как есть.";
   }
 
+  /** Our standing orders, and whether anyone is above them. */
+  function positions(d) {
+    const box = $("p-table");
+    box.innerHTML = "";
+    const rows = d.orders || [];
+    const probe = $("p-amend");
+    if (!rows.length) {
+      box.innerHTML = '<p class="muted">Ордеров нет.</p>';
+      probe.disabled = true;
+      return;
+    }
+    // The probe amends a real order to the price it already has, so it needs
+    // one that exists on the site.
+    const live = rows.filter((r) => r.remote_id && r.state !== "manual");
+    probe.disabled = !live.length;
+    probe.dataset.order = live.length ? live[0].id : "";
+    probe.title = live.length
+      ? `Отправит PATCH на «${live[0].item}» с той же ценой ${money(live[0].price)}`
+      : "Нужен ордер, стоящий на сайте";
+
+    const t = document.createElement("table");
+    t.className = "stat journal";
+    t.innerHTML = `<thead><tr><th>предмет</th><th>float</th><th>наша цена</th>
+      <th>потолок</th><th>верх стакана</th><th>положение</th>
+      <th>стакан читан</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.className = r.first ? "act-keep" : "act-cancel";
+      const cell = (text, cls) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        if (cls) td.className = cls;
+        tr.appendChild(td);
+        return td;
+      };
+      cell(r.item + (r.state === "manual" ? "  (вручную)" : ""));
+      cell(r.float_min.toFixed(4) + "–" + r.float_max.toFixed(4), "mono");
+      cell(money(r.price));
+      cell(money(r.ceiling));
+      cell(r.top ? money(r.top) : "—");
+      cell(!r.book ? "стакан не читан"
+        : r.first ? "мы первые"
+        : `перебили: впереди ${r.ahead} на ${money(r.top)}`,
+        r.first ? "" : "err");
+      cell(r.swept_at ? when(r.swept_at) : "—", "mono");
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
+
+    const note = $("p-note");
+    note.className = d.outbid ? "err" : "muted";
+    note.textContent = d.outbid
+      ? `Перебили ${d.outbid} из ${rows.length}.`
+      : `Все ${rows.length} впереди своих стаканов.`;
+    if (d.test_pending) {
+      note.className = "muted";
+      note.textContent = "Проверка правки поставлена в очередь, жду сборщик…";
+    } else if (d.test_amend) {
+      const a = d.test_amend;
+      const line = document.createElement("div");
+      line.className = a.ok && a.confirmed ? "ok" : "err";
+      line.textContent = "Проверка правки: " + (a.detail || "")
+        + (a.sent ? " · отправлено: " + JSON.stringify(a.sent) : "");
+      note.appendChild(line);
+    }
+  }
+
   async function load() {
     const limit = $("j-limit").value;
     const item = $("j-item").value;
@@ -210,6 +280,13 @@
       summary(d);
       state(d);
       syncState(d);
+      try {
+        positions(await getJSON("/api/analysis/positions"));
+      } catch (e) {
+        $("p-note").className = "err";
+        $("p-note").textContent = "Позиции не загрузились — "
+          + ((e && e.message) || e);
+      }
       table(d.events);
       say(d.events.length
         ? `${d.events.length} записей.` : "Записей нет.", "ok");
@@ -220,6 +297,51 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     $("j-reload").onclick = load;
+
+    $("p-refresh").onclick = async () => {
+      const btn = $("p-refresh");
+      btn.disabled = true;
+      say("Ставлю чтение стаканов в очередь…");
+      try {
+        const r = await postJSON("/api/analysis/positions/refresh", {}, token());
+        say(r.note);
+        for (let i = 0; i < 20; i++) {
+          await new Promise((res) => setTimeout(res, 3000));
+          const d = await getJSON("/api/analysis/positions");
+          if (!d.checking) { positions(d); say("Стаканы перечитаны.", "ok"); return; }
+        }
+        say("Сборщик не ответил за минуту — посмотри «Нагрузка».", "err");
+      } catch (e) {
+        say("Ошибка — " + ((e && e.message) || e), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    $("p-amend").onclick = async () => {
+      const btn = $("p-amend");
+      const id = btn.dataset.order;
+      if (!id) return;
+      if (!confirm("Отправить правку с той же ценой, что уже стоит? "
+        + "Цена не изменится ни при каком исходе.")) return;
+      btn.disabled = true;
+      say("Проверяю запрос правки…");
+      try {
+        const r = await postJSON("/api/analysis/test-amend",
+          { order_id: Number(id) }, token());
+        say(r.note);
+        for (let i = 0; i < 20; i++) {
+          await new Promise((res) => setTimeout(res, 3000));
+          const d = await getJSON("/api/analysis/positions");
+          if (!d.test_pending) { positions(d); await load(); return; }
+        }
+        say("Сборщик не ответил за минуту — посмотри «Нагрузка».", "err");
+      } catch (e) {
+        say("Ошибка — " + ((e && e.message) || e), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
     $("j-sync").onclick = async () => {
       const btn = $("j-sync");
       btn.disabled = true;

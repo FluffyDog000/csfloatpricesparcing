@@ -94,3 +94,56 @@ def test_a_list_is_read_whatever_it_is_wrapped_in():
 
     for empty in (None, {}, [], {"data": []}, "nonsense", {"error": "no"}):
         assert parse_order_list(empty) == []
+
+
+def test_our_own_order_is_not_a_rival_to_itself():
+    """The book read off a listing is the public one and our orders are in it.
+    Left there, an order alone in its band reads as having one rival at
+    exactly its own price: the wait to fill doubles and the defence answers an
+    outbid that never happened."""
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17},
+            {"price": 90.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    mine = [{"price": 100.0, "float_min": 0.15, "float_max": 0.17}]
+
+    left = strip_own(book, mine)
+    assert [r["price"] for r in left] == [90.0]
+
+
+def test_only_as_many_entries_are_removed_as_we_hold():
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17},
+            {"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    left = strip_own(book, [{"price": 100.0, "float_min": 0.15,
+                             "float_max": 0.17}])
+    assert len(left) == 1, "one order held, one entry removed"
+
+
+def test_an_entry_standing_for_several_orders_loses_only_ours():
+    """CSFloat groups equal orders, so a qty of four at our price is us plus
+    three other people."""
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 4, "float_min": 0.15, "float_max": 0.17}]
+    left = strip_own(book, [{"price": 100.0, "float_min": 0.15,
+                             "float_max": 0.17}])
+    assert len(left) == 1 and left[0]["qty"] == 3
+
+
+def test_a_different_price_or_a_different_band_is_someone_else():
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    assert len(strip_own(book, [{"price": 100.1, "float_min": 0.15,
+                                 "float_max": 0.17}])) == 1
+    assert len(strip_own(book, [{"price": 100.0, "float_min": 0.20,
+                                 "float_max": 0.22}])) == 1
+
+
+def test_holding_nothing_leaves_the_book_alone():
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    assert strip_own(book, []) == book

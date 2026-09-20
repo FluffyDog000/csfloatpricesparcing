@@ -254,3 +254,26 @@ def test_a_refusal_is_kept_too():
     assert not ev["ok"] and "400" in ev["detail"]
     assert db.our_orders(item_id)[0]["price"] == 152.0, "and nothing was written"
     db.close()
+
+
+def test_the_defence_does_not_count_itself_as_standing_above_itself():
+    """Our order is in the public book. Left there, an order alone in its band
+    reads as having one rival at exactly its own price - and the defence
+    answers an outbid nobody made."""
+    col, db = _collector()
+    item_id, name = _stock(db, rival=[])
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    # The sweep reads the book back with our own order in it.
+    db.replace_buy_orders(item_id, [
+        {"price": 152.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}])
+    col.sweep_buy_orders = lambda n, i: None
+    db.set_setting("an_patience_min", "1")
+    sent = []
+    col.client.send_json = lambda *a, **k: sent.append(a) or {}
+
+    out = col.defend_orders()
+    kinds = [r["action"]["kind"] for r in (out or {}).get("results", [])]
+    assert "raise" not in kinds, kinds
+    assert sent == [], "nothing should have been sent"
+    db.close()
