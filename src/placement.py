@@ -52,6 +52,28 @@ DEFAULT_CREATE_BODY = (
 )
 
 
+# Captured from the site while changing an order's price:
+#
+#   PATCH /api/v1/buy-orders/{id}
+#   {"min_float": null, "max_float": null, "paint_seeds": null,
+#    "min_keychain_pattern": null, "max_keychain_pattern": null,
+#    "applied_stickers": null, "applied_keychains": null,
+#    "max_price": 3970, "quantity": 1}
+#
+# Two things it settles. The price field is `max_price` here as well, in cents,
+# and the quantity is `quantity` rather than the `qty` the create request uses.
+#
+# And one thing it warns about: the request carries the order's whole shape,
+# float bounds included, flat rather than inside hybrid_properties. If CSFloat
+# reads a PATCH as a replacement, sending only a price would clear the float
+# filter - and an order that was buying 0.15-0.17 would start buying anything.
+# So the bounds go out with every amendment, holding the scope where it is.
+DEFAULT_UPDATE_BODY = (
+    '{"max_price": {price_cents}, "quantity": {quantity},'
+    ' "min_float": {float_min}, "max_float": {float_max}}'
+)
+
+
 class NotConfigured(RuntimeError):
     """No captured request to work from, so nothing may be sent."""
 
@@ -96,23 +118,22 @@ class Spec:
 #   PATCH  https://csfloat.com/api/v1/buy-orders/{order_id}  amend in place
 #   DELETE https://csfloat.com/api/v1/buy-orders/{order_id}  take down
 #
-# What remains guessed is the amend body. It matters on its own: the body is
-# what separates changing a price from taking an order down, and getting it
-# wrong on a live position is not a cheap mistake. Nothing is sent until the
-# configuration is saved deliberately.
+# All four were captured in the end, the amend body last. Nothing is sent
+# until the configuration is saved deliberately.
 SUGGESTED = Spec(
     create_method="POST",                          # confirmed
     create_path="/api/v1/buy-orders",              # confirmed
     create_body=DEFAULT_CREATE_BODY,               # from the reply it returns
     update_method="PATCH",                         # confirmed
     update_path="/api/v1/buy-orders/{order_id}",   # confirmed
-    update_body='{"max_price": {price_cents}}',    # same field as create
+    update_body=DEFAULT_UPDATE_BODY,               # confirmed
     cancel_method="DELETE",                        # confirmed
     cancel_path="/api/v1/buy-orders/{order_id}",   # confirmed
     list_path="/api/v1/buy-orders",                # guessed
 )
 
-CONFIRMED = {"create_path", "create_method", "update_path", "update_method",
+CONFIRMED = {"create_path", "create_method", "create_body",
+             "update_path", "update_method", "update_body",
              "cancel_path", "cancel_method"}
 
 # GET /api/v1/buy-orders answers 405: the path exists, but it is where orders
@@ -167,8 +188,11 @@ def render(template: str, *, name: str, price: float,
         "name": name,
         "price": f"{price:.2f}",
         "price_cents": str(int(round(price * 100))),
-        "float_min": "" if float_min is None else f"{float_min:g}",
-        "float_max": "" if float_max is None else f"{float_max:g}",
+        # `null`, not an empty string: an unscoped order sends nulls, as the
+        # captured request does, and an empty substitution produced JSON that
+        # would not parse rather than a body saying "no bound".
+        "float_min": "null" if float_min is None else f"{float_min:g}",
+        "float_max": "null" if float_max is None else f"{float_max:g}",
         "quantity": str(int(quantity)),
     }
     unknown = [m for m in re.findall(r"\{(\w+)\}", template)

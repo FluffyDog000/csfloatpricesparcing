@@ -1167,6 +1167,13 @@ def api_analysis_placement():
             preview[label] = render(body, **sample)
         except Exception as exc:  # noqa: BLE001 - the message is the point
             preview[label] = {"ошибка": str(exc)}
+    amend = preview.get("правка")
+    if isinstance(amend, dict) and "min_float" not in amend:
+        warn.append(
+            "тело «правка» не передаёт границы float. Снятый с сайта PATCH "
+            "шлёт весь набор полей ордера — если CSFloat читает его как "
+            "замену, правка цены снимет фильтр по float, и ордер начнёт "
+            "скупать любой износ")
     for label, body in preview.items():
         if isinstance(body, dict) and "price" in body and "max_price" not in body:
             warn.append(

@@ -375,9 +375,10 @@ def test_the_captured_request_is_saved_only_when_sent():
 
     assert not got["configured"], "an empty install has no request to send"
     assert got["confirmed"] == ["cancel_method", "cancel_path",
-                                "create_method", "create_path",
-                                "update_method", "update_path"], \
-        "all three operations were captured from the browser"
+                                "create_body", "create_method", "create_path",
+                                "update_body", "update_method",
+                                "update_path"], \
+        "all three operations, bodies included, came off the browser"
     assert got["suggested"]["update_path"] == "/api/v1/buy-orders/{order_id}"
 
     saved = c.post("/api/analysis/placement",
@@ -781,3 +782,34 @@ def test_every_settings_group_is_actually_saved():
     assert missing == [], f"accepted and dropped: {missing}"
 
 
+
+
+def test_an_amend_body_without_float_bounds_is_called_out():
+    """The captured PATCH carries the order's whole shape. If CSFloat reads it
+    as a replacement, amending a price with a body that omits the bounds
+    clears the float filter - and an order buying 0.15-0.17 starts buying
+    anything. A spec saved before this was learned still has that body."""
+    import json as _json
+
+    c = _app()
+    c.post("/api/analysis/placement",
+           json={"create_path": "/api/v1/buy-orders",
+                 "create_body": '{"max_price": {price_cents}}',
+                 "update_path": "/api/v1/buy-orders/{order_id}",
+                 "update_body": '{"max_price": {price_cents}}',
+                 "cancel_path": "/api/v1/buy-orders/{order_id}"})
+
+    warnings = c.get("/api/analysis/placement").get_json()["warnings"]
+    assert any("границы float" in w for w in warnings), warnings
+    assert any("скупать любой износ" in w for w in warnings)
+
+
+def test_the_suggested_amend_body_raises_no_such_warning():
+    import json as _json
+
+    from src.placement import SUGGESTED
+
+    c = _app()
+    c.post("/api/analysis/placement", json=SUGGESTED.as_dict())
+    warnings = c.get("/api/analysis/placement").get_json()["warnings"]
+    assert not any("границы float" in w for w in warnings), warnings

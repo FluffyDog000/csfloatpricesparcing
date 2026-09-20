@@ -145,9 +145,19 @@ def test_amending_an_order_is_its_own_operation():
     assert endpoint(SUGGESTED.update_path, "1021510122612067461") == \
         "/api/v1/buy-orders/1021510122612067461"
 
+    # The captured body carries the order's whole shape, not just the price:
+    # if CSFloat reads a PATCH as a replacement, sending the price alone would
+    # clear the float filter and an order buying 0.15-0.17 would start buying
+    # anything. An unscoped order sends nulls, exactly as the site does.
     body = render(SUGGESTED.update_body, name="x", price=6.30,
                   float_min=None, float_max=None)
-    assert body == {"max_price": 630}, "cents here as everywhere else"
+    assert body == {"max_price": 630, "quantity": 1,
+                    "min_float": None, "max_float": None}
+
+    scoped = render(SUGGESTED.update_body, name="x", price=6.30,
+                    float_min=0.15, float_max=0.17)
+    assert scoped["min_float"] == 0.15 and scoped["max_float"] == 0.17, \
+        "amending a price must not widen what the order will buy"
 
 
 def test_a_path_needing_an_id_refuses_to_render_without_one():
@@ -168,14 +178,15 @@ def test_the_suggestion_is_not_the_configuration():
     from src.placement import CONFIRMED, SUGGESTED, load
 
     assert not load(None).can_place
-    assert CONFIRMED == {"create_path", "create_method",
-                         "update_path", "update_method",
+    assert CONFIRMED == {"create_path", "create_method", "create_body",
+                         "update_path", "update_method", "update_body",
                          "cancel_path", "cancel_method"}
     assert SUGGESTED.create_path == "/api/v1/buy-orders"
     assert SUGGESTED.cancel_method == "DELETE"
-    # The amend body is the one thing still worked out rather than seen, and
-    # it is what separates changing a price from taking an order down.
-    assert SUGGESTED.update_body == '{"max_price": {price_cents}}'
+    # The amend body was the last piece worked out rather than seen; it was
+    # captured in the end, and it carries the float bounds because a PATCH
+    # that omits them may be read as clearing them.
+    assert '"min_float"' in SUGGESTED.update_body
 
 
 def test_a_missing_amend_endpoint_is_called_out_as_a_cost():
@@ -201,4 +212,5 @@ def test_the_price_field_is_named_as_the_request_wants_it():
 
     amended = render(SUGGESTED.update_body, name="x", price=49.0,
                      float_min=None, float_max=None)
-    assert amended == {"max_price": 4900}, "the same field amends it"
+    assert amended["max_price"] == 4900, "the same field amends it"
+    assert "price" not in amended

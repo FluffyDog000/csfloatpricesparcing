@@ -71,7 +71,9 @@ def test_answering_an_outbid_amends_rather_than_replaces():
     method, url, body = rec.calls[0]
     assert method == "PATCH"
     assert url.endswith("/api/v1/buy-orders/xyz"), "the order keeps its place"
-    assert body == {"max_price": 16100}
+    assert body["max_price"] == 16100
+    assert body["min_float"] == 0.32 and body["max_float"] == 0.38, \
+        "the float scope goes out with every amendment"
     assert got.ok and got.confirmed is True
 
 
