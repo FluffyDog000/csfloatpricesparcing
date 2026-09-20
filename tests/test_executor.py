@@ -53,14 +53,14 @@ def test_being_outbid_is_not_by_itself_a_reason_to_answer():
     book = [{"price": 101.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     patient = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=1.0)],
                         [row(0.15, 0.17, 100.0, 110.0)], book,
-                        Limits(patience_days=14.0))
+                        Limits(patience_minutes=20160.0))
     assert patient[0].kind == KEEP
     assert "очередь разойдётся" in patient[0].reason
 
     # The same outbid on a band that trades once a month is a real delay.
     slow = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=0.03)],
                      [row(0.15, 0.17, 100.0, 110.0)], book,
-                     Limits(patience_days=14.0))
+                     Limits(patience_minutes=20160.0))
     assert slow[0].kind == RAISE
     assert slow[0].price == 102.0, "one tier step over the rival"
     assert slow[0].was == 100.0
@@ -72,7 +72,7 @@ def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
     book = [{"price": 110.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     acts = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=0.03)],
                      [row(0.15, 0.17, 100.0, 110.0)], book,
-                     Limits(patience_days=1.0))
+                     Limits(patience_minutes=1440.0))
     assert acts[0].kind == CANCEL
     assert "выше потолка" in acts[0].reason
 
@@ -111,3 +111,35 @@ def test_exposure_follows_the_actions():
             Action(CANCEL, "A", 0.20, 0.22, 40.0, 44.0, ""),
             Action(RAISE, "B", 0.15, 0.17, 55.0, 60.0, "", was=50.0)]
     assert exposure(acts, {"A": 140.0, "B": 50.0}) == {"A": 200.0, "B": 55.0}
+
+
+def test_patience_is_counted_in_minutes():
+    """The defence re-reads the book every hour or faster, so the question it
+    asks about a queue is "will this clear before I look again". A threshold in
+    days is coarser than the look itself: it answers "wait" to everything, and
+    an order sits outbid for a fortnight by design."""
+    from src.executor import Limits, human_wait, reconcile
+
+    band = Band(float_min=0.15, float_max=0.17, bid=10.0, ceiling=12.0,
+                step=0.10, lam=96.0, take=True)  # liquid: four fills an hour
+    held = [{"id": 1, "float_min": 0.15, "float_max": 0.17, "price": 10.0,
+             "ceiling": 12.0, "remote_id": "r1"}]
+    book = [{"price": 10.5, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+
+    # One rival ahead of us, four fills an hour: the queue clears in half an
+    # hour. Under the old day-scale threshold that was "wait" either way.
+    waiting = reconcile("x", [band], held, book, Limits(patience_minutes=60))
+    assert waiting[0].kind == KEEP and "мин" in waiting[0].reason
+
+    answering = reconcile("x", [band], held, book, Limits(patience_minutes=10))
+    assert answering[0].kind == RAISE
+    assert answering[0].price > 10.5, "a raise has to clear the rival"
+
+
+def test_a_wait_is_reported_in_the_unit_a_person_would_say_it_in():
+    from src.executor import human_wait
+
+    assert human_wait(1 / 48) == "30 мин"          # half an hour
+    assert human_wait(0.25) == "6.0 ч"
+    assert human_wait(9.0) == "9.0 дн"
+    assert human_wait(float("inf")) == "никогда"

@@ -91,7 +91,7 @@ def test_a_slow_band_bid_over_is_answered_in_place():
     _quiet_sweep(col)
     sent = []
     col.client.send_json = lambda m, u, b=None, h=None: sent.append((m, u, b)) or {}
-    db.set_setting("an_patience", "0.5")     # any queue is worth answering
+    db.set_setting("an_patience_min", "720")     # any queue is worth answering
 
     out = col.defend_orders()
     kinds = [r["action"]["kind"] for r in out["results"]]
@@ -113,7 +113,7 @@ def test_a_rival_above_our_ceiling_takes_us_out():
     _quiet_sweep(col)
     sent = []
     col.client.send_json = lambda m, u, b=None, h=None: sent.append((m, u)) or {}
-    db.set_setting("an_patience", "0.5")
+    db.set_setting("an_patience_min", "720")
 
     out = col.defend_orders()
     assert [r["action"]["kind"] for r in out["results"]] == ["cancel"]
@@ -146,7 +146,7 @@ def test_a_dry_run_changes_nothing():
     _quiet_sweep(col)
     sent = []
     col.client.send_json = lambda *a, **k: sent.append(a) or {}
-    db.set_setting("an_patience", "0.5")
+    db.set_setting("an_patience_min", "720")
 
     out = col.defend_orders()
     assert out["dry_run"] and sent == []
@@ -166,3 +166,20 @@ def test_the_interval_is_bounded_and_off_by_default():
     db.set_setting("an_defend_minutes", "99999")
     assert defend_minutes(db) == 1440.0
     db.close()
+
+
+def test_patience_set_in_days_is_not_read_as_minutes(tmp_path):
+    """The field changed unit. A database written before that holds days under
+    the old key, and reading 14 as minutes would turn "wait a fortnight" into
+    "wait a quarter of an hour" - a live position bid to its ceiling by the
+    next defence pass, with nothing on screen having changed."""
+    from src.db import Database
+    from src.settings import limits
+
+    db = Database(str(tmp_path / "old.db"))
+    db.set_setting("an_patience", "14")
+    assert limits(db).patience_minutes == 14 * 1440
+
+    # Once the new field is saved, the old one stops being consulted.
+    db.set_setting("an_patience_min", "45")
+    assert limits(db).patience_minutes == 45

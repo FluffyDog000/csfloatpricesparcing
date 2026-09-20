@@ -30,6 +30,22 @@ from typing import Any, Iterable, Sequence
 
 from .pricing import Band, next_above
 
+def human_wait(days: float) -> str:
+    """A wait, in the unit a person would say it in.
+
+    Patience is set in minutes now, so "0.0 дн" would be the answer to most
+    questions - and it is exactly the answer that says nothing.
+    """
+    if days == float("inf"):
+        return "никогда"
+    minutes = days * 1440.0
+    if minutes < 90:
+        return f"{minutes:.0f} мин"
+    if minutes < 2880:
+        return f"{minutes / 60:.1f} ч"
+    return f"{days:.1f} дн"
+
+
 PLACE = "place"
 RAISE = "raise"
 CANCEL = "cancel"
@@ -42,7 +58,12 @@ class Limits:
     per_item_capital: float = 0.0   # 0 = only the share implied by the count
     max_orders: int = 20
     max_orders_per_item: int = 3
-    patience_days: float = 14.0     # a queue longer than this is worth answering
+    # How long we will wait for the queue ahead of us to clear before paying
+    # to jump it. Minutes, not days: the defence re-reads the book on its own
+    # interval, so the question it asks is "will this clear before I look
+    # again", and a threshold coarser than the look is a threshold that never
+    # fires.
+    patience_minutes: float = 60.0
 
 
 @dataclass
@@ -141,10 +162,10 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
         # wait it implies makes answering worth the money.
         lam = band.lam or 0.0
         wait = (1 + ahead) / lam if lam > 0 else float("inf")
-        if wait <= limits.patience_days:
+        if wait * 1440.0 <= limits.patience_minutes:
             actions.append(Action(
                 KEEP, item, key[0], key[1], price, new_ceiling,
-                f"перебили, но очередь разойдётся за {wait:.1f} дн — ждём",
+                f"перебили, но очередь разойдётся за {human_wait(wait)} — ждём",
                 order_id=row.get("id"), remote_id=row.get("remote_id")))
             continue
 
@@ -160,7 +181,7 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
 
         actions.append(Action(
             RAISE, item, key[0], key[1], answer, new_ceiling,
-            f"ждать {wait:.1f} дн дольше терпения — перебиваем ${top:.2f}",
+            f"ждать {human_wait(wait)} дольше терпения — перебиваем ${top:.2f}",
             order_id=row.get("id"), remote_id=row.get("remote_id"),
             was=price))
 

@@ -34,14 +34,14 @@ PARAM_KEYS = (
 LIMIT_BOUNDS = {
     "total_capital": (0.0, 1_000_000.0), "per_item_capital": (0.0, 1_000_000.0),
     "max_orders": (0, 1000), "max_orders_per_item": (0, 1000),
-    "patience_days": (0.0, 365.0),
+    "patience_minutes": (0.0, 525_600.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
     ("an_per_item_capital", "per_item_capital", float),
     ("an_max_orders", "max_orders", int),
     ("an_max_per_item", "max_orders_per_item", int),
-    ("an_patience", "patience_days", float),
+    ("an_patience_min", "patience_minutes", float),
 )
 
 # How often the defence looks, and the floor under it. Each pass re-reads the
@@ -70,7 +70,17 @@ def params(db) -> Params:
 
 
 def limits(db) -> Limits:
-    return _fill(db, Limits(), LIMIT_KEYS, LIMIT_BOUNDS)
+    out = _fill(db, Limits(), LIMIT_KEYS, LIMIT_BOUNDS)
+    if db.get_setting("an_patience_min") in (None, ""):
+        # Patience used to be set in days. Reading the old key as minutes would
+        # turn "wait up to 14 days" into "wait a quarter of an hour" silently,
+        # which is a live position bid up to its ceiling before anyone notices.
+        old = db.get_setting("an_patience")
+        try:
+            out.patience_minutes = float(str(old).replace(",", ".")) * 1440.0
+        except (TypeError, ValueError):
+            pass
+    return out
 
 
 def defend_minutes(db) -> float:

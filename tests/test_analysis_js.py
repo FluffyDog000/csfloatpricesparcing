@@ -140,7 +140,7 @@ def _plan_payload(**over):
                      "remote_id": None, "was": None}],
         "limits": {"total_capital": 500.0, "max_orders": 20,
                    "max_orders_per_item": 3, "per_item_capital": 0.0,
-                   "patience_days": 14.0},
+                   "patience_minutes": 60.0},
         "held": {}, "by_item": {"★ Gloves | Fade (Field-Tested)": 159.0},
         "planned_total": 159.0, "concentration": 1.0,
         "armed": True, "dry_run": True, "pending": False, "last_apply": None,
@@ -194,7 +194,7 @@ def test_the_apply_button_says_why_it_would_refuse():
     _run_with_plan(_plan_payload(limits={"total_capital": 0.0, "max_orders": 20,
                                          "max_orders_per_item": 3,
                                          "per_item_capital": 0.0,
-                                         "patience_days": 14.0}))
+                                         "patience_minutes": 60.0}))
 
 
 def test_handing_a_plan_over_shows_what_went():
@@ -223,7 +223,7 @@ def test_the_limit_fields_are_loaded_before_they_can_be_saved_back():
     result = _run_with_plan(_plan_payload(
         limits={"total_capital": 500.0, "per_item_capital": 120.0,
                 "max_orders": 12, "max_orders_per_item": 3,
-                "patience_days": 14.0}))
+                "patience_minutes": 60.0}))
     assert result["budget"] == 500, "the saved budget reaches the form"
 
 

@@ -72,9 +72,10 @@
         <input type="number" id="l-max" class="input" step="1" min="0" value="20"></label>
       <label>максимум на предмет
         <input type="number" id="l-maxitem" class="input" step="1" min="0" value="3"></label>
-      <label>терпение, дней
-        <input type="number" id="l-patience" class="input" step="1" min="0" value="14">
-        <small class="muted">перебили — отвечаем, только если ждать дольше этого</small></label>
+      <label>терпение, минут
+        <input type="number" id="l-patience" class="input" step="5" min="0" value="60">
+        <small class="muted">перебили — отвечаем, только если очередь<br>
+          разойдётся дольше этого. 60 — за час не разошлась, перебиваем</small></label>
     </div>
     <button class="btn" id="p-save">Сохранить пороги и лимиты</button>
   </details>

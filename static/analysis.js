@@ -477,7 +477,7 @@
     $("l-item").value = l.per_item_capital;
     $("l-max").value = l.max_orders;
     $("l-maxitem").value = l.max_orders_per_item;
-    $("l-patience").value = l.patience_days;
+    $("l-patience").value = l.patience_minutes;
   }
 
   function fillParams(p) {
@@ -704,7 +704,7 @@
       an_per_item_capital: $("l-item").value,
       an_max_orders: $("l-max").value,
       an_max_per_item: $("l-maxitem").value,
-      an_patience: $("l-patience").value,
+      an_patience_min: $("l-patience").value,
       }, token());
       fillParams(r.params);
       if (r.limits) fillLimits(r.limits);
