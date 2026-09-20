@@ -50,6 +50,11 @@ LISTING_ID_PATHS = ("id", "listing_id")
 
 # Candidate paths per field: the endpoint is undocumented, so read defensively
 # rather than depend on one shape (same approach as the sales parser).
+# If the book names its orders, ours are recognisable outright: every order
+# the bot places records the id CSFloat answered with. Without it they have to
+# be told apart by price and float bounds, which is a guess that a rival
+# standing at exactly our price defeats.
+ORDER_ID_PATHS = ("id", "order_id", "buy_order_id")
 PRICE_PATHS = ("price", "market_price", "value", "amount")
 QTY_PATHS = ("qty", "quantity", "count", "num", "amount_left")
 # The live response carries filters under hybrid_properties (confirmed against
@@ -130,7 +135,9 @@ def parse_orders(payload: Any) -> list[dict]:
         price = price_to_dollars(first(record, *PRICE_PATHS))
         if price is None:
             continue
+        order_id = first(record, *ORDER_ID_PATHS)
         out.append({
+            "id": None if order_id in (None, "") else str(order_id),
             "price": price,
             "qty": _to_int(first(record, *QTY_PATHS)) or 1,
             "float_min": _to_float(first(record, *FLOAT_MIN_PATHS)),

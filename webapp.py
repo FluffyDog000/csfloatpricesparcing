@@ -1272,20 +1272,26 @@ def api_analysis_positions():
     db = get_db()
     rows = []
     books: dict[int, list] = {}
+    raw_books: dict[int, list] = {}
     for row in db.our_orders(live_only=False):
         if row["state"] not in ("planned", "live", "manual"):
             continue
         item_id = int(row["item_id"])
         name = db.item_name(item_id) or "?"
         if item_id not in books:
-            books[item_id] = strip_own(db.buy_orders(item_id),
-                                       db.our_orders(item_id))
+            raw = db.buy_orders(item_id)
+            raw_books[item_id] = raw
+            books[item_id] = strip_own(raw, db.our_orders(item_id))
         book = books[item_id]
         lo, hi = float(row["float_min"]), float(row["float_max"])
         price = float(row["price"])
 
         rivals = _competing(book, lo, hi, wear_range(name))
-        above = [o for o in rivals if float(o["price"]) > price]
+        # At or above, not strictly above: an order matching our price is
+        # filled before ours or after it depending on who placed first, which
+        # the book does not say. Counting it as ahead is the reading that does
+        # not flatter us, and it is what reconcile already does.
+        above = [o for o in rivals if float(o["price"]) >= price]
         top = max((float(o["price"]) for o in rivals), default=0.0)
         ahead = sum(int(o.get("qty") or 1) for o in above)
         rows.append({
@@ -1295,13 +1301,25 @@ def api_analysis_positions():
             "placed_at": row["placed_at"], "note": row["note"],
             "top": top, "ahead": ahead,
             "first": ahead == 0,
+            # Whether the book actually names our order. When it does there is
+            # nothing to guess at; when it does not, ours was matched by price
+            # and bounds and a rival at the same price could be taken for it.
+            "seen_in_book": bool(row["remote_id"]) and any(
+                str(o.get("order_id") or "") == str(row["remote_id"])
+                for o in raw_books.get(item_id, [])),
             "swept_at": book[0]["fetched_at"] if book else None,
             "book": len(book),
         })
     rows.sort(key=lambda r: (r["first"], r["item"], r["float_min"]))
+    named = sum(1 for b in raw_books.values() for o in b if o.get("order_id"))
+    total = sum(len(b) for b in raw_books.values())
     return jsonify({
         "orders": rows,
         "outbid": sum(1 for r in rows if not r["first"]),
+        # One sweep answers it: if the book names its orders we can point at
+        # ours exactly, and the price-and-bounds guess retires.
+        "book_named": named,
+        "book_rows": total,
         "checking": bool(db.pending_order_requests()),
         "test_amend": _json_setting(db, "amend_probe_result"),
         "test_pending": bool(db.get_setting("amend_probe_request")),

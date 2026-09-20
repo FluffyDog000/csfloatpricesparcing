@@ -118,11 +118,30 @@ def strip_own(book: Sequence[dict], ours: Sequence[dict]) -> list[dict]:
     wait to fill doubles, and the defence answers an outbid that never
     happened.
 
-    Orders carry no id in the book, so ours are found by price and bounds -
-    one entry removed per order held, never more. A real rival standing at
-    exactly our price and exactly our range would be dropped instead of ours,
-    which undercounts by one; counting ourselves overcounts by one every time.
+    When the book names its orders, ours are recognised outright: every order
+    the bot places records the id CSFloat answered with. Only what is left
+    over falls back to matching on price and bounds - one entry removed per
+    order held, never more. That fallback is a guess a rival standing at
+    exactly our price and range defeats, which undercounts by one; counting
+    ourselves overcounts by one every time, so the guess is the better of the
+    two and the id is better than either.
     """
+    ours = list(ours)
+    mine = {str(r["remote_id"]) for r in ours
+            if r.get("remote_id") not in (None, "")}
+    by_id, rest = [], []
+    for row in book:
+        rid = row.get("id")
+        if rid is not None and str(rid) in mine:
+            by_id.append(str(rid))
+            continue
+        rest.append(row)
+    if by_id:
+        # Whatever was matched by id needs no guessing at, and the orders it
+        # accounted for must not be subtracted a second time.
+        ours = [r for r in ours if str(r.get("remote_id") or "") not in by_id]
+        book = rest
+    
     def key(row, price_field="price"):
         def num(v, default):
             try:

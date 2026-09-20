@@ -120,3 +120,62 @@ def test_refresh_queues_a_book_read_for_every_item_we_hold():
     pending = {r["market_hash_name"] for r in db.pending_order_requests()}
     db.close()
     assert pending == set(body["queued"]), "the collector does the fetching"
+
+
+def test_an_order_the_book_names_is_matched_by_id():
+    """Every order the bot places records the id CSFloat answered with. If the
+    book gives ids too, ours is pointed at rather than guessed at - and a
+    rival standing at our exact price stops being mistakable for it."""
+    c = _app()
+    db = _db()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.15, 0.17, 100.0, 120.0, state="live",
+                        remote_id="r1")
+    db.replace_buy_orders(item_id, [
+        {"id": "r1", "price": 100.0, "qty": 1,
+         "float_min": 0.15, "float_max": 0.17},
+        {"id": "z9", "price": 100.0, "qty": 1,
+         "float_min": 0.15, "float_max": 0.17}])
+    db.close()
+
+    body = c.get("/api/analysis/positions").get_json()
+    row = body["orders"][0]
+    assert row["seen_in_book"], "ours is named in the book"
+    assert not row["first"], "and the other one at our price is a real rival"
+    assert row["ahead"] == 0 or row["top"] == 100.0
+    assert body["book_named"] == 2 and body["book_rows"] == 2
+
+
+def test_a_book_without_ids_says_so():
+    c = _app()
+    db = _db()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.15, 0.17, 100.0, 120.0, state="live",
+                        remote_id="r1")
+    db.replace_buy_orders(item_id, [
+        {"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}])
+    db.close()
+
+    body = c.get("/api/analysis/positions").get_json()
+    assert body["book_named"] == 0 and body["book_rows"] == 1
+    assert not body["orders"][0]["seen_in_book"]
+
+
+def test_an_older_database_gains_the_column_rather_than_failing():
+    """buy_orders predates the id, so an install upgrading into this has a
+    table without the column."""
+    import sqlite3
+
+    path = os.path.join(tempfile.mkdtemp(), "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE buy_orders (item_id INTEGER, price REAL, "
+                 "qty INTEGER, float_min REAL, float_max REAL, "
+                 "paint_seed INTEGER, position INTEGER, fetched_at TEXT)")
+    conn.commit()
+    conn.close()
+
+    from src.db import Database
+    db = Database(path)
+    cols = {r[1] for r in db.conn.execute("PRAGMA table_info(buy_orders)")}
+    assert "order_id" in cols
+    db.close()

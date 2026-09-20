@@ -212,6 +212,7 @@
     t.className = "stat journal";
     t.innerHTML = `<thead><tr><th>предмет</th><th>float</th><th>наша цена</th>
       <th>потолок</th><th>верх стакана</th><th>положение</th>
+      <th title="как бот отличил наш ордер от чужих в стакане">узнан</th>
       <th>стакан читан</th></tr></thead>`;
     const tb = document.createElement("tbody");
     rows.forEach((r) => {
@@ -233,6 +234,8 @@
         : r.first ? "мы первые"
         : `перебили: впереди ${r.ahead} на ${money(r.top)}`,
         r.first ? "" : "err");
+      cell(!r.book ? "—" : r.seen_in_book ? "по id" : "по цене и float",
+        r.seen_in_book ? "" : "muted");
       cell(r.swept_at ? when(r.swept_at) : "—", "mono");
       tb.appendChild(tr);
     });
@@ -241,9 +244,16 @@
 
     const note = $("p-note");
     note.className = d.outbid ? "err" : "muted";
-    note.textContent = d.outbid
+    note.textContent = (d.outbid
       ? `Перебили ${d.outbid} из ${rows.length}.`
-      : `Все ${rows.length} впереди своих стаканов.`;
+      : `Все ${rows.length} впереди своих стаканов.`)
+      + (d.book_rows
+        ? (d.book_named
+          ? ` Стакан называет ордера (${d.book_named} из ${d.book_rows}) — `
+            + "свои узнаём точно."
+          : " Стакан ордера не называет — свои приходится отличать по цене "
+            + "и границам float.")
+        : "");
     if (d.test_pending) {
       note.className = "muted";
       note.textContent = "Проверка правки поставлена в очередь, жду сборщик…";

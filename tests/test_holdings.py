@@ -147,3 +147,60 @@ def test_holding_nothing_leaves_the_book_alone():
 
     book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     assert strip_own(book, []) == book
+
+
+def test_an_order_named_in_the_book_is_recognised_outright():
+    """Every order the bot places records the id CSFloat answered with, so
+    when the book names its orders there is nothing to guess at."""
+    from src.holdings import strip_own
+
+    book = [{"id": "r1", "price": 100.0, "qty": 1,
+             "float_min": 0.15, "float_max": 0.17},
+            {"id": "z9", "price": 100.0, "qty": 1,
+             "float_min": 0.15, "float_max": 0.17}]
+    mine = [{"remote_id": "r1", "price": 100.0,
+             "float_min": 0.15, "float_max": 0.17}]
+
+    left = strip_own(book, mine)
+    assert [r["id"] for r in left] == ["z9"], \
+        "the rival at our exact price stays; only ours goes"
+
+
+def test_a_book_without_ids_still_falls_back_to_price_and_bounds():
+    from src.holdings import strip_own
+
+    book = [{"price": 100.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
+    mine = [{"remote_id": "r1", "price": 100.0,
+             "float_min": 0.15, "float_max": 0.17}]
+    assert strip_own(book, mine) == []
+
+
+def test_an_order_matched_by_id_is_not_subtracted_twice():
+    """Otherwise one held order removes two entries: its own, and a rival's
+    that happens to look like it."""
+    from src.holdings import strip_own
+
+    book = [{"id": "r1", "price": 100.0, "qty": 1,
+             "float_min": 0.15, "float_max": 0.17},
+            {"id": "z9", "price": 100.0, "qty": 1,
+             "float_min": 0.15, "float_max": 0.17}]
+    mine = [{"remote_id": "r1", "price": 100.0,
+             "float_min": 0.15, "float_max": 0.17}]
+    assert len(strip_own(book, mine)) == 1
+
+
+def test_ids_and_guesswork_can_be_mixed():
+    """One order placed before ids were read, one after."""
+    from src.holdings import strip_own
+
+    book = [{"id": "r1", "price": 100.0, "qty": 1,
+             "float_min": 0.15, "float_max": 0.17},
+            {"id": "q2", "price": 80.0, "qty": 1,
+             "float_min": 0.20, "float_max": 0.22},
+            {"id": "z9", "price": 70.0, "qty": 1,
+             "float_min": 0.30, "float_max": 0.32}]
+    mine = [{"remote_id": "r1", "price": 100.0,
+             "float_min": 0.15, "float_max": 0.17},
+            {"remote_id": "", "price": 80.0,
+             "float_min": 0.20, "float_max": 0.22}]
+    assert [r["id"] for r in strip_own(book, mine)] == ["z9"]

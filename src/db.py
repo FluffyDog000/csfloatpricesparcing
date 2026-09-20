@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS buy_orders (
     item_id             INTEGER NOT NULL REFERENCES items(id),
+    order_id            TEXT,               -- CSFloat's id, when the book gives one
     price               REAL    NOT NULL,   -- USD
     qty                 INTEGER NOT NULL DEFAULT 1,
     float_min           REAL,               -- set for float-scoped orders
@@ -232,6 +233,16 @@ class Database:
             # Measured response size, so the dashboard can report real traffic
             # instead of a guess (it is what a metered proxy bills for).
             self.conn.execute("ALTER TABLE poll_log ADD COLUMN response_bytes INTEGER")
+
+        book_cols = {
+            r["name"]
+            for r in self.conn.execute("PRAGMA table_info(buy_orders)").fetchall()
+        }
+        if "order_id" not in book_cols:
+            # CSFloat's own id for an order in the book, when it gives one.
+            # With it our orders are recognisable outright rather than guessed
+            # at by price and bounds.
+            self.conn.execute("ALTER TABLE buy_orders ADD COLUMN order_id TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -432,10 +443,12 @@ class Database:
         now = utcnow_iso()
         self.conn.execute("DELETE FROM buy_orders WHERE item_id = ?", (item_id,))
         self.conn.executemany(
-            "INSERT INTO buy_orders (item_id, price, qty, float_min, float_max, "
-            "paint_seed, position, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [(item_id, o["price"], o.get("qty") or 1, o.get("float_min"),
-              o.get("float_max"), o.get("paint_seed"), i, now)
+            "INSERT INTO buy_orders (item_id, order_id, price, qty, float_min, "
+            "float_max, paint_seed, position, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [(item_id, o.get("id"), o["price"], o.get("qty") or 1,
+              o.get("float_min"), o.get("float_max"), o.get("paint_seed"),
+              i, now)
              for i, o in enumerate(orders)],
         )
         self.conn.commit()
@@ -621,9 +634,9 @@ class Database:
 
     def buy_orders(self, item_id: int) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT price, qty, float_min, float_max, paint_seed, fetched_at "
-            "FROM buy_orders WHERE item_id = ? ORDER BY position", (item_id,)
-        ).fetchall()
+            "SELECT order_id, price, qty, float_min, float_max, paint_seed, "
+            "fetched_at FROM buy_orders WHERE item_id = ? ORDER BY position",
+            (item_id,)).fetchall()
         return [dict(r) for r in rows]
 
     def get_active_items(self) -> list[dict[str, Any]]:
