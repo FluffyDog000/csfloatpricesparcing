@@ -576,6 +576,122 @@ class Collector:
                  " (вхолостую)" if dry else "")
         return summary
 
+    def sync_our_orders(self) -> dict:
+        """Read the account's buy orders and make our record agree with it.
+
+        our_orders is the bot's own bookkeeping, and bookkeeping is not truth:
+        an order can leave CSFloat without the bot doing anything - taken down
+        by hand from the site, or filled - and nothing here would change. The
+        dashboard then reports standing orders that do not exist, the capital
+        limit reserves money that is free, and the defence tends positions
+        that are gone.
+
+        Runs before every defence pass for that reason, and on demand.
+        """
+        import json as _json
+
+        from .holdings import (ADOPTED, FILLED, GONE, REPRICED,
+                               reconcile_holdings, summary)
+        from .placement import PLACEMENT_KEY, load, parse_order_list
+
+        result: dict[str, Any] = {"at": utcnow_iso(), "error": "",
+                                  "changes": [], "counts": {}, "seen": 0}
+        spec = load(self.db.get_setting(PLACEMENT_KEY))
+        if not spec.list_path:
+            result["error"] = ("не настроен запрос списка ордеров — нужен путь "
+                               "вроде /api/v1/buy-orders")
+            self.db.set_setting("orders_sync_result",
+                                _json.dumps(result, ensure_ascii=False))
+            return result
+
+        url = self.config.http.base_url.rstrip("/") + spec.list_path
+        self.client.pool.pin(for_orders=True)
+        try:
+            payload = self.client.fetch_json(url)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised on
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            log.warning("Could not read our buy orders: %s", exc)
+            self.db.set_setting("orders_sync_result",
+                                _json.dumps(result, ensure_ascii=False))
+            return result
+        finally:
+            self.client.pool.unpin()
+
+        theirs = parse_order_list(payload)
+        result["seen"] = len(theirs)
+
+        ours = []
+        for row in self.db.our_orders():
+            row = dict(row)
+            row["market_hash_name"] = self.db.item_name(int(row["item_id"]))
+            ours.append(row)
+
+        changes = reconcile_holdings(ours, theirs)
+        result["counts"] = summary(changes)
+
+        for change in changes:
+            if change.kind == GONE:
+                self.db.set_our_order_state(
+                    int(change.ours["id"]), "gone", change.detail)
+                self._note_holding(change, "cancel")
+            elif change.kind == FILLED:
+                self.db.set_our_order_state(
+                    int(change.ours["id"]), "filled", change.detail)
+                self._note_holding(change, "fill")
+            elif change.kind == REPRICED:
+                # The site wins: a price standing there that we did not write
+                # down is our record being wrong, not CSFloat.
+                self.db.set_our_order_price(
+                    int(change.ours["id"]), float(change.theirs["price"]),
+                    change.detail)
+                self._note_holding(change, "raise")
+            elif change.kind == ADOPTED:
+                item_id = self.db.get_item_id(change.name) if change.name else None
+                if item_id is None:
+                    change.detail += " · предмет не отслеживается, пропущен"
+                else:
+                    price = float(change.theirs.get("price") or 0.0)
+                    self.db.upsert_our_order(
+                        item_id,
+                        float(change.theirs.get("float_min") or 0.0),
+                        float(change.theirs.get("float_max") or 1.0),
+                        price, price,
+                        # Not "live": the bot did not choose this price and has
+                        # no ceiling for it, so the defence must not start
+                        # amending or withdrawing someone else's order.
+                        state="manual",
+                        remote_id=change.theirs.get("remote_id"),
+                        note="поставлен вручную — бот его не ведёт")
+                self._note_holding(change, "place")
+            if change.kind != "matched":
+                result["changes"].append(change.as_dict())
+
+        self.db.set_setting("orders_sync_result",
+                            _json.dumps(result, ensure_ascii=False))
+        self.db.set_setting("orders_sync_at", result["at"])
+        if result["changes"]:
+            log.info("Order sync: %s", result["counts"])
+        return result
+
+    def _note_holding(self, change, kind: str) -> None:
+        """One journal line per difference the account turned out to have."""
+        row = change.ours or {}
+        site = change.theirs or {}
+        try:
+            self.db.record_order_event(
+                name=change.name or "?", kind=kind, ok=True, dry=False,
+                source="sync",
+                item_id=row.get("item_id")
+                or (self.db.get_item_id(change.name) if change.name else None),
+                float_min=row.get("float_min", site.get("float_min")),
+                float_max=row.get("float_max", site.get("float_max")),
+                price=site.get("price", row.get("price")),
+                was=row.get("price") if change.kind == "repriced" else None,
+                remote_id=row.get("remote_id") or site.get("remote_id"),
+                reason=change.detail, detail="сверка с аккаунтом")
+        except Exception as exc:  # noqa: BLE001 - the sync matters more
+            log.warning("Could not write the order journal: %s", exc)
+
     def defend_orders(self) -> dict | None:
         """Look at the orders we hold and answer what has happened to them.
 
@@ -595,6 +711,11 @@ class Collector:
         from .pricing import evaluate
         from .sender import Sender
         from .settings import dry_run, limits as read_limits, params as read_params
+
+        # Before anything else: an order taken down from the site by hand is
+        # still in our table, and defending it would read the book, find us
+        # outbid, and amend an order that is not there.
+        self.sync_our_orders()
 
         held = self.db.our_orders()
         if not held:

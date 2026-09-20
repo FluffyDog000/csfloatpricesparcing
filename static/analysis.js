@@ -459,6 +459,29 @@
       : "Запрос постановки настроен. Выставление всё равно выполняется вручную.";
     state.className = blocks.length ? "err" : "ok";
 
+    // Not a blocker, but it changes what the numbers below mean: "we hold
+    // four orders" is a different claim from "the account holds four", and
+    // until they have been compared only the first one is true.
+    const warn = $("plan-sync");
+    if (warn) {
+      if (!d.sync_at) {
+        warn.className = "err";
+        warn.textContent = "Ордера ни разу не сверялись с аккаунтом — снятое "
+          + "вручную всё ещё числится, и бюджет держит деньги под него. "
+          + "Вкладка «Журнал» → «Сверить с аккаунтом».";
+      } else if (d.sync && d.sync.error) {
+        warn.className = "err";
+        warn.textContent = "Последняя сверка с аккаунтом не удалась: "
+          + d.sync.error;
+      } else {
+        warn.className = "muted";
+        warn.textContent = "Сверено с аккаунтом "
+          + String(d.sync_at).slice(0, 16).replace("T", " ")
+          + ((d.sync && d.sync.seen !== undefined)
+            ? ` · на аккаунте ${d.sync.seen} ордер(ов)` : "");
+      }
+    }
+
     if (!d.actions.length) {
       box.innerHTML = '<p class="muted">Действий нет.</p>';
       return;

@@ -980,6 +980,10 @@ def api_analysis_plan():
         "placement": describe(spec),
         "can_place": spec.can_place,
         "can_cancel": spec.can_cancel,
+        # Whether the held figures above were checked against the account, or
+        # are only what the bot wrote down. They are not the same claim.
+        "sync_at": db.get_setting("orders_sync_at") or None,
+        "sync": _json_setting(db, "orders_sync_result"),
     })
 
 
@@ -1144,13 +1148,40 @@ def api_analysis_journal():
         nm = db.item_name(int(row["item_id"]))
         if nm:
             by_name[nm] = nm
+    # Counted apart: an order the bot placed and one it merely found are not
+    # the same thing, and only the first is one it will defend.
+    managed = [r for r in live if r["state"] in ("planned", "live")]
+    manual = db.our_orders(live_only=False)
+    manual = [r for r in manual if r["state"] == "manual"]
     return jsonify({
         "events": events,
-        "held": len(live),
+        "held": len(managed),
+        "manual": len(manual),
+        "sync": _json_setting(db, "orders_sync_result"),
+        "sync_at": db.get_setting("orders_sync_at") or None,
+        "sync_pending": db.get_setting("orders_sync_requested") == "1",
         "items": sorted({e["market_hash_name"] for e in events}),
         "defend": defending(db),
         "defend_minutes": defend_minutes(db),
         "defend_at": db.get_setting("defend_last_at") or None,
+    })
+
+
+@app.route("/api/analysis/sync", methods=["POST"])
+def api_analysis_sync():
+    """Ask the collector to compare our record against the account.
+
+    The web process never talks to CSFloat - the collector owns the routes and
+    the cookie - so this sets the request and the page waits for the answer,
+    the same contract the book sweep uses."""
+    _require_admin()
+    db = get_db()
+    db.set_setting("orders_sync_requested", "1")
+    waiting = _why_waiting(db)
+    return jsonify({
+        "queued": True, "waiting": waiting,
+        "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
+                "Сверяю с аккаунтом — ответ через несколько секунд.",
     })
 
 

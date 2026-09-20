@@ -221,6 +221,33 @@ def parse_order(payload: Any) -> dict[str, Any] | None:
     }
 
 
+def parse_order_list(payload: Any) -> list[dict[str, Any]]:
+    """Every buy order in a listing reply, whatever it is wrapped in.
+
+    CSFloat's collection endpoints have been seen returning a bare array and
+    an object with the rows under `data`; a paginated one would use `orders`
+    or `results`. Reading one shape and treating the others as empty would say
+    "you hold nothing" to an account that holds plenty - which is exactly the
+    answer that makes the bot place everything a second time.
+    """
+    rows: Any = payload
+    if isinstance(payload, dict):
+        for key in ("data", "orders", "results", "items", "buy_orders"):
+            if isinstance(payload.get(key), list):
+                rows = payload[key]
+                break
+        else:
+            rows = [payload] if payload.get("id") else []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        parsed = parse_order(row)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
 def describe(spec: Spec) -> str:
     """One line for the dashboard: what is configured and what is missing."""
     if not spec.can_place:

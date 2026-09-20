@@ -7,6 +7,9 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  function token() {
+    try { return localStorage.getItem("csfloat_admin_token") || ""; } catch (e) { return ""; }
+  }
   const cash = (v) => (v === null || v === undefined) ? "—" : "$" + v.toFixed(2);
 
   const KIND = {
@@ -48,6 +51,7 @@
     });
     const tiles = [
       ["ордеров стоит", d.held],
+      ["чужих/ручных", d.manual || 0],
       ["поставлено", counts.place || 0],
       ["перебито", counts.raise || 0],
       ["снято", counts.cancel || 0],
@@ -122,6 +126,39 @@
     box.appendChild(t);
   }
 
+  /** What the last comparison with the account found. */
+  function syncState(d) {
+    const el = $("j-sync-state");
+    if (!el) return;
+    el.className = "muted";
+    if (d.sync_pending) {
+      el.textContent = "Сверка поставлена в очередь, жду сборщик…";
+      return;
+    }
+    const s = d.sync;
+    if (!s) {
+      el.textContent = "С аккаунтом ещё не сверялись — нажми «Сверить с "
+        + "аккаунтом». До этого счётчик слева показывает то, что бот записал "
+        + "себе, а не то, что стоит на сайте.";
+      return;
+    }
+    if (s.error) {
+      el.className = "err";
+      el.textContent = "Сверка не удалась: " + s.error;
+      return;
+    }
+    const c = s.counts || {};
+    const bits = [];
+    if (c.matched) bits.push(`${c.matched} совпало`);
+    if (c.gone) bits.push(`${c.gone} нет на сайте`);
+    if (c.filled) bits.push(`${c.filled} исполнено`);
+    if (c.repriced) bits.push(`${c.repriced} с другой ценой`);
+    if (c.adopted) bits.push(`${c.adopted} не наших`);
+    el.textContent = `Сверено ${when(d.sync_at)}: на аккаунте ${s.seen} `
+      + `ордер(ов)` + (bits.length ? " — " + bits.join(", ") : "") + ".";
+    if (c.gone || c.adopted) el.className = "err";
+  }
+
   function state(d) {
     const el = $("j-state");
     if (!el) return;
@@ -153,6 +190,7 @@
       });
       summary(d);
       state(d);
+      syncState(d);
       table(d.events);
       say(d.events.length
         ? `${d.events.length} записей.` : "Записей нет.", "ok");
@@ -163,6 +201,27 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     $("j-reload").onclick = load;
+    $("j-sync").onclick = async () => {
+      const btn = $("j-sync");
+      btn.disabled = true;
+      say("Ставлю сверку в очередь…");
+      try {
+        const r = await postJSON("/api/analysis/sync", {}, token());
+        say(r.note);
+        // The collector answers on its own schedule; poll rather than guess.
+        for (let i = 0; i < 20; i++) {
+          await new Promise((res) => setTimeout(res, 3000));
+          const d = await getJSON("/api/analysis/journal?limit=1");
+          if (!d.sync_pending) { await load(); return; }
+        }
+        say("Сборщик не ответил за минуту — посмотри «Нагрузка», "
+          + "не на паузе ли он.", "err");
+      } catch (e) {
+        say("Ошибка — " + ((e && e.message) || e), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
     $("j-limit").onchange = load;
     $("j-item").onchange = load;
     $("j-dry").onchange = load;

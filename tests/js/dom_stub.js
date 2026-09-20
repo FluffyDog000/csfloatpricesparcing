@@ -95,10 +95,12 @@ vm.runInThisContext(source, { filename: "page.js" });
     journalRows: tableOf("j-table"),
     tiles: (nodes["j-summary"] || el("div")).children.length,
     defence: (nodes["j-state"] || el("div")).textContent,
+    sync: (nodes["j-sync-state"] || el("div")).textContent,
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,
     funnel: (nodes["an-funnel"] || el("div")).children.length,
+    planSync: (nodes["plan-sync"] || el("div")).textContent,
     step: (nodes["p-step"] || el("div")).value,
     budget: (nodes["l-total"] || el("div")).value,
   }));

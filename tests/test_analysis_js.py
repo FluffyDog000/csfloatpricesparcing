@@ -321,3 +321,53 @@ def test_each_item_report_collapses():
     assert 'createElement("details")' in body, \
         "one open panel per item is the layout that made the tab unusable"
     assert 'createElement("summary")' in body
+
+
+def test_the_journal_says_the_count_is_unverified_until_it_is():
+    """Four orders were placed and all four taken down from the site by hand.
+    The tile went on saying four. Until a comparison has run, the page has to
+    say the number is our own record rather than the account's."""
+    got = _run_script("static/journal.js",
+                      {"events": [], "held": 4, "manual": 0, "items": [],
+                       "defend": False, "defend_minutes": 60, "defend_at": None,
+                       "sync": None, "sync_at": None, "sync_pending": False})
+    assert "не сверялись" in got["sync"]
+    assert "бот записал себе" in got["sync"]
+
+
+def test_the_journal_reports_what_the_comparison_found():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 0, "manual": 1, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
+        "sync": {"seen": 1, "error": "",
+                 "counts": {"gone": 4, "filled": 0, "repriced": 0,
+                            "adopted": 1, "matched": 0}},
+    })
+    assert "4 нет на сайте" in got["sync"]
+    assert "1 не наших" in got["sync"]
+    assert got["tiles"] >= 6, "the manual tile must render too"
+
+
+def test_a_failed_comparison_is_not_reported_as_agreement():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 4, "manual": 0, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
+        "sync": {"seen": 0, "error": "не настроен запрос списка ордеров",
+                 "counts": {}},
+    })
+    assert "не удалась" in got["sync"] and "не настроен" in got["sync"]
+
+
+def test_an_unverified_holding_count_is_flagged_without_blocking_placement():
+    """Not being sure the orders are still there does not stop the bot placing
+    new ones - but it does change what the held figures mean, and the two must
+    not be said in the same sentence."""
+    from tests.test_analysis_page import _app
+
+    c = _app()
+    result = _run(_api(c))
+    assert "сверялись" in result["planSync"]
+    assert "сверялись" not in result.get("status", ""), \
+        "a warning is not a blocker"

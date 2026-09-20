@@ -178,6 +178,15 @@ def run_forever(collector: Collector) -> None:
             # was approved against a book that is already minutes old.
             collector.apply_pending_actions()
 
+            # "Are the orders we think we hold actually there." Asked on
+            # demand, and by the defence before every pass.
+            if collector.db.get_setting("orders_sync_requested") == "1":
+                collector.db.set_setting("orders_sync_requested", "0")
+                try:
+                    collector.sync_our_orders()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Order sync failed: %s", exc)
+
             # Defence on its own clock. Off unless turned on, and it may only
             # amend or withdraw - opening a position stays a decision made by
             # hand, because a loop that can also open them can spend the whole

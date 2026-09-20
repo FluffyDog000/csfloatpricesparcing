@@ -22,9 +22,15 @@
       <input type="checkbox" id="j-dry" checked> показывать холостые
     </label>
     <button class="btn" id="j-reload">Обновить</button>
+    <button class="btn primary" id="j-sync">Сверить с аккаунтом</button>
   </div>
+  <p class="muted">Сверка спрашивает у CSFloat, какие ордера реально стоят, и
+  приводит запись бота в соответствие: снятые вручную перестают числиться,
+  исполненные помечаются, поставленные руками становятся видны (но бот их не
+  ведёт). Защита делает это сама перед каждой проверкой.</p>
   <div class="muted" id="j-note"></div>
   <div class="muted" id="j-state"></div>
+  <div class="muted" id="j-sync-state"></div>
 </section>
 
 <section class="settings-block">

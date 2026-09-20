@@ -568,6 +568,17 @@ class Database:
         self.conn.commit()
         return int(cur.lastrowid)
 
+    def set_our_order_price(self, order_id: int, price: float,
+                            note: str | None = None) -> None:
+        """Take the site's price for one of our rows. The account is the
+        authority: an order standing at a price we did not write down is our
+        record being wrong, not the site."""
+        self.conn.execute(
+            "UPDATE our_orders SET price = ?, note = COALESCE(?, note), "
+            "updated_at = ? WHERE id = ?",
+            (price, note, utcnow_iso(), order_id))
+        self.conn.commit()
+
     def set_our_order_state(self, order_id: int, state: str,
                             note: str | None = None) -> None:
         self.conn.execute(
