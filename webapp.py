@@ -1216,11 +1216,6 @@ def load_page():
     return render_template("load.html")
 
 
-@app.route("/calc")
-def calc_page():
-    return render_template("calc.html")
-
-
 @app.route("/analysis")
 def analysis_page():
     return render_template("analysis.html",

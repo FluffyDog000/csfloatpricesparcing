@@ -25,7 +25,7 @@
 <section class="settings-block">
   <details>
     <summary>Пороги расчёта</summary>
-    <div class="calc-grid analysis-params">
+    <div class="field-grid analysis-params">
       <label>комиссия CSFloat при продаже, %
         <input type="number" id="p-fee" class="input" step="0.1" min="0" max="20" value="2">
         <small class="muted">обычно 2</small></label>
@@ -61,7 +61,7 @@
         <small class="muted">меньше — медиана ничего не значит</small></label>
     </div>
     <h3>Лимиты капитала</h3>
-    <div class="calc-grid analysis-params">
+    <div class="field-grid analysis-params">
       <label>всего в ордерах, $
         <input type="number" id="l-total" class="input" step="10" min="0" value="0">
         <small class="muted">0 — ничего не выставляется</small></label>
@@ -90,7 +90,7 @@
       пока выведены по форме — проверь в DevTools → Network, прежде чем
       сохранять. Без отмены нельзя уйти с позиции, которую перебили выше
       потолка. Ничего не отправляется, пока не нажата «Сохранить запрос».</p>
-    <div class="calc-grid analysis-params" id="place-fields"></div>
+    <div class="field-grid analysis-params" id="place-fields"></div>
     <button class="btn" id="place-save">Сохранить запрос</button>
     <button class="btn" id="place-suggest">Подставить выведенные</button>
     <div class="muted" id="place-msg"></div>

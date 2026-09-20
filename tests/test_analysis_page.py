@@ -548,3 +548,16 @@ def test_a_body_that_cannot_render_shows_the_reason_not_a_blank():
     got = c.get("/api/analysis/placement").get_json()
     assert "ошибка" in got["preview"]["создание"]
     assert "pennies" in got["preview"]["создание"]["ошибка"]
+
+
+def test_the_calculator_is_gone_entirely():
+    """Removed on request: it duplicated the analysis tab's arithmetic without
+    knowing about the order book, so two places answered "is this worth it"
+    and only one of them had the data."""
+    import pathlib
+
+    assert not pathlib.Path("templates/calc.html").exists()
+    assert not pathlib.Path("static/calc.js").exists()
+    assert "calc_page" not in pathlib.Path("webapp.py").read_text(encoding="utf-8")
+    base = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+    assert "Калькулятор" not in base, "a nav link to a route that is gone"

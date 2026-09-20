@@ -206,19 +206,12 @@ h2.collapsible .collapse-ind { color: var(--accent); font-size: 12px; }
 .orders .scoped { color: var(--accent); font-size: 11px; }
 .orders-hint { font-size: 11px; margin: 6px 0 18px; min-height: 14px; }
 
-/* Калькулятор */
-.calc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-             gap: 16px; }
-.calc-grid > label { display: flex; flex-direction: column; gap: 6px;
-                     font-size: 13px; color: var(--muted); }
-.calc-field { display: flex; gap: 6px; align-items: center; }
-.calc-field .input { flex: 1 1 auto; min-width: 0; }
-.calc-field .unit { color: var(--muted); font-size: 13px; }
+/* Сетка полей настроек */
+.field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+              gap: 16px; }
+.field-grid > label { display: flex; flex-direction: column; gap: 6px;
+                      font-size: 13px; color: var(--muted); }
 .cur-select { flex: 0 0 auto; }
-.calc-hint { margin-top: 14px; font-size: 12px; }
-.calc-result td:first-child { color: var(--muted); width: 42%; }
-.calc-result td:nth-child(2) { font-family: var(--mono); font-size: 18px; font-weight: 700; }
-.calc-result td:nth-child(3) { font-size: 12px; }
 .good-val { color: var(--good); }
 .bad-val { color: var(--bad); }
 .cur-btn { background: var(--panel2); color: var(--text); border: 1px solid var(--line);

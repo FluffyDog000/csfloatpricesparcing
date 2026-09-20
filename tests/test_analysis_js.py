@@ -102,7 +102,7 @@ def test_the_page_scripts_share_one_scope_without_colliding():
         return found
 
     common = declared("static/common.js")
-    for page in ("analysis.js", "index.js", "item.js", "load.js", "calc.js",
+    for page in ("analysis.js", "index.js", "item.js", "load.js",
                  "settings.js"):
         path = f"static/{page}"
         if not pathlib.Path(path).exists():
