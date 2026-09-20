@@ -1321,39 +1321,6 @@ def api_analysis_positions():
         "book_named": named,
         "book_rows": total,
         "checking": bool(db.pending_order_requests()),
-        "test_amend": _json_setting(db, "amend_probe_result"),
-        "test_pending": bool(db.get_setting("amend_probe_request")),
-    })
-
-
-@app.route("/api/analysis/test-amend", methods=["POST"])
-def api_analysis_test_amend():
-    """Ask the collector to amend one order to the price it already has.
-
-    The amend body was the last piece captured, and a captured request is
-    still only a guess about how the server reads it. This proves it without
-    risking anything: the price sent is the price standing, so a request that
-    works changes nothing and a request that does not says so in the reply.
-    """
-    _require_admin()
-    data = request.get_json(silent=True) or {}
-    db = get_db()
-    try:
-        order_id = int(data.get("order_id"))
-    except (TypeError, ValueError):
-        abort(400, description="order_id is required")
-    row = next((r for r in db.our_orders(live_only=False)
-                if int(r["id"]) == order_id), None)
-    if row is None:
-        abort(404, description="такого ордера у нас нет")
-    if not row["remote_id"]:
-        abort(400, description="у ордера нет id на сайте — нечего править")
-    db.set_setting("amend_probe_result", "")
-    db.set_setting("amend_probe_request", str(order_id))
-    return jsonify({
-        "queued": order_id, "waiting": _why_waiting(db),
-        "note": "Проверяю правку: шлю ту же цену, что стоит. "
-                "Ничего не изменится в любом случае.",
     })
 
 

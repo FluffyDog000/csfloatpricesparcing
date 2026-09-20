@@ -193,30 +193,10 @@
     const box = $("p-table");
     box.innerHTML = "";
     const rows = d.orders || [];
-    const probe = $("p-amend");
-    // A greyed-out button with no reason beside it reads as a missing button.
-    const why = (text) => {
-      probe.disabled = !!text;
-      probe.textContent = text
-        ? "Проверить правку цены — " + text : "Проверить правку цены";
-      probe.title = text || "";
-    };
     if (!rows.length) {
-      box.innerHTML = '<p class="muted">Ордеров нет. Поставь хотя бы один — '
-        + 'тогда можно будет проверить запрос правки цены.</p>';
-      why("нужен ордер на сайте");
+      box.innerHTML = '<p class="muted">Ордеров нет.</p>';
       return;
     }
-    // The probe amends a real order to the price it already has, so it needs
-    // one that exists on the site.
-    const live = rows.filter((r) => r.remote_id && r.state !== "manual");
-    probe.dataset.order = live.length ? live[0].id : "";
-    why(live.length ? "" : "ни один ордер не стоит на сайте");
-    if (live.length) {
-      probe.title = `Поднимет цену ордера «${live[0].item}» на шаг выше `
-        + `${money(live[0].price)} — настоящий перебив, цена изменится`;
-    }
-
     const t = document.createElement("table");
     t.className = "stat journal";
     t.innerHTML = `<thead><tr><th>предмет</th><th>float</th><th>наша цена</th>
@@ -263,20 +243,6 @@
           : " Стакан ордера не называет — свои приходится отличать по цене "
             + "и границам float.")
         : "");
-    if (d.test_pending) {
-      note.className = "muted";
-      note.textContent = "Проверка правки поставлена в очередь, жду сборщик…";
-    } else if (d.test_amend) {
-      const a = d.test_amend;
-      const line = document.createElement("div");
-      line.className = a.ok && a.confirmed ? "ok" : "err";
-      line.textContent = "Проверка правки: "
-        + (a.was !== undefined && a.price !== undefined
-          ? `${money(a.was)} → ${money(a.price)} · ` : "")
-        + (a.detail || "")
-        + (a.sent ? " · отправлено: " + JSON.stringify(a.sent) : "");
-      note.appendChild(line);
-    }
   }
 
   async function load() {
@@ -340,33 +306,6 @@
       }
     };
 
-    $("p-amend").onclick = async () => {
-      const btn = $("p-amend");
-      const id = btn.dataset.order;
-      if (!id) return;
-      // Said plainly: the whole point is that it moves. A confirmation that
-      // understated what the button does would be worse than none.
-      if (!confirm("Поднять цену ордера на шаг выше — это настоящий перебив, "
-        + "цена изменится. Если шаг вверх выше потолка, уйдёт вниз. "
-        + "Продолжить?")) return;
-      btn.disabled = true;
-      say("Проверяю запрос правки…");
-      try {
-        const r = await postJSON("/api/analysis/test-amend",
-          { order_id: Number(id) }, token());
-        say(r.note);
-        for (let i = 0; i < 20; i++) {
-          await new Promise((res) => setTimeout(res, 3000));
-          const d = await getJSON("/api/analysis/positions");
-          if (!d.test_pending) { positions(d); await load(); return; }
-        }
-        say("Сборщик не ответил за минуту — посмотри «Нагрузка».", "err");
-      } catch (e) {
-        say("Ошибка — " + ((e && e.message) || e), "err");
-      } finally {
-        btn.disabled = false;
-      }
-    };
     $("j-sync").onclick = async () => {
       const btn = $("j-sync");
       btn.disabled = true;

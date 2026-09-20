@@ -116,8 +116,6 @@ function deepText(node) {
       const body = t && t.children[0];
       return body ? body.children.length : 0;
     })(),
-    probeOff: (nodes["p-amend"] || el("div")).disabled,
-    probeLabel: (nodes["p-amend"] || el("div")).textContent,
     chips: (nodes["an-list"] || el("div")).children.length,
     listHtml: (nodes["an-list"] || el("div")).innerHTML,
     sections: (nodes["an-results"] || el("div")).children.length,

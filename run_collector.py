@@ -178,13 +178,6 @@ def run_forever(collector: Collector) -> None:
             # was approved against a book that is already minutes old.
             collector.apply_pending_actions()
 
-            # One amendment at the price already standing, to prove the
-            # captured request is read the way we think it is.
-            try:
-                collector.probe_amend()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Amend probe failed: %s", exc)
-
             # "Are the orders we think we hold actually there." Asked on
             # demand, and by the defence before every pass.
             if collector.db.get_setting("orders_sync_requested") == "1":
