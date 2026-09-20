@@ -263,7 +263,7 @@
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="10" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
       return tr;
     }
     tr.className = "band-take";
@@ -275,7 +275,7 @@
     // is the only thing that justifies it.
     const cheapWhy = (b.entry_monthly === null || b.entry_monthly === undefined)
       ? "по ней сделок нет"
-      : `по ней ${(b.entry_monthly * 100).toFixed(0)}%/мес`;
+      : `по ней набор ${days(b.entry_t_buy)}`;
     const why = (b.entry_monthly === null || b.entry_monthly === undefined)
       ? `по ${money(b.entry)} мы первые, но подходящих сделок почти нет`
       : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
@@ -294,12 +294,12 @@
           + `Погрешность ${(b.market_error * 100).toFixed(1)}%"` : ""
         }> ${b.priced_from}${b.borrowed ? " ±" + (b.market_error * 100).toFixed(0)
           + "%" : ""}</span></td>
-      <td>${pct(b.margin)}</td>
+      <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam.toFixed(2)}</td>
       <td>${days(b.t_buy)}</td>
-      <td title="набор ${days(b.t_buy)} + бан + продажа ${days(b.t_sell)}"
-        >${days(b.cycle)}</td>
-      <td><b>${(b.monthly * 100).toFixed(0)}%</b></td>`;
+      <td title="набор ${days(b.t_buy)} + бан + продажа ${days(b.t_sell)}${
+        b.monthly ? ` · в пересчёте ${(b.monthly * 100).toFixed(0)}%/мес` : ""}"
+        >${days(b.cycle)}</td>`;
     return tr;
   }
 
@@ -447,8 +447,8 @@
       const sum = document.createElement("p");
       sum.innerHTML = take.length
         ? `<b>${take.length}</b> ордер(ов) · капитал <b>${money(it.capital)}</b>`
-          + ` · ожидаемо <b>${money(it.monthly)}</b>/мес`
-          + ` (<b>${it.capital ? (it.monthly / it.capital * 100).toFixed(0) : 0}%</b>)`
+          + ` · прибыль за круг <b>${money(it.profit)}</b>`
+          + ` (<b>${it.capital ? (it.profit / it.capital * 100).toFixed(1) : 0}%</b>)`
         : "<b>Ни одной полосы не проходит.</b> Причина по каждой — в таблице.";
       sec.appendChild(sum);
 
@@ -458,9 +458,10 @@
         <th>float</th>
         <th title="минимальная цена, которая ставит нас первыми в полосе">минимум</th>
         <th>ставить</th><th>потолок</th><th>запас</th>
-        <th>рынок</th><th>маржа</th><th>λ/сут</th><th>набор</th>
+        <th>рынок</th>
+        <th title="что останется после комиссии, если продать по рынку">маржа</th>
+        <th>λ/сут</th><th>набор</th>
         <th title="весь круг: набор + торговый бан + продажа">круг</th>
-        <th>%/мес</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
       it.bands.forEach((b) => tb.appendChild(bandRow(b)));
@@ -812,7 +813,6 @@
     $("p-reach").value = p.max_reach;
     $("p-lock").value = p.trade_lock_days;
     $("p-locklist").checked = !!p.list_during_lock;
-    $("p-bidtol").value = Math.round(p.bid_tolerance * 100);
     $("p-sigma").value = p.sigma_k;
   }
 
@@ -1035,7 +1035,6 @@
         an_reach: $("p-reach").value,
         an_trade_lock: $("p-lock").value,
         an_list_locked: $("p-locklist").checked ? "1" : "0",
-        an_bid_tol: (parseFloat($("p-bidtol").value) || 0) / 100,
       an_sigma_k: $("p-sigma").value,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,

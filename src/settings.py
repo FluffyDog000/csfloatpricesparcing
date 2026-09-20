@@ -22,7 +22,7 @@ PARAM_BOUNDS = {
     "window_days": (1.0, 365.0), "band_step": (0.005, 0.23),
     "min_lambda": (0.0, 10.0), "min_wars": (0, 100),
     "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
-    "bid_tolerance": (0.0, 1.0), "sigma_k": (0.0, 5.0),
+    "sigma_k": (0.0, 5.0),
     "max_reach": (0.0, 0.5),
     "trade_lock_days": (0.0, 30.0),
 }
@@ -31,7 +31,7 @@ PARAM_KEYS = (
     ("an_window", "window_days", float), ("an_step", "band_step", float),
     ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
     ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
-    ("an_bid_tol", "bid_tolerance", float), ("an_sigma_k", "sigma_k", float),
+    ("an_sigma_k", "sigma_k", float),
     ("an_reach", "max_reach", float),
     ("an_trade_lock", "trade_lock_days", float),
 )

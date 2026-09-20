@@ -469,5 +469,9 @@ def test_the_table_shows_the_whole_cycle_not_just_the_fill():
     assert "b.cycle" in row
     header = source.split("<th>float</th>")[1][:600]
     assert "круг" in header
-    # A row that skips spans the table; a new column means a new span.
-    assert 'colspan="10"' in row, "the skipped-band row must span every column"
+    # A row that skips spans the table, so the span has to follow the columns.
+    # It has been wrong twice now: once when the cycle column arrived and once
+    # when the monthly column left.
+    headers = source.split("<th>float</th>")[1].split("</thead>")[0].count("<th")
+    span = int(row.split('colspan="')[1].split('"')[0])
+    assert span == headers, f"{span} columns spanned, {headers} exist"

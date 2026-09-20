@@ -235,15 +235,19 @@ def test_being_first_is_not_the_goal_getting_filled_is():
     orders = [{"price": 116.0, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
 
     band = plan(_sales(rows), orders, (0.27, 0.29),
-                params=Params(min_sample=5, bid_tolerance=0.0))[0]
+                params=Params(min_sample=5, min_lambda=0.3))[0]
     assert band.entry == 117.0, "a dollar over the book makes us first"
     assert band.bid == 122.0, "but the flow only starts well above that"
     assert band.lam > 0.3, "and that is what pays for the thinner margin"
 
 
-def test_the_cheapest_price_within_reach_of_the_best_is_preferred():
-    """Taking the maximum outright bid over the book for a couple of points
-    of turnover. Given the choice, keep the dollars and the headroom."""
+def test_the_scan_pays_no_more_than_the_filters_require():
+    """It used to take whichever price scored the best annualised return,
+    which bid dollars over the book for a couple of points of turnover - on
+    one glove $48.10 where $44.50 already led. Margin falls as the bid rises,
+    so taking the cheapest qualifying price is both the fattest margin and the
+    most headroom kept. How high it has to go at all is decided by the flow
+    the filters insist on, not by an appetite for turnover."""
     from src.pricing import Params, plan
 
     # Flow barely moves above the entry: one extra sale at $89, nothing after.
@@ -253,19 +257,16 @@ def test_the_cheapest_price_within_reach_of_the_best_is_preferred():
     orders = [{"price": 86.9, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
     sales = _sales(rows)
 
-    # No trade lock here: this is about the tolerance, and a week of dead time
-    # in the middle of every cycle flattens the speed the greedy bid buys.
-    greedy = plan(sales, orders, (0.27, 0.29),
-                  params=Params(min_sample=5, bid_tolerance=0.0,
-                                trade_lock_days=0.0))[0]
-    thrifty = plan(sales, orders, (0.27, 0.29),
-                   params=Params(min_sample=5, bid_tolerance=0.10,
-                                 trade_lock_days=0.0))[0]
+    band = plan(sales, orders, (0.27, 0.29), params=Params(min_sample=5))[0]
+    assert band.bid == 87.0 == band.entry, "nothing above the entry was needed"
 
-    assert greedy.bid == 89.0 and thrifty.bid == 87.0
-    assert thrifty.bid == thrifty.entry, "nothing above the entry earned its cost"
-    assert thrifty.wars > greedy.wars, "and the headroom is kept"
-    assert thrifty.monthly > greedy.monthly * 0.9, "for a couple of points"
+    # Insist on more flow and the scan has to climb - but only as far as that
+    # insistence reaches, and no further.
+    faster = plan(sales, orders, (0.27, 0.29),
+                  params=Params(min_sample=5, min_lambda=0.21))[0]
+    assert faster.bid == 89.0
+    assert faster.margin < band.margin, "speed is bought with margin"
+    assert band.wars > faster.wars, "and with headroom"
 
 
 def test_a_thin_band_borrows_from_its_neighbours_instead_of_being_dropped():
@@ -543,3 +544,40 @@ def test_a_lock_that_may_be_listed_through_runs_alongside_the_wait():
     assert overlapped.cycle < stacked.cycle
     assert overlapped.cycle == pytest.approx(
         stacked.cycle - min(stacked.t_sell, 7.0))
+
+
+def test_the_scan_takes_the_cheapest_price_that_clears_the_filters():
+    """Margin falls as the bid rises, so the cheapest qualifying price is the
+    fattest margin: the two rules are one rule. What decides how high it has
+    to go is the flow the filters insist on."""
+    from src.pricing import Params, plan
+
+    rows = [(90.0, 0.28, float(i % 20)) for i in range(6)]
+    rows += [(95.0, 0.28, float(i % 20)) for i in range(6)]
+    rows += [(130.0, 0.28, float(i % 20)) for i in range(20)]
+    orders = [{"price": 89.0, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
+    sales = _sales(rows)
+
+    slow = plan(sales, orders, (0.27, 0.29),
+                params=Params(min_sample=5, min_lambda=0.01))[0]
+    fast = plan(sales, orders, (0.27, 0.29),
+                params=Params(min_sample=5, min_lambda=0.3))[0]
+
+    assert slow.bid < fast.bid, "insisting on flow is what raises the bid"
+    assert slow.margin > fast.margin, "and margin is what pays for it"
+
+
+def test_nothing_in_the_scoring_reads_an_annualised_return_any_more():
+    """It decided which price to bid and which band to hold, and it was a
+    margin divided by a cycle built from a measured flow, an assumed sale rate
+    and a trade lock. The number is still reported; it no longer chooses."""
+    import inspect
+
+    from src import executor, pricing
+
+    # The bid is chosen on price. `entry_monthly` is still carried on the row
+    # afterwards, which is reporting, not choosing - so the selection line is
+    # what gets asserted rather than the whole block.
+    assert "min(found, key=lambda b: b.bid)" in inspect.getsource(pricing.evaluate)
+    assert "band.monthly" not in inspect.getsource(executor.rank)
+    assert "margin" in inspect.getsource(executor.rank)

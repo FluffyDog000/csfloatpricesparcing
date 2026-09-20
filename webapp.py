@@ -947,7 +947,9 @@ def api_analysis():
             "depth": len(depth),
             "bands": bands,
             "capital": round(sum(b["bid"] for b in take), 2),
-            "monthly": round(sum(b["bid"] * b["monthly"] for b in take), 2),
+            # What the orders would make once, not per month: the annualised
+            # figure divided a margin we trust by a cycle time we do not.
+            "profit": round(sum(b["bid"] * (b["margin"] or 0) for b in take), 2),
         })
     return jsonify({
         "items": out,

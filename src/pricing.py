@@ -83,11 +83,6 @@ class Params:
     # has too few of its own. Past this the neighbours are a different item in
     # all but name. 0 switches the borrowing off.
     max_reach: float = 0.05
-    # Raising the bid does buy flow - every listing at or under it executes
-    # against the order - but the last dollars of that often buy very little.
-    # Among prices that come within this fraction of the best return, take the
-    # cheapest: the difference is headroom kept and capital not risked.
-    bid_tolerance: float = 0.10
     # A bought item cannot be traded on straight away: CS2 holds it, and the
     # hold sits between the two halves of the trade. Nothing in the order book
     # or the sales history shows it, so it has to be stated - and left out, it
@@ -483,15 +478,15 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
                 entry_t_buy, 1.0 / lam_sell, p)
 
         if found:
-            # The cheapest price that still earns nearly the best return. The
-            # scan used to take the maximum outright, which bid dollars over
-            # the book for a few percent of turnover - on one glove $48.10
-            # where $44.50 made us first, spending the headroom to buy flow
-            # that was barely there.
-            peak = max(b.monthly or 0 for b in found)
-            floor_ = peak * (1.0 - p.bid_tolerance)
-            best = min((b for b in found if (b.monthly or 0) >= floor_),
-                       key=lambda b: b.bid)
+            # The cheapest price that passes. Margin falls as the bid rises,
+            # so the cheapest qualifying price is also the fattest margin, and
+            # the two rules are one rule.
+            #
+            # What decides how high we have to go is the flow the filters
+            # insist on - min_lambda and max_fill_days - not an appetite for
+            # turnover. Those are the speed controls now; this only refuses to
+            # pay more than they require.
+            best = min(found, key=lambda b: b.bid)
             best.entry_lam = entry_lam
             best.entry_t_buy = entry_t_buy
             best.entry_monthly = entry_monthly

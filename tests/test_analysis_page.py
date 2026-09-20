@@ -274,7 +274,9 @@ def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
     # The entry is measured even though it fails the filters - why it fails is
     # the answer to "why are we bidding over the book".
     assert band.entry_lam is not None and band.entry_lam < Params().min_lambda
-    assert band.entry_t_buy > band.t_buy * 5, "leading cheap means waiting"
+    # The gap is narrower than it was: the scan no longer pays for turnover,
+    # so the bid it chooses is itself the cheapest that clears the filters.
+    assert band.entry_t_buy > band.t_buy * 2, "leading cheap means waiting"
     assert band.entry_monthly < band.monthly
 
 

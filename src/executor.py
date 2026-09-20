@@ -138,19 +138,25 @@ def _key(row: Any) -> tuple[float, float]:
 def rank(band: Band) -> float:
     """What a band is worth, for choosing between them.
 
-    The lower end of the return rather than the estimate itself. Scoring three
-    hundred items means testing thousands of bands, and the ones that come out
-    on top are disproportionately the ones a small sample flattered: pick by
-    the point estimate and the winners are selected for luck as much as for
-    margin. A band whose median is well pinned down keeps most of its number;
-    one resting on eight sales gives most of it back.
+    Margin, discounted for how well the exit price is known. Not an annualised
+    return: that is margin divided by a cycle time built from a measured flow,
+    an assumed sale rate and a trade lock, and dividing a number we trust by
+    one we do not is how a band that fills in two days beat one that pays
+    twice as much. Whether a band fills fast enough at all is what the flow
+    filters are for, and they answer it before anything gets ranked.
+
+    The discount stays, and it is the whole reason this is not just `margin`.
+    Scoring three hundred items means testing thousands of bands, and the ones
+    that come out on top are disproportionately the ones a small sample
+    flattered. A band whose price is well pinned down keeps most of its
+    number; one resting on eight sales gives most of it back.
     """
-    if band.monthly is None:
+    if band.margin is None:
         return -1.0
-    # The return moves with the exit price, so the median's relative error
+    # The margin moves with the exit price, so the price's relative error
     # carries straight through to it.
     error = band.market_error if band.market_error is not None else 1.0
-    return band.monthly * max(0.0, 1.0 - RANK_Z * error)
+    return band.margin * max(0.0, 1.0 - RANK_Z * error)
 
 
 def select(bands: Sequence[Band], limits: Limits,

@@ -176,9 +176,9 @@ def test_selection_spends_the_allowed_budget_not_the_asked_one():
     assert len(got) == 3
 
 
-def _cand(item, lo, bid, monthly, error=0.0):
+def _cand(item, lo, bid, margin, error=0.0):
     return (item, Band(float_min=lo, float_max=lo + 0.02, bid=bid,
-                       ceiling=bid * 1.2, step=0.10, monthly=monthly,
+                       ceiling=bid * 1.2, step=0.10, margin=margin,
                        market_error=error, take=True))
 
 
@@ -237,7 +237,7 @@ def test_a_band_that_stopped_qualifying_is_not_kept_just_because_it_is_held():
     assert got == {}, "seeding the held is not a reason to hold a bad band"
 
 
-def test_ranking_discounts_a_return_resting_on_a_shaky_median():
+def test_ranking_discounts_a_margin_resting_on_a_shaky_price():
     """Testing thousands of bands means the top of the list is selected for
     luck as much as for margin."""
     from src.executor import rank, select_portfolio
@@ -251,3 +251,17 @@ def test_ranking_discounts_a_return_resting_on_a_shaky_median():
                            Limits(total_capital=100.0, max_orders=1,
                                   max_orders_per_item=1))
     assert list(got) == ["solid"]
+
+
+def test_bands_are_ranked_by_margin_not_by_how_fast_they_turn_over():
+    """An annualised return divides a margin we trust by a cycle time built
+    from a measured flow, an assumed sale rate and a trade lock. Dividing a
+    number we trust by one we do not is how a band filling in two days beat
+    one paying twice as much."""
+    from src.executor import rank
+
+    fat_and_slow = Band(float_min=0.1, float_max=0.12, bid=100.0, take=True,
+                        margin=0.20, monthly=0.30, market_error=0.0)
+    thin_and_fast = Band(float_min=0.2, float_max=0.22, bid=100.0, take=True,
+                         margin=0.05, monthly=0.90, market_error=0.0)
+    assert rank(fat_and_slow) > rank(thin_and_fast)
