@@ -447,3 +447,14 @@ def test_a_borrowed_price_is_labelled_as_borrowed():
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "b.borrowed" in row and "b.reach" in row
     assert "priced_from" in row
+
+
+def test_the_surcharge_says_what_the_cheap_price_would_have_earned():
+    """"Why bid over the book" has been asked twice from behind a tooltip.
+    The surcharge is only defensible by the number it buys, so that number is
+    in the table rather than on hover."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "cheapWhy" in row
+    assert "по ней сделок нет" in row, "the case where the minimum fills nothing"
+    assert "%/мес`" in row

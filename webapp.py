@@ -859,8 +859,8 @@ def api_analysis_sweep():
         "skipped": [{"item": n, "reason": r} for n, r in skipped],
         "note": (f"Обход начнётся, когда снимется пауза: {'; '.join(waiting)}"
                  if waiting else
-                 f"Обхожу стакан по {len(queued)} предмет(ам) — до минуты на "
-                 f"каждый."
+                 f"Обхожу обе стороны по {len(queued)} предмет(ам) — стакан и "
+                 f"листинги, до минуты на каждый."
                  + (f" Отсев по истории снял {saved} — это примерно "
                     f"{saved * 6} запросов, которые не придётся тратить."
                     if saved else "")),

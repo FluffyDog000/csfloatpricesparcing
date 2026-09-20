@@ -891,6 +891,30 @@ class Collector:
                 s["age_days"] = None
         return rows
 
+    def sweep_both_sides(self, name: str, item_id: int) -> dict:
+        """Read both halves of the market for one item.
+
+        A trade has a buy side and a sell side and the scoring needs both. With
+        only the order book, the exit price falls back to the sales median -
+        what the lot has gone for, rather than what it is going for - and that
+        median is almost always the higher of the two. Every ceiling is then
+        too high, and the bot bids over the book against a price nobody is
+        asking any more.
+
+        The two go through different budgets: the book through the cookie and
+        the residential route, the listings through the documented endpoint
+        and the API key. So they do not compete for quota, and one failing
+        does not cost the other.
+        """
+        out = {"orders": None, "depth": None}
+        out["orders"] = self.sweep_buy_orders(name, item_id)
+        try:
+            out["depth"] = self.sweep_listing_depth(name, item_id)
+        except Exception as exc:  # noqa: BLE001 - one half is not both
+            log.warning("Depth sweep for '%s' failed: %s", name, exc)
+            out["depth"] = {"error": f"{type(exc).__name__}: {exc}"}
+        return out
+
     def sweep_listing_depth(self, name: str, item_id: int) -> dict:
         """Read the sell side band by band: who you queue behind when you list.
 

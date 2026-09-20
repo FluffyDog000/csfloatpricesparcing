@@ -145,3 +145,66 @@ def test_a_wearless_item_is_not_swept_at_all():
     assert called == [], "no wear, no requests spent"
     assert result["error"] and result["bands"] == 0
     db.close()
+
+
+def _ready():
+    """A collector with one wearable item and no network."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    return Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling)), db, name, item_id
+
+
+def test_both_sides_are_swept_together():
+    """The sell-side sweep existed, was tested, and nothing ever called it -
+    so every item in the report read "листинги не собраны", the exit price
+    fell back to the sales median, and every ceiling came out too high.
+
+    A trade has two halves. Reading one of them is not a sweep."""
+    col, db, name, item_id = _ready()
+    called = []
+    col.sweep_buy_orders = lambda n, i: called.append(("orders", n, i))
+    col.sweep_listing_depth = lambda n, i: called.append(("depth", n, i))
+
+    col.sweep_both_sides(name, item_id)
+    assert [c[0] for c in called] == ["orders", "depth"]
+
+
+def test_one_half_failing_does_not_cost_the_other():
+    """Different budgets - the cookie and the residential route for the book,
+    the API key for the listings - so a limit on one says nothing about the
+    other."""
+    col, db, name, item_id = _ready()
+    done = []
+    col.sweep_buy_orders = lambda n, i: done.append("orders") or {"orders": 1}
+
+    def boom(n, i):
+        raise RuntimeError("HTTP 429")
+
+    col.sweep_listing_depth = boom
+    out = col.sweep_both_sides(name, item_id)
+    assert done == ["orders"]
+    assert "429" in out["depth"]["error"]
+
+
+def test_the_collector_loop_asks_for_both():
+    """The regression that started this: the call site, not the method."""
+    import pathlib
+
+    loop = pathlib.Path("run_collector.py").read_text(encoding="utf-8")
+    assert "sweep_both_sides" in loop
+    assert "collector.sweep_buy_orders(" not in loop, \
+        "sweeping one side alone is what left every ceiling too high"

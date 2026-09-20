@@ -270,6 +270,12 @@
     // The cheapest price that leads the band, beside the one we would pay.
     // Without it the surcharge looks arbitrary next to the order book.
     const over = b.bid - b.entry;
+    // Why we are not simply bidding the minimum. Asked twice from a tooltip,
+    // so it goes in the open: the surcharge buys flow, and the number it buys
+    // is the only thing that justifies it.
+    const cheapWhy = (b.entry_monthly === null || b.entry_monthly === undefined)
+      ? "по ней сделок нет"
+      : `по ней ${(b.entry_monthly * 100).toFixed(0)}%/мес`;
     const why = (b.entry_monthly === null || b.entry_monthly === undefined)
       ? `по ${money(b.entry)} мы первые, но подходящих сделок почти нет`
       : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
@@ -277,7 +283,8 @@
     tr.innerHTML = `
       <td><b>${band}</b></td>
       <td class="muted" title="${why}">${money(b.entry)}${
-        over > 0 ? ` <span class="over">+${over.toFixed(2)}</span>` : ""}</td>
+        over > 0 ? ` <span class="over">+${over.toFixed(2)}</span>`
+          + `<br><small>${cheapWhy}</small>` : ""}</td>
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
       <td>${b.wars}</td>

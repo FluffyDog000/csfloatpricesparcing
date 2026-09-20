@@ -207,7 +207,13 @@ def run_forever(collector: Collector) -> None:
             for row in collector.db.pending_order_requests():
                 collector.db.clear_order_request(int(row["id"]))
                 log.info("Buy orders requested for '%s'", row["market_hash_name"])
-                collector.sweep_buy_orders(row["market_hash_name"], int(row["id"]))
+                # Both halves: the book says who is bidding, the listings say
+                # what it is going for. Scoring needs both, and with only the
+                # book the exit price falls back to the sales median - which
+                # is almost always higher than the cheapest ask, so every
+                # ceiling comes out too high.
+                collector.sweep_both_sides(row["market_hash_name"],
+                                           int(row["id"]))
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()
