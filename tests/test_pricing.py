@@ -492,5 +492,6 @@ def test_one_listing_says_nothing_about_where_in_its_band_it_sits():
     many = _exit_price(999.0, depth_many, 0.15, 0.16, "история",
                        at=0.16, slope=slope)[0]
 
-    assert one == 199.9, "middle of the band is our own float: no carry"
+    # $200 sits in the $100-500 tier, where the grid step is a dollar.
+    assert one == 199.0, "middle of the band is our own float: no carry"
     assert many > one, "twenty lots: its cheapest is near the worst float"
