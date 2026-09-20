@@ -52,6 +52,15 @@ CANCEL = "cancel"
 KEEP = "keep"
 
 
+# CSFloat lets the outstanding value of your buy orders run to ten times your
+# balance, on the reasoning that they will not all fill at once. The allowance
+# is real, but it is not money: an order whose turn comes while the balance is
+# short is removed, not queued. So the multiplier caps what we may plan, and
+# the balance is what actually buys.
+LEVERAGE = 10.0
+MAX_ORDERS_CSFLOAT = 1000
+
+
 @dataclass
 class Limits:
     total_capital: float = 0.0      # 0 = nothing may be placed
@@ -64,6 +73,33 @@ class Limits:
     # again", and a threshold coarser than the look is a threshold that never
     # fires.
     patience_minutes: float = 60.0
+    # What sits on the CSFloat account. 0 means "not told", and then the
+    # leverage cap cannot be worked out and only total_capital applies.
+    balance: float = 0.0
+
+    @property
+    def allowance(self) -> float:
+        """The most CSFloat would let us have outstanding."""
+        return self.balance * LEVERAGE if self.balance > 0 else float("inf")
+
+    @property
+    def budget(self) -> float:
+        """What we may actually plan: our own limit, under their ceiling."""
+        return min(self.total_capital, self.allowance)
+
+    @property
+    def capped_by_balance(self) -> bool:
+        """Our limit is above what the account can carry."""
+        return self.balance > 0 and self.total_capital > self.allowance
+
+    def as_dict(self) -> dict[str, Any]:
+        """Fields plus what they work out to - the page needs both, and
+        __dict__ on a dataclass leaves the derived values behind."""
+        out = dict(self.__dict__)
+        out["allowance"] = None if self.balance <= 0 else round(self.allowance, 2)
+        out["budget"] = round(self.budget, 2) if self.budget != float("inf") else None
+        out["capped_by_balance"] = self.capped_by_balance
+        return out
 
 
 @dataclass
@@ -100,8 +136,9 @@ def select(bands: Sequence[Band], limits: Limits,
     take = sorted((b for b in bands if b.take),
                   key=lambda b: -(b.monthly or 0))
     room_orders = min(limits.max_orders_per_item, limits.max_orders - placed)
-    cap = limits.per_item_capital or limits.total_capital
-    cap = min(cap, limits.total_capital - spent)
+    budget = limits.budget
+    cap = limits.per_item_capital or budget
+    cap = min(cap, budget - spent)
 
     chosen: list[Band] = []
     used = 0.0

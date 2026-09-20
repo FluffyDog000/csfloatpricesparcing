@@ -35,6 +35,7 @@ LIMIT_BOUNDS = {
     "total_capital": (0.0, 1_000_000.0), "per_item_capital": (0.0, 1_000_000.0),
     "max_orders": (0, 1000), "max_orders_per_item": (0, 1000),
     "patience_minutes": (0.0, 525_600.0),
+    "balance": (0.0, 1_000_000.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
@@ -42,6 +43,7 @@ LIMIT_KEYS = (
     ("an_max_orders", "max_orders", int),
     ("an_max_per_item", "max_orders_per_item", int),
     ("an_patience_min", "patience_minutes", float),
+    ("an_balance", "balance", float),
 )
 
 # How often the defence looks, and the floor under it. Each pass re-reads the

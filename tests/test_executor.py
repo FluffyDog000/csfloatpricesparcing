@@ -143,3 +143,34 @@ def test_a_wait_is_reported_in_the_unit_a_person_would_say_it_in():
     assert human_wait(0.25) == "6.0 ч"
     assert human_wait(9.0) == "9.0 дн"
     assert human_wait(float("inf")) == "никогда"
+
+
+def test_the_plan_stays_under_what_the_balance_allows():
+    """CSFloat lets outstanding orders run to ten times the balance. The
+    allowance is real but it is not money: an order whose turn comes while the
+    balance is short is removed, not queued. So it caps the plan."""
+    from src.executor import LEVERAGE, Limits
+
+    l = Limits(total_capital=20000.0, balance=960.0)
+    assert l.allowance == 9600.0 == 960.0 * LEVERAGE
+    assert l.budget == 9600.0, "their ceiling, not ours"
+    assert l.capped_by_balance
+
+    under = Limits(total_capital=2000.0, balance=960.0)
+    assert under.budget == 2000.0 and not under.capped_by_balance
+
+    # Not told the balance: only our own limit applies.
+    unknown = Limits(total_capital=2000.0)
+    assert unknown.allowance == float("inf") and unknown.budget == 2000.0
+    assert unknown.as_dict()["allowance"] is None
+
+
+def test_selection_spends_the_allowed_budget_not_the_asked_one():
+    bands = [Band(float_min=0.0 + i / 100, float_max=0.01 + i / 100,
+                  bid=100.0, monthly=1.0 - i / 100, take=True)
+             for i in range(10)]
+    # Asked for $5000, balance only covers $300 of outstanding orders.
+    got = select(bands, Limits(total_capital=5000.0, balance=30.0,
+                               max_orders=10, max_orders_per_item=10))
+    assert sum(b.bid for b in got) <= 300.0
+    assert len(got) == 3

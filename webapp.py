@@ -944,7 +944,7 @@ def api_analysis_plan():
 
     return jsonify({
         "actions": actions,
-        "limits": limits.__dict__,
+        "limits": limits.as_dict(),
         "held": held,
         "by_item": after,
         "planned_total": round(total, 2),
@@ -1133,7 +1133,7 @@ def api_analysis_params():
             rejected.append(f"{key}: {raw} вне диапазона {lo}–{hi}")
         db.set_setting(key, str(cast(min(max(value, lo), hi))))
     return jsonify({"params": _analysis_params(db).__dict__,
-                    "limits": _analysis_limits(db).__dict__,
+                    "limits": _analysis_limits(db).as_dict(),
                     "rejected": rejected})
 
 

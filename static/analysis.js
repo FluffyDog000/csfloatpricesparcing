@@ -478,6 +478,24 @@
     $("l-max").value = l.max_orders;
     $("l-maxitem").value = l.max_orders_per_item;
     $("l-patience").value = l.patience_minutes;
+    $("l-balance").value = l.balance;
+    const note = $("l-allowance");
+    if (!note) return;
+    if (!l.balance) {
+      note.className = "muted";
+      note.textContent = "Баланс не указан — проверка «10× баланса» отключена.";
+    } else if (l.capped_by_balance) {
+      note.className = "err";
+      note.textContent = `Баланс ${money(l.balance)} — CSFloat разрешит ордеров `
+        + `не больше чем на ${money(l.allowance)}. Лимит `
+        + `${money(l.total_capital)} выше этого, планировать буду на `
+        + `${money(l.budget)}.`;
+    } else {
+      note.className = "muted";
+      note.textContent = `Баланс ${money(l.balance)} → потолок CSFloat `
+        + `${money(l.allowance)}. Твой лимит ${money(l.total_capital)} — в него `
+        + `укладывается. Учти: исполнится только то, на что хватит баланса.`;
+    }
   }
 
   function fillParams(p) {
@@ -705,6 +723,7 @@
       an_max_orders: $("l-max").value,
       an_max_per_item: $("l-maxitem").value,
       an_patience_min: $("l-patience").value,
+      an_balance: $("l-balance").value,
       }, token());
       fillParams(r.params);
       if (r.limits) fillLimits(r.limits);

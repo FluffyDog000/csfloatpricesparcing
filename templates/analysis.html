@@ -62,6 +62,10 @@
     </div>
     <h3>Лимиты капитала</h3>
     <div class="field-grid analysis-params">
+      <label>баланс на CSFloat, $
+        <input type="number" id="l-balance" class="input" step="10" min="0" value="0">
+        <small class="muted">CSFloat разрешает ордеров на 10× баланса.<br>
+          0 — не знаю, тогда проверка отключена</small></label>
       <label>всего в ордерах, $
         <input type="number" id="l-total" class="input" step="10" min="0" value="0">
         <small class="muted">0 — ничего не выставляется</small></label>
@@ -69,7 +73,8 @@
         <input type="number" id="l-item" class="input" step="10" min="0" value="0">
         <small class="muted">пять ордеров на предмет — одна ставка пятью кусками</small></label>
       <label>максимум ордеров
-        <input type="number" id="l-max" class="input" step="1" min="0" value="20"></label>
+        <input type="number" id="l-max" class="input" step="1" min="0" max="1000" value="20">
+        <small class="muted">потолок CSFloat — 1000</small></label>
       <label>максимум на предмет
         <input type="number" id="l-maxitem" class="input" step="1" min="0" value="3"></label>
       <label>терпение, минут
@@ -77,6 +82,7 @@
         <small class="muted">перебили — отвечаем, только если очередь<br>
           разойдётся дольше этого. 60 — за час не разошлась, перебиваем</small></label>
     </div>
+    <div class="muted" id="l-allowance"></div>
     <button class="btn" id="p-save">Сохранить пороги и лимиты</button>
   </details>
 </section>
