@@ -233,7 +233,7 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
     rows = [(float(s["float_value"]), float(s["price"])) for s in sales
             if s.get("float_value") is not None and s.get("price")]
     if len(rows) < 2:
-        return None, 1.0, 1.0, len(rows)
+        return None, 1.0, 1.0, len(rows), 0.0
 
     centre = (lo + hi) / 2.0
     at = hi if at is None else at
@@ -284,7 +284,8 @@ def neighbourhood(sales: Sequence[dict], lo: float, hi: float,
     # Sales lying exactly on a line say the line fits, not that it keeps
     # holding a dozen bands further out. Reaching is itself a doubt, and a
     # multiplier on a residual of zero records none of it.
-    return price, min(max(error, REACH_DOUBT * stretch), 1.0), reach, len(near)
+    return (price, min(max(error, REACH_DOUBT * stretch), 1.0), reach,
+            len(near), slope)
 
 
 def _iqr(values: Sequence[float]) -> float:
@@ -295,23 +296,46 @@ def _iqr(values: Sequence[float]) -> float:
     return q3 - q1
 
 
-def _exit_price(history: float, depth: Sequence[dict],
-                lo: float, hi: float, source: str) -> tuple[float, str]:
+def _exit_price(history: float, depth: Sequence[dict], lo: float, hi: float,
+                source: str, at: float, slope: float = 0.0) -> tuple[float, str]:
     """What the lot sells for, and it is the live book that says so.
 
-    To sell promptly you have to be the cheapest listing, and matching the
-    cheapest ask does not make you the cheapest - it puts you level with it
-    and therefore behind it. Selling first means going under, by the one step
-    the price grid allows. Taking the ask itself was claiming the front of a
-    queue while standing second in it, and the whole return is figured on
-    getting out at that price.
+    Two things a raw price comparison gets wrong.
+
+    Listings are read in bands of their own - wider than the bands we score -
+    so the cheapest ask overlapping ours may be a far worse float than ours.
+    It is cheaper because it is worse, not because it undercuts us, and taking
+    its price as ours sells a 0.155 lot at a 0.169 lot's price. Every ask is
+    therefore carried along the fitted price-float line to the float we are
+    actually selling at before it is compared to anything.
+
+    And matching the cheapest ask does not make you the cheapest: it puts you
+    level with it and therefore behind it. Selling first means going under, by
+    the one step the price grid allows.
     """
-    asks = [d["cheapest"] for d in depth
-            if d.get("cheapest") is not None
-            and not (d["float_max"] <= lo or d["float_min"] >= hi)]
-    if not asks:
+    equivalent = []
+    for d in depth:
+        if d.get("cheapest") is None:
+            continue
+        if d["float_max"] <= lo or d["float_min"] >= hi:
+            continue
+        # Where in its own band does the cheapest lot sit? Not the middle.
+        # Price falls as float rises, so the cheapest of several listings is
+        # very likely the worst float among them. For n lots spread across the
+        # band the expected worst float is n/(n+1) of the way up it: with one
+        # listing that is the middle - nothing is known - and with many it is
+        # close to the top edge.
+        d_lo, d_hi = float(d["float_min"]), float(d["float_max"])
+        n = max(int(d.get("listings") or 1), 1)
+        theirs = d_lo + (d_hi - d_lo) * n / (n + 1.0)
+        price = float(d["cheapest"]) + slope * (at - theirs)
+        # A slope worked out from a handful of sales can be wild. The carry is
+        # a correction, never a licence to reprice the lot.
+        price = min(max(price, d["cheapest"] * 0.5), d["cheapest"] * 2.0)
+        equivalent.append(price)
+    if not equivalent:
         return history, source
-    best = min(asks)
+    best = min(equivalent)
     under = snap_down(best - increment(best))
     if under <= 0:
         return history, source
@@ -343,7 +367,8 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
         # high-float edge rather than off a median in its middle: an order
         # filters on a range, and the sellers who take it hand over the worst
         # lot the filter allows.
-        history, error, reach, used = neighbourhood(sales, lo, hi, p.min_sample)
+        history, error, reach, used, slope = neighbourhood(
+            sales, lo, hi, p.min_sample)
         if history is None:
             row.reason = f"мало данных: {len(band)} продаж, занять не у кого"
             out.append(row)
@@ -360,7 +385,8 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
                 continue
             source = "соседи"
 
-        market, source = _exit_price(history, depth, lo, hi, source)
+        market, source = _exit_price(history, depth, lo, hi, source,
+                                     at=hi, slope=slope)
         net = market * (1.0 - p.fee)
         step = increment(market)
         ceiling = snap_down(net / (1.0 + p.min_margin))

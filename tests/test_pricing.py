@@ -426,3 +426,71 @@ def test_an_ask_above_the_history_does_not_raise_the_exit_price():
     band = plan(_sales(rows), [], (0.15, 0.17), depth=depth,
                 params=Params(min_sample=5))[0]
     assert band.market == 100.0 and band.priced_from != "аск"
+
+
+def test_a_cheaper_ask_on_a_worse_float_does_not_set_our_price():
+    """Listings are read in bands of 0.02 while a band may be 0.01, so the
+    cheapest ask overlapping ours can be a far worse float. It is cheaper
+    because it is worse, not because it undercuts us - taking its price sells
+    a 0.155 lot at a 0.169 lot's price."""
+    from src.pricing import Params, plan
+
+    # $300 at 0.15 falling to $200 at 0.17: float drives the price hard.
+    sales = [{"price": 300.0 - (f := 0.15 + (i % 20) * 0.001) * 5000.0 + 750.0,
+              "float_value": f, "age_days": i % 14} for i in range(120)]
+    # Six listings in the band, so its cheapest is very likely the worst
+    # float among them - priced for a 0.169, not for our 0.16.
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 210.0,
+              "listings": 6}]
+
+    band = plan(sales, [], (0.15, 0.18), depth=depth,
+                params=Params(band_step=0.01, min_sample=5))[0]
+    assert band.float_min == 0.15 and band.float_max == 0.16
+    # A 0.16 lot is worth far more than that listing's $210; the ask must not
+    # drag our exit price down to it.
+    assert band.market > 230.0, f"exit priced at {band.market}"
+
+
+def test_a_genuinely_cheaper_ask_still_prices_the_exit():
+    """The carry is a correction, not a way to ignore the book."""
+    from src.pricing import Params, plan
+
+    sales = [{"price": 300.0, "float_value": 0.155 + (i % 5) * 0.001,
+              "age_days": i % 14} for i in range(60)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 250.0,
+              "listings": 3}]
+    band = plan(sales, [], (0.15, 0.18), depth=depth,
+                params=Params(band_step=0.01, min_sample=5))[0]
+    assert band.priced_from == "аск" and band.market < 250.0
+
+
+def test_a_wild_slope_cannot_reprice_a_listing_out_of_recognition():
+    from src.pricing import _exit_price
+
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 100.0}]
+    high = _exit_price(1000.0, depth, 0.15, 0.16, "история",
+                       at=0.155, slope=-50000.0)[0]
+    low = _exit_price(1000.0, depth, 0.15, 0.16, "история",
+                      at=0.155, slope=50000.0)[0]
+    assert 40.0 <= low <= 210.0 and 40.0 <= high <= 210.0
+
+
+def test_one_listing_says_nothing_about_where_in_its_band_it_sits():
+    """With a single lot there is no reason to think it is at either edge, so
+    the middle it is. Inventing an edge would be inventing a fact in whichever
+    direction flattered the answer."""
+    from src.pricing import _exit_price
+
+    depth_one = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 200.0,
+                  "listings": 1}]
+    depth_many = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 200.0,
+                   "listings": 20}]
+    slope = -5000.0     # $50 per 0.01 of float
+
+    one = _exit_price(999.0, depth_one, 0.15, 0.16, "история",
+                      at=0.16, slope=slope)[0]
+    many = _exit_price(999.0, depth_many, 0.15, 0.16, "история",
+                       at=0.16, slope=slope)[0]
+
+    assert one == 199.9, "middle of the band is our own float: no carry"
+    assert many > one, "twenty lots: its cheapest is near the worst float"
