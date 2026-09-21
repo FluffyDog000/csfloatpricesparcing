@@ -127,6 +127,23 @@ class BackupService:
             self.collector.reopen_db()
         return info
 
+    def _answer_command(self, text: str) -> None:
+        """Reply to one command. A question about what is standing must never
+        set a sweep going, so the answer is read from the database only."""
+        from . import tgcommands
+
+        try:
+            reply = tgcommands.answer(text, self.db)
+        except Exception as exc:  # noqa: BLE001 - a bad answer is not a crash
+            log.exception("Command %r failed: %s", text, exc)
+            self.tg.send_message(f"Не смог ответить: {exc}")
+            return
+        if reply is None:
+            if text.startswith("/"):
+                self.tg.send_message(tgcommands.HELP, parse_mode="HTML")
+            return
+        self.tg.send_message(reply, parse_mode="HTML")
+
     def _poll_telegram(self) -> None:
         if not self.tg.configured():
             return
@@ -142,6 +159,17 @@ class BackupService:
             msg = u.get("message") or {}
             doc = msg.get("document")
             chat_id = str((msg.get("chat") or {}).get("id", ""))
+
+            # Text first: the loop was reading updates and throwing away
+            # everything that was not a file.
+            text = (msg.get("text") or "").strip()
+            if text and not doc:
+                if chat_id != auth_chat:
+                    log.warning("Ignoring text from unauthorized chat %s", chat_id)
+                    continue
+                self._answer_command(text)
+                continue
+
             if not doc:
                 continue
             if chat_id != auth_chat:

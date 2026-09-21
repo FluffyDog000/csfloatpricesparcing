@@ -30,11 +30,16 @@ class TelegramClient:
 
     # -- outbound -----------------------------------------------------------
 
-    def send_message(self, text: str) -> bool:
+    def send_message(self, text: str, parse_mode: str | None = None) -> bool:
+        """One message. `parse_mode` is left off by default so an alert built
+        from an error string cannot be rejected for looking like markup."""
+        data = {"chat_id": self.cfg.chat_id, "text": text}
+        if parse_mode:
+            data["parse_mode"] = parse_mode
         try:
             r = requests.post(
                 self._url("sendMessage"),
-                data={"chat_id": self.cfg.chat_id, "text": text},
+                data=data,
                 timeout=self.timeout,
             )
             r.raise_for_status()
