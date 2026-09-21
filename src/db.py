@@ -620,15 +620,22 @@ class Database:
 
     def listing_depth(self, item_id: int,
                       latest_only: bool = True) -> list[dict[str, Any]]:
-        """Per-band sell-side depth, newest sweep by default."""
+        """Per-band sell-side depth, newest reading of each band by default.
+
+        Newest *per band*, not newest sweep. A pass that refreshes only the
+        bands we hold an order on writes two rows with a new timestamp, and
+        keying on the latest timestamp alone would have hidden every other
+        band of the last full sweep behind them. The same applies to a sweep
+        that stopped halfway on a rate limit.
+        """
         sql = ("SELECT fetched_at, float_min, float_max, listings, cheapest, "
                "median_age_days, oldest_days, offerable, best_offer "
-               "FROM listing_depth WHERE item_id = ?")
+               "FROM listing_depth d WHERE item_id = ?")
         args: list[Any] = [item_id]
         if latest_only:
             sql += (" AND fetched_at = (SELECT MAX(fetched_at) FROM "
-                    "listing_depth WHERE item_id = ?)")
-            args.append(item_id)
+                    "listing_depth WHERE item_id = d.item_id "
+                    "AND float_min = d.float_min AND float_max = d.float_max)")
         sql += " ORDER BY fetched_at, float_min"
         return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
 

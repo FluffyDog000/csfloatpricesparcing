@@ -407,8 +407,14 @@ def _exit_price(history: float, depth: Sequence[dict], lo: float, hi: float,
     level with it and therefore behind it. Selling first means going under, by
     the one step the price grid allows.
     """
+    # A reading taken for exactly this float range beats one taken for a band
+    # that merely overlaps it: the lots it reports are the ones our order can
+    # actually buy, with nothing to carry between floats.
+    inside = [d for d in depth
+              if d.get("cheapest") is not None
+              and d["float_min"] >= lo - 1e-9 and d["float_max"] <= hi + 1e-9]
     equivalent = []
-    for d in depth:
+    for d in (inside or depth):
         if d.get("cheapest") is None:
             continue
         if d["float_max"] <= lo or d["float_min"] >= hi:

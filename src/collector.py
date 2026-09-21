@@ -9,6 +9,7 @@ import logging
 import random
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Sequence
 from urllib.parse import quote
 from pathlib import Path
 
@@ -791,7 +792,8 @@ class Collector:
         from .placement import PLACEMENT_KEY, load
         from .pricing import evaluate
         from .sender import Sender
-        from .settings import dry_run, limits as read_limits, params as read_params
+        from .settings import (defend_minutes, dry_run,
+                               limits as read_limits, params as read_params)
 
         # Before anything else: an order taken down from the site by hand is
         # still in our table, and defending it would read the book, find us
@@ -821,6 +823,14 @@ class Collector:
             # a fight that is already over, or miss one that is not.
             self.sweep_buy_orders(name, item_id)
             looked += 1
+            # And the sell side for the ranges we hold, which is what the
+            # ceiling is built from. Left to a sweep nobody runs except by
+            # hand, it goes stale and the ceiling stops moving with the market.
+            try:
+                self.refresh_held_asks(name, item_id, rows,
+                                       defend_minutes(self.db))
+            except Exception as exc:  # noqa: BLE001 - one half is not both
+                log.warning("Ask refresh for '%s' failed: %s", name, exc)
             # Without this the defence sees itself standing above itself and
             # answers an outbid nobody made.
             book = strip_own(self.db.buy_orders(item_id), rows)
@@ -923,6 +933,60 @@ class Collector:
             except (TypeError, ValueError):
                 s["age_days"] = None
         return rows
+
+    def refresh_held_asks(self, name: str, item_id: int,
+                          rows: Sequence[dict], max_age_minutes: float) -> dict:
+        """Re-read the sell side for the float ranges we hold an order on.
+
+        The exit price is the cheapest ask, and until now it came from a full
+        sweep nobody ran except by hand - so a defence pass could run for days
+        against asks from another week, holding an order above a ceiling that
+        had moved under it.
+
+        Only the ranges we hold, and each asked for by its own bounds rather
+        than off the 0.02 grid. Cheaper - one request an order instead of a
+        dozen an item - and more exact: the lots that come back are the ones
+        our order can actually buy, so there is nothing to carry between
+        floats. A range whose reading is younger than the interval is left
+        alone, which keeps a fast defence from asking the same question twice.
+        """
+        result = {"asked": 0, "skipped": 0, "errors": 0}
+        span = wear_range(name)
+        if not span:
+            return result
+
+        fresh = {}
+        try:
+            for row in self.db.listing_depth(item_id):
+                fresh[(round(row["float_min"], 4), round(row["float_max"], 4))] \
+                    = row.get("fetched_at")
+        except Exception:  # noqa: BLE001 - an older DB has no such table
+            pass
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(minutes=max(max_age_minutes, 0))).isoformat()
+
+        wanted = sorted({(round(float(r["float_min"]), 4),
+                          round(float(r["float_max"]), 4)) for r in rows})
+        for lo, hi in wanted:
+            seen = fresh.get((lo, hi))
+            if seen and seen >= cutoff:
+                result["skipped"] += 1
+                continue
+            try:
+                payload = self.client.fetch_json(
+                    depth_url(self.config.http.base_url, name, lo, hi),
+                    headers=self._listings_headers())
+                result["asked"] += 1
+            except Exception as exc:  # noqa: BLE001 - one range is not all
+                result["errors"] += 1
+                log.warning("Asks for '%s' %.4f-%.4f failed: %s",
+                            name, lo, hi, exc)
+                continue
+            profile = depth_profile(extract_depth(payload), (lo, hi),
+                                    step=max(hi - lo, 1e-4))
+            if profile:
+                self.db.record_listing_depth(item_id, profile)
+        return result
 
     def sweep_both_sides(self, name: str, item_id: int) -> dict:
         """Read both halves of the market for one item.

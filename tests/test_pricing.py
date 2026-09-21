@@ -690,3 +690,32 @@ def test_the_ceiling_still_bounds_the_worst_case():
     assert band.margin_worst >= 0.03 - 1e-9, "the ceiling's promise"
     assert band.paid <= band.bid
     assert band.margin >= band.margin_worst, "and the ordinary case is better"
+
+
+def test_a_reading_for_our_own_range_beats_one_that_merely_overlaps():
+    """Asking for the float we hold returns the lots our order can actually
+    buy. A 0.02 grid band overlapping it may be quoting a far worse float, and
+    that is the reading that needed carrying between floats in the first
+    place."""
+    from src.pricing import _exit_price
+
+    depth = [
+        # Stale grid band: cheapest is a much worse float, so much cheaper.
+        {"float_min": 0.15, "float_max": 0.17, "cheapest": 150.0, "listings": 8},
+        # Fresh reading for exactly our range.
+        {"float_min": 0.15, "float_max": 0.16, "cheapest": 190.0, "listings": 3},
+    ]
+    price, source = _exit_price(999.0, depth, 0.15, 0.16, "история",
+                                at=0.16, slope=0.0)
+    assert source == "аск"
+    assert price == 189.0, f"the exact reading should set it, got {price}"
+
+
+def test_an_overlapping_reading_is_still_used_when_there_is_nothing_exact():
+    from src.pricing import _exit_price
+
+    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 150.0,
+              "listings": 8}]
+    price, source = _exit_price(999.0, depth, 0.15, 0.16, "история",
+                                at=0.16, slope=0.0)
+    assert source == "аск" and price == 149.0

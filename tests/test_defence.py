@@ -277,3 +277,60 @@ def test_the_defence_does_not_count_itself_as_standing_above_itself():
     assert "raise" not in kinds, kinds
     assert sent == [], "nothing should have been sent"
     db.close()
+
+
+def test_the_defence_refreshes_the_asks_it_prices_from():
+    """The ceiling is built from the cheapest ask. Left to a sweep nobody runs
+    except by hand, it goes stale and the ceiling stops moving with the
+    market - so an order can sit above a ceiling that moved under it."""
+    col, db = _collector()
+    item_id, name = _stock(db, rival=[])
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    col.sweep_buy_orders = lambda n, i: None
+    col.client.send_json = lambda *a, **k: {}
+
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        if "me/buy-orders" in url:
+            # The sync runs first; without our order in the reply it would be
+            # marked gone and there would be nothing left to defend.
+            return {"data": [{"id": "r1", "price": 15200, "qty": 1,
+                              "market_hash_name": name,
+                              "bought_item_count": 0,
+                              "hybrid_properties": {"min_float": 0.35,
+                                                    "max_float": 0.38}}]}
+        return {"data": [{"id": "L1", "price": 15000, "type": "buy_now",
+                          "created_at": "2026-09-10T00:00:00Z",
+                          "item": {"float_value": 0.36}}]}
+
+    col.client.fetch_json = answer
+    col.defend_orders()
+
+    assert any("min_float=0.35&max_float=0.38" in u for u in asked), asked
+    stored = db.listing_depth(item_id)
+    assert stored and stored[0]["cheapest"] == 150.0
+    db.close()
+
+
+def test_a_failure_reading_the_asks_does_not_abort_the_pass():
+    """One half of the market being unreadable is not a reason to stop
+    defending against the other."""
+    import requests
+
+    col, db = _collector()
+    item_id, name = _stock(db, rival=[])
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    col.sweep_buy_orders = lambda n, i: None
+    col.client.send_json = lambda *a, **k: {}
+
+    def refuse(url, headers=None):
+        raise requests.HTTPError("HTTP 429")
+
+    col.client.fetch_json = refuse
+    out = col.defend_orders()
+    assert out is not None, "the pass still ran"
+    db.close()

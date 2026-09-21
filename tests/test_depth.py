@@ -208,3 +208,98 @@ def test_the_collector_loop_asks_for_both():
     assert "sweep_both_sides" in loop
     assert "collector.sweep_buy_orders(" not in loop, \
         "sweeping one side alone is what left every ceiling too high"
+
+
+def _held(db, item_id, ranges):
+    for lo, hi in ranges:
+        db.upsert_our_order(item_id, lo, hi, 100.0, 120.0, state="live",
+                            remote_id=f"r{lo}")
+    return db.our_orders(item_id)
+
+
+def test_asks_are_re_read_for_the_ranges_we_hold():
+    """The exit price is the cheapest ask, and it came from a sweep nobody ran
+    except by hand - so the defence could run for days against asks from
+    another week, holding an order above a ceiling that had moved under it."""
+    col, db, name, item_id = _ready()
+    rows = _held(db, item_id, [(0.15, 0.16), (0.20, 0.21)])
+    asked = []
+
+    def answer(url, headers=None):
+        asked.append(url)
+        return {"data": [{"id": "L1", "price": 16000, "type": "buy_now",
+                          "created_at": "2026-09-10T00:00:00Z",
+                          "item": {"float_value": 0.155}}]}
+
+    col.client.fetch_json = answer
+    out = col.refresh_held_asks(name, item_id, rows, max_age_minutes=60)
+
+    assert out["asked"] == 2, "one request per range held, no more"
+    assert "min_float=0.15&max_float=0.16" in asked[0]
+    assert "min_float=0.2&max_float=0.21" in asked[1]
+
+    stored = {(r["float_min"], r["float_max"]): r["cheapest"]
+              for r in db.listing_depth(item_id)}
+    assert stored[(0.15, 0.16)] == 160.0
+    db.close()
+
+
+def test_a_reading_younger_than_the_interval_is_not_asked_for_again():
+    """A fast defence must not ask the same question every few minutes."""
+    col, db, name, item_id = _ready()
+    rows = _held(db, item_id, [(0.15, 0.16)])
+    col.client.fetch_json = lambda url, headers=None: {
+        "data": [{"id": "L1", "price": 16000, "type": "buy_now",
+                  "created_at": "2026-09-10T00:00:00Z",
+                  "item": {"float_value": 0.155}}]}
+
+    first = col.refresh_held_asks(name, item_id, rows, max_age_minutes=60)
+    again = col.refresh_held_asks(name, item_id, rows, max_age_minutes=60)
+    assert first["asked"] == 1 and again["asked"] == 0
+    assert again["skipped"] == 1
+    db.close()
+
+
+def test_one_range_failing_does_not_cost_the_others():
+    import requests
+
+    col, db, name, item_id = _ready()
+    rows = _held(db, item_id, [(0.15, 0.16), (0.20, 0.21)])
+
+    def flaky(url, headers=None):
+        if "0.15" in url:
+            raise requests.HTTPError("HTTP 429")
+        return {"data": [{"id": "L2", "price": 14000, "type": "buy_now",
+                          "created_at": "2026-09-10T00:00:00Z",
+                          "item": {"float_value": 0.205}}]}
+
+    col.client.fetch_json = flaky
+    out = col.refresh_held_asks(name, item_id, rows, max_age_minutes=60)
+    assert out["errors"] == 1 and out["asked"] == 1
+    assert [r["float_min"] for r in db.listing_depth(item_id)] == [0.2]
+    db.close()
+
+
+def test_a_narrow_reading_does_not_hide_the_grid_sweep():
+    """Refreshing two held bands writes rows with a new timestamp. Keyed on
+    the latest timestamp alone, every other band of the last full sweep would
+    vanish behind them."""
+    col, db, name, item_id = _ready()
+    db.record_listing_depth(item_id, [
+        {"float_min": 0.15, "float_max": 0.17, "listings": 3, "cheapest": 200.0,
+         "median_age_days": 1.0, "oldest_days": 2.0, "offerable": 0,
+         "best_offer": None},
+        {"float_min": 0.30, "float_max": 0.32, "listings": 2, "cheapest": 150.0,
+         "median_age_days": 1.0, "oldest_days": 2.0, "offerable": 0,
+         "best_offer": None}])
+
+    rows = _held(db, item_id, [(0.15, 0.16)])
+    col.client.fetch_json = lambda url, headers=None: {
+        "data": [{"id": "L1", "price": 19000, "type": "buy_now",
+                  "created_at": "2026-09-10T00:00:00Z",
+                  "item": {"float_value": 0.155}}]}
+    col.refresh_held_asks(name, item_id, rows, max_age_minutes=0)
+
+    bands = {(r["float_min"], r["float_max"]) for r in db.listing_depth(item_id)}
+    assert (0.30, 0.32) in bands, "the far band of the full sweep survives"
+    assert (0.15, 0.16) in bands, "and the narrow reading is there too"
