@@ -274,10 +274,11 @@
     // so it goes in the open: the surcharge buys flow, and the number it buys
     // is the only thing that justifies it.
     const cheapWhy = (b.entry_t_buy === null || b.entry_t_buy === undefined)
-      ? "по ней сделок нет"
+      ? "по ней сделок нет — ордер бы не исполнился"
       : `по ней набор ${days(b.entry_t_buy)}`;
     const why = (b.entry_t_buy === null || b.entry_t_buy === undefined)
-      ? `по ${money(b.entry)} мы первые, но подходящих сделок почти нет`
+      ? `по ${money(b.entry)} мы были бы первыми в стакане, но ни одна сделка `
+        + "не проходит по этой цене — ордер стоял бы вечно"
       : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
         + `набор ${days(b.entry_t_buy)}`;
     tr.innerHTML = `

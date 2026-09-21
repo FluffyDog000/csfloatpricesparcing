@@ -456,7 +456,8 @@ def test_the_surcharge_says_what_the_cheap_price_would_have_earned():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "cheapWhy" in row
-    assert "по ней сделок нет" in row, "the case where the minimum fills nothing"
+    assert "ордер бы не исполнился" in row, \
+        "the minimum leading a band it cannot fill is the case that gets asked about"
     assert "по ней набор" in row
 
 
