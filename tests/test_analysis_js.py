@@ -507,3 +507,15 @@ def test_the_journal_shows_where_each_order_stands():
     assert "Перебили 1 из 2" in got["positions"]
 
 
+
+
+def test_the_table_shows_what_a_fill_would_actually_cost():
+    """The margin changed meaning: it is figured on the listing's price now,
+    not on our bid. A column that kept the old name and the old look while
+    meaning something else would be the worst of both."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.paid" in row, "what a fill costs is its own column"
+    assert "b.margin_worst" in row, "and the bid-priced margin is beside it"
+    header = source.split("<th>float</th>")[1].split("</thead>")[0]
+    assert "платим" in header

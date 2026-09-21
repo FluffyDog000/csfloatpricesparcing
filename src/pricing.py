@@ -16,10 +16,17 @@ the entry has to be high enough that sellers actually come to it - being first
 in a queue nobody joins fills nothing, which is the mistake this module's
 `min_lambda` filter exists to catch.
 
-Margins are figured as though we pay our own bid. CSFloat charges the lower of
-the bid and the listing price, so the true cost is a little less - but a
-standing order at the top of the book is exactly what tells a seller where to
-list, so the discount is the part we should not count on.
+Margins are figured on what a fill costs, which is the listing's price and not
+ours: CSFloat charges the lower of the two. An order does not wait for someone
+who means to sell to it - it takes any listing that appears at or under it,
+and the ones that pay are the listings priced as an ordinary example of the
+skin by a seller who did not notice what its float was worth.
+
+Costing every fill at the bid was the earlier reading, defended on the grounds
+that a standing order tells a seller where to price. That holds for a seller
+who reads the book, and it is exactly wrong for the one this strategy exists
+to catch. It survives as the worst case: the ceiling guarantees that even a
+fill at the full bid leaves the margin demanded.
 """
 from __future__ import annotations
 
@@ -128,6 +135,11 @@ class Band:
     bid: float | None = None           # what we would actually place
     step: float = 0.0
     margin: float | None = None
+    # What a fill is expected to cost, and the margin if every fill cost the
+    # full bid instead. The first is the ordinary case, the second the bound
+    # the ceiling guarantees.
+    paid: float | None = None
+    margin_worst: float | None = None
     wars: int | None = None            # outbids the headroom pays for
     lam: float | None = None
     queue: int = 0
@@ -320,6 +332,27 @@ class Flow:
     prices: tuple = ()         # neighbours' prices, carried to our float
     observed: int = 0          # sales the window actually held
 
+    def paid(self, bid: float) -> float | None:
+        """What a fill at this bid would actually cost.
+
+        Not the bid. A buy order does not wait for someone who means to sell
+        to it: it takes any listing that appears at or under it, and CSFloat
+        charges the listing's price. The orders that pay are the ones that
+        catch a seller who priced their lot as an ordinary example of the skin
+        without noticing what its float is worth - and that seller's price,
+        not ours, is the one we pay.
+
+        Costing every fill at the bid was the pessimistic reading, defended on
+        the grounds that a standing order tells a seller where to price. That
+        holds for a seller who reads the book. It is exactly wrong for the one
+        this strategy exists to catch.
+
+        The median of what fills under the bid, so one freak cheap lot does
+        not flatter the whole band.
+        """
+        under = sorted(price for price in self.prices if price <= bid)
+        return st.median(under) if under else None
+
     def at(self, bid: float) -> float:
         """The rate of sales this band would take at a given bid."""
         if not self.prices or self.rate <= 0:
@@ -489,7 +522,16 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
             wars = int(round((ceiling - bid) / step))
             queue = sum(int(o.get("qty") or 1) for o in rivals
                         if o["price"] >= bid)
-            margin = (net - bid) / bid
+            # What a fill would cost, which is the listing's price and not
+            # ours. The bid is the most we would pay; the ceiling already
+            # guarantees that even that much leaves the margin we demand, so
+            # the worst case is covered and this is the ordinary one.
+            paid = flow.paid(bid)
+            if paid is None or paid <= 0:
+                bid = round(bid + step, 2)
+                continue
+            margin = (net - paid) / paid
+            worst = (net - bid) / bid
             t_buy = (1 + queue) / lam if lam > 0 else None
             if (lam >= p.min_lambda and wars >= p.min_wars and margin > 0
                     and t_buy is not None and t_buy <= p.max_fill_days
@@ -501,6 +543,7 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
                     market=market, market_error=error,
                     priced_from=source, top=top, entry=entry,
                     ceiling=ceiling, bid=bid, step=step, margin=margin,
+                    paid=paid, margin_worst=worst,
                     wars=wars, lam=lam, queue=queue, t_buy=t_buy,
                     t_sell=t_sell, take=True))
             elif (lam >= p.min_lambda and wars >= p.min_wars

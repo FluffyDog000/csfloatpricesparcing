@@ -126,9 +126,17 @@ def test_a_margin_inside_the_price_error_is_not_a_trade():
     orders = [{"price": 186.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     sales = _sales(rows)
 
+    # The multiple is what the rule is: a margin has to clear the error by it.
+    # With fills costing the listing's price rather than ours the margin is
+    # bigger than it used to look, so the bar has to be set against that.
+    loose_enough = plan(sales, orders, (0.15, 0.17),
+                        params=Params(min_sample=5, sigma_k=2.0))[0]
+    assert loose_enough.market_error > 0.04, "a split market is not a known price"
+    assert loose_enough.margin > 2.0 * loose_enough.market_error
+    assert loose_enough.take, "a margin well clear of the error is a trade"
+
     band = plan(sales, orders, (0.15, 0.17),
-                params=Params(min_sample=5, sigma_k=2.0))[0]
-    assert band.market_error > 0.04, "a split market is not a known price"
+                params=Params(min_sample=5, sigma_k=6.0))[0]
     assert not band.take
     assert "погрешность" in band.reason
 
@@ -265,8 +273,10 @@ def test_the_scan_pays_no_more_than_the_filters_require():
     faster = plan(sales, orders, (0.27, 0.29),
                   params=Params(min_sample=5, min_lambda=0.21))[0]
     assert faster.bid == 89.0
-    assert faster.margin < band.margin, "speed is bought with margin"
-    assert band.wars > faster.wars, "and with headroom"
+    # Raising the bid does not raise what the cheap fills cost, so the margin
+    # barely moves - the headroom is what actually gets spent.
+    assert faster.margin <= band.margin
+    assert band.wars > faster.wars, "headroom is what speed is bought with"
 
 
 def test_a_thin_band_borrows_from_its_neighbours_instead_of_being_dropped():
@@ -631,3 +641,52 @@ def test_borrowing_neighbours_does_not_invent_flow_that_is_not_there():
     assert flow.observed >= 3, "the window sees more than the slice"
     assert flow.rate < 0.1, f"but a slow item stays slow: {flow.rate}"
     assert 1 / flow.rate > 10, "one sale every week or two, and it says so"
+
+
+def test_a_fill_costs_the_listing_price_not_our_bid():
+    """A buy order does not wait for someone who means to sell to it: it takes
+    any listing that appears at or under it, and CSFloat charges the listing's
+    price. The orders that pay are the ones that catch a seller who priced
+    their lot as an ordinary example of the skin without noticing what its
+    float is worth - and that seller's price is the one we pay."""
+    from src.pricing import Flow
+
+    flow = Flow(rate=0.8, observed=9,
+                prices=(155.0, 158.0, 161.0, 164.0, 167.0,
+                        170.0, 176.0, 181.0, 188.0))
+    assert flow.paid(163.0) == 158.0
+    assert flow.paid(175.0) == 162.5
+    assert flow.paid(100.0) is None, "nothing fills, nothing is paid"
+
+
+def test_raising_the_bid_does_not_raise_what_the_cheap_lots_cost():
+    """Which is the whole point: a higher order catches more mispriced
+    listings without paying more for the ones already caught."""
+    from src.pricing import Flow
+
+    flow = Flow(rate=0.8, observed=9,
+                prices=(155.0, 158.0, 161.0, 164.0, 167.0,
+                        170.0, 176.0, 181.0, 188.0))
+    net = 181.0
+    cheap = (net - flow.paid(163.0)) / flow.paid(163.0)
+    dear = (net - flow.paid(175.0)) / flow.paid(175.0)
+    assert dear > cheap * 0.7, \
+        f"costing every fill at the bid would have shown a collapse: {cheap} -> {dear}"
+
+
+def test_the_ceiling_still_bounds_the_worst_case():
+    """The ordinary case is the listing's price; the worst is our own bid, and
+    the ceiling is what guarantees even that much leaves a margin."""
+    from src.pricing import Params, plan
+
+    sales = _spread()
+    band = plan(sales, [], (0.15, 0.38), params=Params(
+        band_step=0.02, min_sample=5, min_lambda=0.05, min_wars=0,
+        sigma_k=0.0, min_margin=0.03))[0]
+
+    assert band.take and band.bid <= band.ceiling
+    assert band.margin_worst == pytest.approx(
+        (band.market * 0.98 - band.bid) / band.bid)
+    assert band.margin_worst >= 0.03 - 1e-9, "the ceiling's promise"
+    assert band.paid <= band.bid
+    assert band.margin >= band.margin_worst, "and the ordinary case is better"

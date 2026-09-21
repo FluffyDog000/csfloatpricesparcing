@@ -263,7 +263,7 @@
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="10" class="muted">${b.reason}</td>`;
       return tr;
     }
     tr.className = "band-take";
@@ -289,13 +289,19 @@
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
       <td>${b.wars}</td>
+      <td>${money(b.paid)}<span class="muted">${
+        b.paid && b.bid ? ` −${(b.bid - b.paid).toFixed(2)}` : ""}</span></td>
       <td>${money(b.market)}<span class="muted"${
         b.borrowed ? ` title="своих продаж ${b.sample}, взято ${b.borrowed} `
           + `ближайших, дальняя за ${b.reach.toFixed(3)} по float. `
           + `Погрешность ${(b.market_error * 100).toFixed(1)}%"` : ""
         }> ${b.priced_from}${b.borrowed ? " ±" + (b.market_error * 100).toFixed(0)
           + "%" : ""}</span></td>
-      <td><b>${pct(b.margin)}</b></td>
+      <td><b>${pct(b.margin)}</b>${
+        b.margin_worst !== null && b.margin_worst !== undefined
+          ? ` <span class="muted" title="если бы лот обошёлся в полную ставку`
+            + ` ${money(b.bid)} — потолок гарантирует, что и тогда не в убыток"`
+            + `>(${pct(b.margin_worst)})</span>` : ""}</td>
       <td>${b.lam.toFixed(2)}</td>
       <td>${days(b.t_buy)}</td>
       <td>${days(b.t_sell)}</td>`;
@@ -457,8 +463,11 @@
         <th>float</th>
         <th title="минимальная цена, которая ставит нас первыми в полосе">минимум</th>
         <th>ставить</th><th>потолок</th><th>запас</th>
+        <th title="во сколько обойдётся лот на самом деле: CSFloat берёт цену
+лота, а не нашу ставку — ставка это лишь потолок">платим</th>
         <th>рынок</th>
-        <th title="что останется после комиссии, если продать по рынку">маржа</th>
+        <th title="считается от того, что платим. В скобках — если бы каждый
+лот обошёлся в нашу полную ставку: это то, что гарантирует потолок">маржа</th>
         <th>λ/сут</th>
         <th title="сколько ждать, пока ордер наберётся">набор</th>
         <th title="сколько ждать покупателя после того, как снимут бан">продажа</th>
