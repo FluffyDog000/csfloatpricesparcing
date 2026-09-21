@@ -204,3 +204,26 @@ def test_ids_and_guesswork_can_be_mixed():
             {"remote_id": "", "price": 80.0,
              "float_min": 0.20, "float_max": 0.22}]
     assert [r["id"] for r in strip_own(book, mine)] == ["z9"]
+
+
+def test_the_live_book_carries_no_id_so_the_fallback_is_the_normal_path():
+    """Read off the endpoint: name, filters, count, price. Nothing to match on
+    but the price and the bounds, and equal orders are folded into one row."""
+    from src.holdings import strip_own
+    from src.orders import parse_orders
+
+    live = [
+        {"market_hash_name": "★ Butterfly Knife | Marble Fade (Factory New)",
+         "hybrid_properties": {}, "qty": 8, "price": 127000},
+        {"market_hash_name": "★ Butterfly Knife | Marble Fade (Factory New)",
+         "hybrid_properties": {"min_float": 0, "max_float": 0.04},
+         "qty": 1, "price": 119000},
+    ]
+    book = parse_orders(live)
+    assert all(row["id"] is None for row in book), "no ids to match on"
+    assert book[0]["price"] == 1270.0 and book[0]["qty"] == 8
+
+    # Ours is one of the eight standing at that price, not all eight.
+    left = strip_own(book, [{"remote_id": "r1", "price": 1270.0,
+                             "float_min": None, "float_max": None}])
+    assert left[0]["qty"] == 7

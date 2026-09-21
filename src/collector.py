@@ -328,6 +328,23 @@ class Collector:
         key = self.config.http.api_key
         return {"Authorization": key} if key else None
 
+    def _book_headers(self) -> dict[str, str | None] | None:
+        """Read the order book on the API key, deliberately without the cookie.
+
+        Tested against the live endpoint: an API key alone returns the book.
+        The 403 that made this look cookie-only was never about credentials -
+        it said "Disable your VPN to view buy orders", and it was the exit
+        address being refused, not the key.
+
+        Cookie set to None removes it from the request rather than leaving the
+        session's to be merged in, so the reads - which are nearly all of the
+        traffic - stop replaying a browser session across a dozen addresses.
+        That is what drew "too many requests from too many IPs". Without a key
+        configured this returns None and the session is used exactly as before.
+        """
+        key = self.config.http.api_key
+        return {"Authorization": key, "Cookie": None} if key else None
+
     def _fetch_listings(self, name: str, sort_by: str | None = None) -> object:
         url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
                f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
@@ -429,7 +446,8 @@ class Collector:
                 url = (f"{self.config.http.base_url}"
                        f"{ORDERS_PATH.format(listing_id=step['id'])}"
                        f"?limit={DEFAULT_LIMIT}")
-                batches.append(parse_orders(self.client.fetch_json(url)))
+                batches.append(parse_orders(
+                    self.client.fetch_json(url, headers=self._book_headers())))
                 result["requests"] += 1
                 result["bands"] += 1
             except VpnBlocked as exc:
@@ -1082,7 +1100,7 @@ class Collector:
             url = (f"{self.config.http.base_url}"
                    f"{ORDERS_PATH.format(listing_id=listing_id)}"
                    f"?limit={DEFAULT_LIMIT}")
-            payload = self.client.fetch_json(url)
+            payload = self.client.fetch_json(url, headers=self._book_headers())
         except Exception as exc:  # noqa: BLE001 - a button press must not kill polling
             log.warning("Buy orders for '%s' failed: %s", name, exc)
             # A listing that has sold gives a 404; drop it so the next attempt

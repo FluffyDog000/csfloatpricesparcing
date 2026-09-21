@@ -335,3 +335,51 @@ def test_a_sweep_where_nothing_answered_says_so():
     assert result["bands"] == 0 and result["failed_bands"] == 3
     assert result["error"], "a sweep that read nothing must not report silence"
     assert "не ответила" in result["error"]
+
+
+def test_the_book_is_read_on_the_api_key_without_the_cookie():
+    """Tested against the live endpoint: an API key alone returns the book.
+    The 403 that made this look cookie-only said "Disable your VPN to view buy
+    orders" - the exit address was refused, not the key.
+
+    Reads are nearly all of the traffic, and replaying a browser session
+    across a dozen addresses is what drew "too many requests from too many
+    IPs"."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    cfg.http.api_key = "test-key"
+    db = Database(cfg.db_path)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    headers = col._book_headers()
+    assert headers["Authorization"] == "test-key"
+    assert headers["Cookie"] is None, \
+        "None removes the session's cookie rather than merging it in"
+
+    # Without a key nothing changes: the session is used exactly as before.
+    cfg.http.api_key = None
+    assert col._book_headers() is None
+    db.close()
+
+
+def test_every_book_request_carries_those_headers():
+    """Two call sites read the book; one left behind would keep sending the
+    cookie and the change would be half-made."""
+    import pathlib
+
+    source = pathlib.Path("src/collector.py").read_text(encoding="utf-8")
+    calls = [line for line in source.splitlines()
+             if "ORDERS_PATH.format" in line]
+    assert len(calls) == 2, f"call sites moved: {calls}"
+    assert source.count("headers=self._book_headers()") == 2

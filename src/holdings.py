@@ -119,7 +119,9 @@ def strip_own(book: Sequence[dict], ours: Sequence[dict]) -> list[dict]:
     happened.
 
     When the book names its orders, ours are recognised outright: every order
-    the bot places records the id CSFloat answered with. Only what is left
+    the bot places records the id CSFloat answered with. As read today it does
+    not - a live reply carries only the name, the filters, a count and a price
+    - so the fallback below is the path that runs. Only what is left
     over falls back to matching on price and bounds - one entry removed per
     order held, never more. That fallback is a guess a rival standing at
     exactly our price and range defeats, which undercounts by one; counting
