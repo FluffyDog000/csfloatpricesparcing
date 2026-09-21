@@ -36,6 +36,12 @@ PRICE_TIERS: tuple[tuple[float, float], ...] = (
 )
 TOP_TIER_STEP = 10.00
 
+# An uncontested band is scanned from its cheapest sale rather than from a
+# fixed fraction of the market, which can be a long way below the ceiling.
+# The walk is one grid step at a time, so it needs an end that does not depend
+# on the spread being sane.
+MAX_SCAN_STEPS = 2000
+
 # Borrowing a price from neighbouring sales is worth a point of doubt for
 # every hundredth of float the window had to reach past the band's own edge.
 # Both in float, so the band step - a setting, not a fact about the market -
@@ -139,6 +145,9 @@ class Band:
     # neighbours: how many it used and how far it had to reach for them.
     borrowed: int = 0
     reach: float | None = None
+    # How many sales the flow estimate rested on. Counting only the slice gave
+    # one or two, which is not a rate; this counts the window.
+    flow_sample: int = 0
     take: bool = False
     reason: str = ""
 
@@ -292,6 +301,62 @@ def _iqr(values: Sequence[float]) -> float:
     return q3 - q1
 
 
+@dataclass
+class Flow:
+    """How often a band trades, and what the prices in it look like.
+
+    Counting only the sales that fell inside the band was the trouble. A 0.01
+    slice of a Field-Tested range is a twenty-third of it, so a band saw a
+    twenty-third of the item's sales - one or two in three weeks, from which a
+    rate cannot be measured at all. Zero sales in a slice is not evidence of
+    zero flow, and the flow threshold was rejecting bands on that evidence.
+
+    Price already borrows from the neighbours, and flow can be read the same
+    way: how often the item trades is measured over all of it, and the share
+    landing in this band comes from where the floats fall. Both are estimated
+    from hundreds of sales instead of two.
+    """
+    rate: float = 0.0          # sales a day landing in this band
+    prices: tuple = ()         # neighbours' prices, carried to our float
+    observed: int = 0          # sales the window actually held
+
+    def at(self, bid: float) -> float:
+        """The rate of sales this band would take at a given bid."""
+        if not self.prices or self.rate <= 0:
+            return 0.0
+        under = sum(1 for price in self.prices if price <= bid)
+        return self.rate * under / len(self.prices)
+
+
+def band_flow(sales: Sequence[dict], lo: float, hi: float, window_days: float,
+              reach: float, slope: float, at: float) -> Flow:
+    """The band's trade rate, read off the item rather than off the slice.
+
+    The same window the price was fitted over: sales near the band, carried to
+    our float by the fitted slope so a neighbour's price says what it would
+    have said here. The rate is the window's rate scaled to the band's width -
+    a box kernel, which is the least that can be assumed about where within a
+    window the floats fall.
+    """
+    if window_days <= 0:
+        return Flow()
+    centre = (lo + hi) / 2.0
+    radius = max(reach, (hi - lo) / 2.0)
+    near = [s for s in sales
+            if s.get("float_value") is not None and s.get("price")
+            and abs(float(s["float_value"]) - centre) <= radius + 1e-12
+            and (s.get("age_days") is None or s["age_days"] <= window_days)]
+    if not near:
+        return Flow()
+
+    width = max(2.0 * radius, hi - lo)
+    rate = (len(near) / window_days) * min(1.0, (hi - lo) / width)
+    prices = tuple(
+        float(s["price"]) + slope * (at - float(s["float_value"]))
+        for s in near)
+    return Flow(rate=rate, prices=prices, observed=len(near))
+
+
 def _exit_price(history: float, depth: Sequence[dict], lo: float, hi: float,
                 source: str, at: float, slope: float = 0.0) -> tuple[float, str]:
     """What the lot sells for, and it is the live book that says so.
@@ -388,7 +453,18 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
         ceiling = snap_down(net / (1.0 + p.min_margin))
         rivals = _competing(orders, lo, hi, span)
         top = max((o["price"] for o in rivals), default=0.0)
-        entry = next_above(top) if top else snap_down(market * 0.85)
+        flow = band_flow(sales, lo, hi, p.window_days, reach, slope, at=hi)
+        if top:
+            entry = next_above(top)
+        else:
+            # Nobody is bidding here, so nothing forces a floor: any price
+            # leads a band of one. The scan starts at the cheapest price that
+            # could catch anything - below the cheapest sale there is no flow
+            # to be had, and above it every price is worth considering. It
+            # used to start at a flat 85% of market, a number from nowhere
+            # that simply forbade the cheaper half of an uncontested band.
+            entry = (snap_down(min(flow.prices)) if flow.prices
+                     else snap_down(market * 0.85))
 
         row.market, row.priced_from, row.step = market, source, step
         row.market_error = error
@@ -400,17 +476,16 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
             out.append(row)
             continue
 
-        recent = [s for s in sales
-                  if s.get("float_value") is not None and lo <= s["float_value"] < hi
-                  and (s.get("age_days") is None or s["age_days"] <= p.window_days)]
-        lam_sell = len(recent) / p.window_days
+        lam_sell = flow.rate
+        row.flow_sample = flow.observed
         found: list[Band] = []
         thin = False
         blocked = "нет цены с потоком и запасом"
         bid = entry
-        while bid <= ceiling + 1e-9:
-            fills = [s for s in recent if s["price"] <= bid]
-            lam = len(fills) / p.window_days
+        steps = 0
+        while bid <= ceiling + 1e-9 and steps < MAX_SCAN_STEPS:
+            steps += 1
+            lam = flow.at(bid)
             wars = int(round((ceiling - bid) / step))
             queue = sum(int(o.get("qty") or 1) for o in rivals
                         if o["price"] >= bid)
@@ -438,8 +513,7 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
         # Measured whether or not the entry passes the filters: when it does
         # not, why it does not is the answer to "why are we bidding over the
         # book", and that is the question the number gets asked.
-        entry_fills = [x for x in recent if x["price"] <= entry]
-        entry_lam = len(entry_fills) / p.window_days
+        entry_lam = flow.at(entry)
         entry_queue = sum(int(o.get("qty") or 1) for o in rivals
                           if o["price"] >= entry)
         entry_t_buy = (1 + entry_queue) / entry_lam if entry_lam > 0 else None

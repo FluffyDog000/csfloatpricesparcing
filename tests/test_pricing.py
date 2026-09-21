@@ -537,3 +537,97 @@ def test_nothing_in_the_scoring_reads_an_annualised_return_any_more():
     assert "min(found, key=lambda b: b.bid)" in inspect.getsource(pricing.evaluate)
     assert "band.monthly" not in inspect.getsource(executor.rank)
     assert "margin" in inspect.getsource(executor.rank)
+
+
+def _spread(n=460, lo=0.15, hi=0.38, base=130.0, days=21):
+    """An item trading steadily across a whole wear."""
+    out = []
+    for i in range(n):
+        f = lo + (hi - lo) * (i % 100) / 100.0
+        out.append({"price": round(base * (0.85 + (i % 7) / 20.0), 2),
+                    "float_value": round(f, 4),
+                    "age_days": float(i % days)})
+    return out
+
+
+def test_a_narrow_band_is_no_longer_starved_of_flow():
+    """A 0.01 slice of Field-Tested is a twenty-third of it, so counting only
+    the sales inside gave one or two in three weeks - from which no rate can
+    be measured. Zero sales in a slice is not evidence of zero flow, and that
+    was the evidence bands were being rejected on."""
+    from src.pricing import Params, band_flow
+
+    sales = _spread()
+    inside = [s for s in sales
+              if 0.20 <= s["float_value"] < 0.21 and s["age_days"] <= 21]
+    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
+
+    assert flow.observed > len(inside) * 3, \
+        "the window holds far more than the slice"
+    assert flow.rate > 0, "and turns into a rate rather than a coin toss"
+
+
+def test_the_rate_is_scaled_to_the_band_not_to_the_window():
+    """Borrowing neighbours to measure a rate would otherwise credit a 0.01
+    band with a 0.06 window's worth of trade."""
+    from src.pricing import band_flow
+
+    sales = _spread()
+    narrow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
+    wide = band_flow(sales, 0.20, 0.26, 21.0, reach=0.03, slope=0.0, at=0.26)
+    assert wide.rate > narrow.rate * 3, \
+        f"a six times wider band should trade far more: {wide.rate} vs {narrow.rate}"
+
+
+def test_flow_at_a_bid_is_the_share_of_prices_under_it():
+    from src.pricing import band_flow
+
+    sales = _spread()
+    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
+    assert flow.at(0.0) == 0.0
+    assert flow.at(10_000.0) == pytest.approx(flow.rate)
+    assert 0 < flow.at(130.0) < flow.rate
+
+
+def test_an_uncontested_band_may_be_bid_below_the_old_floor():
+    """Nobody bidding means nothing forces a floor: any price leads a band of
+    one. Starting at a flat 85% of market simply forbade the cheaper half."""
+    from src.pricing import Params, plan
+
+    sales = _spread()
+    band = plan(sales, [], (0.15, 0.38), params=Params(
+        band_step=0.02, min_sample=5, min_lambda=0.05, min_wars=0,
+        sigma_k=0.0))[0]
+
+    assert band.take, band.reason
+    assert band.entry < band.market * 0.85, \
+        f"entry {band.entry} was floored at 85% of {band.market}"
+    assert band.bid >= band.entry
+
+
+def test_a_contested_band_still_starts_above_the_book():
+    """Where there is competition the floor is real: below the top bid we are
+    not first, and strict price priority means we do not fill."""
+    from src.pricing import Params, next_above, plan
+
+    sales = _spread()
+    book = [{"price": 120.0, "qty": 1, "float_min": 0.15, "float_max": 0.38}]
+    band = plan(sales, book, (0.15, 0.38), params=Params(
+        band_step=0.02, min_sample=5, min_lambda=0.05, min_wars=0))[0]
+    assert band.entry == next_above(120.0)
+
+
+def test_borrowing_neighbours_does_not_invent_flow_that_is_not_there():
+    """The estimate has to be honest in both directions. A slow item sliced
+    thinly really does trade rarely, and the fix is meant to measure that -
+    not to make every band look busy enough to pass."""
+    from src.pricing import band_flow
+
+    # One sale a day across a whole wear: a 0.01 slice gets a twenty-third.
+    sales = [{"price": 130.0, "float_value": round(0.15 + 0.23 * (i % 100) / 100, 4),
+              "age_days": float(i % 21)} for i in range(21)]
+    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
+
+    assert flow.observed >= 3, "the window sees more than the slice"
+    assert flow.rate < 0.1, f"but a slow item stays slow: {flow.rate}"
+    assert 1 / flow.rate > 10, "one sale every week or two, and it says so"
