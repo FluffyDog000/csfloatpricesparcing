@@ -345,6 +345,14 @@ class Collector:
         key = self.config.http.api_key
         return {"Authorization": key, "Cookie": None} if key else None
 
+    def _book_credential(self) -> str:
+        """Which credential _book_headers() actually put on the request.
+
+        Worth naming in a refusal: the two paths fail for different reasons and
+        the fix differs. Reporting the cookie while the request went out on a
+        key sends the reader to renew something the request never carried."""
+        return "key" if self.config.http.api_key else "cookie"
+
     def _fetch_listings(self, name: str, sort_by: str | None = None) -> object:
         url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
                f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
@@ -470,8 +478,13 @@ class Collector:
                 # same. Stop and say which credential to fix.
                 log.warning("Order sweep for '%s' refused: %s", name, exc)
                 result["error"] = (
-                    "CSFloat не принял доступ к ордерам — обнови CSFLOAT_COOKIE "
-                    "в .env (кука истекает; она нужна именно для ордеров)")
+                    "CSFloat отклонил ключ CSFLOAT_API_KEY — он отозван или "
+                    "не даёт доступа к ордерам. Стакан читается ключом, кука "
+                    "для него не нужна"
+                    if self._book_credential() == "key" else
+                    "CSFLOAT_API_KEY не задан, поэтому стакан запрашивался "
+                    "кукой — и она истекла. Пропиши ключ в .env: на ключе "
+                    "стакан читается без куки")
                 break
             except RateLimited as exc:
                 # Every remaining band would hit the same limit; stopping keeps

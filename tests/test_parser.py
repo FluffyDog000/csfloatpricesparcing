@@ -1766,10 +1766,16 @@ def test_an_auth_refusal_stops_the_sweep_and_names_the_credential():
         return listings
 
     col.client.fetch_json = refused
+    # Pin the credential rather than inheriting whatever the environment has:
+    # the book goes out on the key when one is set and falls back to the cookie
+    # when it is not, and the refusal names a different fix for each.
+    cfg.http.api_key = "il1-testkey"
     result = col.sweep_buy_orders("Gloves", item_id)
 
     assert len(calls) == 2, "stop after the first refusal, not after all eight"
-    assert "CSFLOAT_COOKIE" in result["error"], "name the credential to fix"
+    assert "CSFLOAT_API_KEY" in result["error"], "name the credential to fix"
+    assert "CSFLOAT_COOKIE" not in result["error"], (
+        "the book carried the key, so renewing the cookie fixes nothing")
 
 
 def test_side_requests_report_an_auth_refusal_as_such():
