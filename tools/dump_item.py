@@ -20,17 +20,42 @@ from datetime import datetime, timedelta, timezone
 
 
 def find_db(explicit: str | None) -> str:
+    """Where the bot keeps its database.
+
+    Asked of the project's own config loader rather than guessed: a list of
+    likely filenames here missed the real one (data/csfloat_sales.db) and left
+    the caller with nothing to go on. The loader is the single place that
+    knows, and it already reads CSFLOAT_DB_PATH and config.yaml.
+    """
     if explicit:
+        if not os.path.exists(explicit):
+            sys.exit(f"{explicit}: нет такого файла")
         return explicit
-    env = os.environ.get("CSFLOAT_DB_PATH")
-    if env and os.path.exists(env):
-        return env
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for candidate in ("data/csfloat.db", "csfloat.db", "data/prices.db"):
-        path = os.path.join(here, candidate)
-        if os.path.exists(path):
-            return path
-    sys.exit("cannot find the database; pass --db /path/to.db")
+
+    tried = []
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    try:
+        from src.config import load_config
+        configured = str(load_config().db_path)
+        if os.path.exists(configured):
+            return configured
+        tried.append(configured)
+    except Exception as exc:  # noqa: BLE001 - a broken config must not hide the path
+        tried.append(f"(конфиг не прочитался: {type(exc).__name__}: {exc})")
+
+    fallback = os.path.join(root, "data", "csfloat_sales.db")
+    if os.path.exists(fallback):
+        return fallback
+    tried.append(fallback)
+
+    print("не нашёл базу. Искал:", file=sys.stderr)
+    for path in dict.fromkeys(tried):     # same path twice reads like a bug
+        print(f"  {path}", file=sys.stderr)
+    print("\nукажи путь явно:  --db /путь/до.db", file=sys.stderr)
+    print("найти её можно так: find ~ -name '*.db' -size +1k 2>/dev/null",
+          file=sys.stderr)
+    sys.exit(1)
 
 
 def resolve_item(con: sqlite3.Connection, name: str) -> tuple[int, str]:
