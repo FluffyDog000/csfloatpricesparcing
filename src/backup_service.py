@@ -132,6 +132,10 @@ class BackupService:
         set a sweep going, so the answer is read from the database only."""
         from . import tgcommands
 
+        if tgcommands.command(text) in tgcommands.SENDS_A_FILE:
+            self._send_item_dump(tgcommands.argument(text))
+            return
+
         try:
             reply = tgcommands.answer(text, self.db)
         except Exception as exc:  # noqa: BLE001 - a bad answer is not a crash
@@ -143,6 +147,53 @@ class BackupService:
                 self.tg.send_message(tgcommands.HELP, parse_mode="HTML")
             return
         self.tg.send_message(reply, parse_mode="HTML")
+
+    DUMP_DAYS = 60
+
+    def _send_item_dump(self, wanted: str) -> None:
+        """Answer /dump with one item's tables as a file.
+
+        The whole-database export is 69MB against Telegram's ~50MB ceiling and
+        fails, and it carries the settings table - the proxy list with its
+        passwords - so it was never the right thing to ask for anyway. One
+        item's tables are tens of kilobytes and hold no credentials.
+        """
+        from . import item_dump
+
+        if not wanted:
+            self.tg.send_message(
+                "Напиши, какой предмет: <code>/dump AWP | Printstream (Field-Tested)</code>",
+                parse_mode="HTML")
+            return
+        try:
+            item_id, name = item_dump.resolve(self.db.conn, wanted)
+        except item_dump.ItemNotFound as miss:
+            listed = "\n".join(f"• {c}" for c in miss.candidates[:30])
+            more = ("\n…и ещё" if len(miss.candidates) > 30 else "")
+            self.tg.send_message(
+                f"Не нашёл «{wanted}». Есть такие:\n{listed}{more}"
+                if listed else f"Не нашёл «{wanted}», и в базе пока нет предметов.")
+            return
+        except Exception as exc:  # noqa: BLE001 - a bad command is not a crash
+            log.exception("Dump for %r failed to resolve: %s", wanted, exc)
+            self.tg.send_message(f"Не смог найти предмет: {exc}")
+            return
+
+        try:
+            body = item_dump.render(self.db.conn, item_id, name, self.DUMP_DAYS)
+            self.config.backups_dir.mkdir(parents=True, exist_ok=True)
+            path = self.config.backups_dir / item_dump.safe_filename(
+                name, self.DUMP_DAYS)
+            path.write_text(body, encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Dump for %r failed: %s", name, exc)
+            self.tg.send_message(f"Не смог собрать выгрузку: {exc}")
+            return
+
+        headings = [line[3:] for line in body.splitlines() if line.startswith("## ")]
+        caption = name + ("\n" + "\n".join(headings) if headings else "")
+        if not self.tg.send_document(path, caption=caption[:1000]):
+            self.tg.send_message(f"Собрал выгрузку по «{name}», но отправить не смог.")
 
     def _poll_telegram(self) -> None:
         if not self.tg.configured():

@@ -19,12 +19,25 @@ HELP = (
     "/orders — сколько в ордерах и какая ожидаемая прибыль\n"
     "/items — список ордеров по одному\n"
     "/status — состояние бота: защита, лимиты, последняя сверка\n"
+    "/dump &lt;предмет&gt; — файлом: продажи, стакан и листинги по предмету\n"
     "/help — это сообщение"
 )
 
+# /dump answers with a file rather than text, so the transport handles it and
+# answer() deliberately returns None for it. Listed here so the help stays
+# honest and an unknown-command reply is not sent for it.
+SENDS_A_FILE = ("dump",)
+
 
 def known(text: str) -> bool:
-    return command(text) in ("orders", "items", "status", "help", "start")
+    return command(text) in ("orders", "items", "status", "help", "start",
+                             *SENDS_A_FILE)
+
+
+def argument(text: str) -> str:
+    """Everything after the command word, for the commands that take one."""
+    return (text or "").strip().split(maxsplit=1)[1].strip() \
+        if len((text or "").strip().split(maxsplit=1)) > 1 else ""
 
 
 def command(text: str) -> str:
