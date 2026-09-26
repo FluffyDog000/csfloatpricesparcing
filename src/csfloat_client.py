@@ -382,11 +382,27 @@ class CSFloatClient:
         path = self.http.sales_path_template.format(name=encoded)
         return self.http.base_url + path
 
+    def _sales_headers(self) -> dict[str, str | None]:
+        """Sales history is public, so it is read with no credentials at all.
+
+        Tested against the live endpoint: history/{name}/sales answers 200
+        anonymously, and its 500 counter belongs to the exit address — a fresh
+        address already read 463 of 500, spent by whoever else shares it.
+
+        That makes carrying a credential here pure cost. Sales polling is the
+        bulk of our traffic, and sending the browser session with it replayed
+        one account across every proxy in the pool, which is what drew "too
+        many requests from too many IPs". None removes the session's header
+        from the request rather than letting it merge in.
+        """
+        return {"Cookie": None, "Authorization": None}
+
     def fetch_latest_sales(self, market_hash_name: str) -> object:
         """Fetch and return the parsed JSON body for an item's latest sales.
 
-        Picks the outgoing route (direct or a proxy) with the most quota left.
-        Raises AuthError on 401/403, RateLimited when the route is limited."""
+        Sent anonymously (see _sales_headers). Picks the outgoing route (direct
+        or a proxy) with the most quota left. Raises RateLimited when the route
+        is limited; a 401/403 here is the address being refused, not us."""
         url = self.sales_url(market_hash_name)
         rl = self.polling.rate_limit
         backoff = rl.base_backoff_seconds
@@ -404,7 +420,8 @@ class CSFloatClient:
             self._respect_spacing()
             try:
                 resp = self.session.get(url, timeout=self.http.timeout_seconds,
-                                        proxies=route.proxies())
+                                        proxies=route.proxies(),
+                                        headers=self._sales_headers())
             except requests.RequestException as exc:
                 self.pool.record_failure(route, exc)
                 attempt += 1
@@ -434,9 +451,14 @@ class CSFloatClient:
                     attempt += 1
                     backoff = min(backoff * 2, rl.max_backoff_seconds)
                     continue
+                # Sales go out with no credentials, so there is none to have
+                # expired: at this point CSFloat is refusing the address.
+                # Saying "refresh the cookie" would send the reader to renew
+                # something the request never carried.
                 raise AuthError(
                     f"HTTP {resp.status_code} for {market_hash_name} — "
-                    f"session cookie/token likely expired, refresh it."
+                    f"история продаж запрашивается без учётных данных, так что "
+                    f"отказ относится к адресу, а не к куке. Нужен другой IP."
                 )
 
             if resp.status_code == 429:
