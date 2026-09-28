@@ -571,3 +571,16 @@ def test_the_depth_line_counts_bands_and_says_so():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     assert "стакан продаж прочитан по ${it.depth} полосам" in source
     assert "листингов по полосам" not in source
+
+
+def test_the_exit_shows_the_candidate_that_lost_as_well():
+    """"история" says which of the two priced the rung and not by how much.
+    Whether the sell queue came anywhere near binding is the whole question
+    the stored lot prices were collected to answer, and the table was silent
+    on it."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.queue_price" in row
+    assert "против" in row, "the losing candidate is named beside the winner"
+    assert "за блокировку" in row, \
+        "and when the queue cannot bind, why - the lock cleared it"

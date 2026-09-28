@@ -274,6 +274,18 @@
     const room = (b.ceiling || 0) - (b.bid || 0);
     const steps = b.step ? Math.floor(room / b.step + 1e-9) : 0;
     const rank = (b.lam || 0) * (b.margin || 0);
+    // Which candidate set the exit, and what the other one said. "история"
+    // on its own does not say whether the sell queue was a cent away from
+    // binding or nowhere near it - and that is the question the stored lot
+    // prices exist to answer.
+    const exit_from = b.priced_from;
+    const other = exit_from === "очередь" ? b.market : (b.queue_price ?? null);
+    const exitWhy = b.queue_price === null || b.queue_price === undefined
+      ? `медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам.`
+        + ` Очередь не ограничивает: за блокировку успевает уйти`
+        + ` ${b.lots_cleared} лот(ов) из ${b.queue}`
+      : `медиана по ${b.sample} сделкам против цены очереди;`
+        + ` за блокировку уходит ${b.lots_cleared} из ${b.queue} лотов`;
     tr.innerHTML = `
       <td><b>${band}</b></td>
       <td class="muted">${b.top ? money(b.top) : "никого"}</td>
@@ -281,7 +293,10 @@
       <td>${money(b.ceiling)}</td>
       <td>${b.bid && b.ceiling
         ? `${money(room)}<span class="muted"> = ${steps}</span>` : "—"}</td>
-      <td>${money(b.market)}<span class="muted" title="медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам"> ${b.priced_from}</span></td>
+      <td>${money(exit_from === "очередь" ? b.queue_price : b.market)}
+        <span class="muted" title="${exitWhy}">${b.priced_from}</span>${
+        other !== null ? `<br><small class="muted">против ${money(other)}
+          ${exit_from === "очередь" ? "по истории" : "по очереди"}</small>` : ""}</td>
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>

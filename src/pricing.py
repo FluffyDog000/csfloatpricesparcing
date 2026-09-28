@@ -106,6 +106,12 @@ class Band:
     float_max: float
     sample: int = 0
     market: float | None = None        # what it resells for
+    # The other candidate for the exit, and the one that lost. Kept because
+    # "история" alone says which won and not by how much - and whether the
+    # sell queue came anywhere near binding is the whole question the stored
+    # lot prices were collected to answer.
+    queue_price: float | None = None
+    lots_cleared: float = 0.0
     priced_from: str = "история"
     top: float = 0.0                   # best competing bid in the band
     entry: float | None = None         # cheapest price that puts us first
@@ -235,6 +241,8 @@ def _as_band(rung) -> Band:
         float_max=rung.top,
         sample=rung.sample,
         market=rung.market,
+        queue_price=rung.queue_price,
+        lots_cleared=round(rung.lots_cleared, 1),
         priced_from=rung.priced_from or "история",
         top=rung.rival,
         ceiling=rung.ceiling,

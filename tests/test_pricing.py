@@ -145,3 +145,26 @@ def test_the_ceiling_still_bounds_the_worst_case():
     assert band.margin >= band.margin_worst, "and the ordinary case is better"
 
 
+
+
+def test_a_band_carries_both_exit_candidates_not_only_the_winner():
+    """The dashboard has to show what the queue said even when the history
+    outbid it: "история" alone cannot tell a queue a cent away from binding
+    from one nowhere near."""
+    import datetime as dt
+
+    from src.pricing import Params, plan
+
+    sales = [{"price": 110.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+             for i in range(40)]
+    sales += [{"price": 96.0, "float_value": 0.165, "age_days": i + 0.5}
+              for i in range(4)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "listings": 40,
+              "cheapest": 95.0,
+              "asks": [[95.0, 0.165]] + [[108.0, 0.165]] * 39}]
+    bands = plan(sales, [], (0.15, 0.38), depth, Params(window_days=16.0))
+    priced = [b for b in bands if b.market is not None]
+    assert priced, "the fixture has to price something"
+    assert any(b.queue_price is not None for b in priced), \
+        "what the queue allowed is reported, win or lose"
+    assert all(b.lots_cleared >= 0 for b in priced)
