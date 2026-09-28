@@ -550,3 +550,21 @@ def test_waiting_is_counted_in_minutes_not_in_polls():
     assert "проверка ${tries} из" not in source
     assert "проверка ${i} из" not in source
     assert source.count("спрашиваю ещё") == 2, "both waits say it the same way"
+
+
+def test_the_two_sides_of_the_market_are_named_apart():
+    """"ордеров в стакане 21" sat above a column also reading 21 and was taken
+    for the same number. One is who bids against us; the other is who we would
+    queue behind when selling."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    assert "чужих ордеров на покупку" in source
+    assert "ордеров в стакане" not in source
+
+
+def test_the_depth_line_counts_bands_and_says_so():
+    """`it.depth` is the number of float bands read, and the line called them
+    listings - a different thing, and one the reader can check against four
+    bands holding fifty lots each."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    assert "стакан продаж прочитан по ${it.depth} полосам" in source
+    assert "листингов по полосам" not in source

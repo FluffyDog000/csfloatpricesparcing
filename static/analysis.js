@@ -408,10 +408,15 @@
         box.appendChild(sec);
         return;
       }
+      // Two sides of the market, and the labels have to say which is which:
+      // "ордеров в стакане 21" beside a column also reading 21 was taken for
+      // the same number. One is who bids against us, the other is who we
+      // would queue behind when selling. And `it.depth` counts BANDS - the
+      // old wording called them listings, which is a different thing entirely.
       meta.textContent =
-        `продаж ${it.sales} · ордеров в стакане ${it.orders}` +
+        `продаж ${it.sales} · чужих ордеров на покупку ${it.orders}` +
         (it.swept_at ? ` · обойдён ${it.swept_at.slice(0, 16).replace("T", " ")}` : "") +
-        (it.depth ? ` · листингов по полосам ${it.depth}`
+        (it.depth ? ` · стакан продаж прочитан по ${it.depth} полосам`
                   : " · листинги не собраны (цена выхода из истории, завышена)");
       sec.appendChild(meta);
 
