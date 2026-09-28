@@ -58,13 +58,14 @@ def test_being_outbid_is_not_by_itself_a_reason_to_answer():
     assert "очередь разойдётся" in patient[0].reason
 
     # The same outbid on a band that trades once a month is a real delay, and
-    # there is no answering it: the bid is already the most the margin floor
-    # allows, so the position is released and its allowance goes elsewhere.
+    # this one can be answered: we opened a step over the book, not at the
+    # ceiling, so there is room between the two to pay with.
     slow = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=0.03)],
                      [row(0.15, 0.17, 100.0, 110.0)], book,
                      Limits(patience_minutes=20160.0))
-    assert slow[0].kind == CANCEL
-    assert "позволяет маржа" in slow[0].reason
+    assert slow[0].kind == RAISE
+    assert slow[0].price == 102.0, "one tier step over the rival"
+    assert slow[0].was == 100.0
 
 
 def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
@@ -75,7 +76,7 @@ def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
                      [row(0.15, 0.17, 100.0, 110.0)], book,
                      Limits(patience_minutes=1440.0))
     assert acts[0].kind == CANCEL
-    assert "позволяет маржа" in acts[0].reason
+    assert "выше того, что позволяет маржа" in acts[0].reason
 
 
 def test_an_order_whose_ceiling_has_fallen_under_it_is_pulled():
@@ -132,14 +133,12 @@ def test_patience_is_counted_in_minutes():
     waiting = reconcile("x", [band], held, book, Limits(patience_minutes=60))
     assert waiting[0].kind == KEEP and "мин" in waiting[0].reason
 
-    # Shrink the patience below that wait and the defence stops waiting. It
-    # releases rather than answers: the bid is already the most the margin
-    # floor allows, so there is no price left to answer with. What this test
-    # pins is the threshold being read in minutes at all - a day-scale one
-    # answered "wait" to both of these.
+    # Shrink the patience below that wait and the defence answers instead of
+    # waiting. What this test pins is the threshold being read in minutes at
+    # all - a day-scale one answered "wait" to both of these.
     acting = reconcile("x", [band], held, book, Limits(patience_minutes=10))
-    assert acting[0].kind != KEEP
-    assert acting[0].kind == CANCEL
+    assert acting[0].kind == RAISE
+    assert acting[0].price > 10.5, "a raise has to clear the rival"
 
 
 def test_a_wait_is_reported_in_the_unit_a_person_would_say_it_in():

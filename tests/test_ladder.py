@@ -125,13 +125,34 @@ def item(n_at=54.62, cheap=(47.70, 48.40), top=0.17):
     return sales
 
 
-def test_a_rung_prices_at_the_margin_floor():
+def test_a_rung_opens_one_step_over_the_rival_not_at_its_ceiling():
+    """Paying more than it takes to lead buys nothing from the sellers already
+    willing to come, and spends the room the defence needs."""
     p = Params(min_margin=0.05, window_days=16.0)
     r = evaluate(0.17, item(), [order(48.30, 0.15, 0.17)], (0.15, 0.38),
                  lots=0, ask_prices=[], params=p)
     assert r.take
-    assert r.bid == pytest.approx(50.90, abs=0.01)
-    assert r.margin >= 0.05
+    assert r.bid == pytest.approx(48.40, abs=0.01), "a step over $48.30"
+    assert r.ceiling == pytest.approx(50.90, abs=0.01), "the margin floor"
+    assert r.bid < r.ceiling, "and the gap is what an outbid is answered with"
+
+
+def test_with_nobody_to_lead_the_ceiling_itself_is_the_bid():
+    """Nothing to undercut, so there is no cheaper way to be first, and the
+    reach over the sellers who want more is worth taking."""
+    p = Params(min_margin=0.05, window_days=16.0)
+    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=0, ask_prices=[],
+                 params=p)
+    assert r.take
+    assert r.bid == r.ceiling == pytest.approx(50.90, abs=0.01)
+
+
+def test_a_rival_too_dear_to_lead_within_the_margin_is_refused():
+    p = Params(min_margin=0.05, window_days=16.0)
+    r = evaluate(0.17, item(), [order(50.90, 0.15, 0.17)], (0.15, 0.38),
+                 lots=0, ask_prices=[], params=p)
+    assert not r.take
+    assert "перебить стоит" in r.reason and "маржа позволяет" in r.reason
 
 
 def test_the_median_is_used_not_a_low_quantile():
@@ -151,14 +172,14 @@ def test_a_thin_sample_is_refused_rather_than_guessed():
     assert not r.take and "мало продаж" in r.reason
 
 
-def test_a_rung_whose_flow_rivals_take_says_which_it_was():
-    """Rejected for a reason a reader can act on: the cheap sales existed,
-    they just went to a dearer bid."""
+def test_a_rung_priced_out_by_a_rival_says_both_numbers():
+    """Rejected for a reason a reader can act on: what leading would cost, and
+    what the margin allows."""
     p = Params()
     r = evaluate(0.17, item(), [order(60.0, 0.15, 0.17)], (0.15, 0.38),
                  lots=0, ask_prices=[], params=p)
     assert not r.take
-    assert "конкуренты перебивают" in r.reason and "2" in r.reason
+    assert "перебить стоит" in r.reason
 
 
 def test_a_rival_scoped_to_a_sliver_does_not_veto_the_rung():
@@ -301,3 +322,24 @@ def test_nothing_in_the_scoring_reads_an_annualised_return():
     names = {f.name for f in fields(Rung)} | {f.name for f in fields(Params)}
     for banned in ("monthly", "annual", "apr", "yield", "cycle"):
         assert not any(banned in n for n in names), banned
+
+
+def test_a_rival_parked_far_under_the_market_does_not_set_our_price():
+    """Leading is necessary, not sufficient. One step over a bid nobody would
+    sell to is a bid nobody will sell to either, and the order stands dead."""
+    sales = [sale(54.0, 0.165) for _ in range(40)]
+    sales += [sale(49.0, 0.165) for _ in range(6)]
+    book = [order(30.0, 0.15, 0.17)]        # far below anything that sold
+    r = evaluate(0.17, sales, book, (0.15, 0.38), 0, [], Params())
+    assert r.take
+    assert r.bid > 31.0, "a step over $30 would catch nothing"
+    assert r.fills > 0, "the bid has to reach prices people sold at"
+
+
+def test_and_it_stops_at_the_first_price_that_fills():
+    """Walking up past that would be paying for reach nobody forced."""
+    sales = [sale(54.0, 0.165) for _ in range(40)]
+    sales += [sale(49.0, 0.165) for _ in range(6)]
+    r = evaluate(0.17, sales, [order(30.0, 0.15, 0.17)], (0.15, 0.38), 0, [],
+                 Params())
+    assert r.bid == pytest.approx(49.0, abs=0.11), r.bid

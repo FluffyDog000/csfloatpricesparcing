@@ -626,7 +626,7 @@ def test_the_journal_never_confuses_a_rehearsal_with_a_placement():
     assert ev["dry"] is True and ev["ok"] is True
 
 
-def _many_items(names, sales_per_item=60):
+def _many_items(names, sales_per_item=60, same_price=False):
     """Items with enough history for the scorer to have an opinion."""
     import datetime as dt
 
@@ -637,7 +637,13 @@ def _many_items(names, sales_per_item=60):
     for idx, name in enumerate(names):
         item_id = db.get_item_id(name)
         rows = []
-        base = 100.0 + idx * 50    # later items are worth more
+        # `same_price` puts every item on one price tag. Making later ones
+        # dearer stands in for "better" in most of these tests, but the
+        # allowance is spread by return per DOLLAR, so a cheap item with the
+        # same profit beats a dear one - and a ranking test built that way
+        # would be measuring the price tag. There, the competition below is
+        # the only thing separating them.
+        base = 150.0 if same_price else 100.0 + idx * 50
         for i in range(sales_per_item):
             # Spread around the base, so a bid under the median still catches
             # some of the flow - otherwise every band fails on "no flow" and
@@ -666,26 +672,58 @@ def _many_items(names, sales_per_item=60):
 
 
 def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
-    """With three items nobody notices. With three hundred it decides
-    everything: at twenty orders and three per item the first seven names take
-    the lot, and the other two hundred and ninety-three are scored for nothing.
+    """The bug three hundred items exposes. At twenty orders and three per
+    item, the first seven names took everything and the rest were scored for
+    nothing.
 
-    The helper makes the competition thin out down the list, so the first item
-    is always the worst trade. One slot, three items: under the old per-item
-    loop the first one took it every time, whatever it was worth.
+    Each item's numbers are tied to its NAME, not to where it sits in the
+    list, so the list can be reversed and the same item must still win. The
+    shared fixture cannot show this: it derives an item's worth from its
+    index, which is its position, so reversing changes the data too.
     """
-    names = ["A Cheap | One (Field-Tested)",
-             "B Middling | Two (Field-Tested)",
-             "C Rich | Three (Field-Tested)"]
+    import datetime as dt
+
+    # (name, rival bid). Same sales for all three, so what separates them is
+    # the competition alone - and the allowance is spread per dollar, which
+    # a price gradient would drown out.
+    market = [("A Weak | Rivals (Field-Tested)", 96.0),
+              ("B Some | Rivals (Field-Tested)", 104.0),
+              ("C Heavy | Rivals (Field-Tested)", 112.0)]
+    rivals = dict(market)
+    names = [n for n, _ in market]
+
+    winners = []
     for order in (names, list(reversed(names))):
-        c = _many_items(order)
+        c = _app(order)
+        import webapp
+        db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+        now = dt.datetime.now(dt.timezone.utc)
+        for name in order:
+            item_id = db.get_item_id(name)
+            rows = [(f"{name}-{i}", item_id, name, int((100.0 + i % 20) * 100),
+                     100.0 + i % 20, 0.365 + (i % 5) * 0.001,
+                     (now - dt.timedelta(days=i % 14)).isoformat())
+                    for i in range(60)]
+            db.conn.executemany(
+                "INSERT INTO sales (sale_id, item_id, market_hash_name, "
+                "price_cents, price, float_value, sold_at, sold_at_estimated, "
+                "scraped_at) VALUES (?,?,?,?,?,?,?,0,?)",
+                [r + (r[-1],) for r in rows])
+            db.replace_buy_orders(item_id, [
+                {"price": rivals[name], "qty": 1,
+                 "float_min": 0.35, "float_max": 0.38}])
+            db.conn.commit()
+            c.post("/api/analysis/items", json={"market_hash_name": name})
+        db.close()
+
         assert c.post("/api/analysis/params",
                       json={"an_total_capital": "2000", "an_max_orders": "1",
                             "an_max_per_item": "1"}).status_code == 200
 
         scored = c.get("/api/analysis").get_json()["items"]
-        best = {i["item"]: max([b["margin"] for b in i["bands"] if b["take"]]
-                               or [0.0]) for i in scored}
+        best = {i["item"]: max([(b["lam"] or 0.0) * b["margin"]
+                                for b in i["bands"] if b["take"]] or [0.0])
+                for i in scored}
         assert len(set(best.values())) > 1, "the items must differ to rank them"
 
         places = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
@@ -693,8 +731,11 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
         assert len(places) == 1, places
         won = places[0]["item"]
         assert best[won] == max(best.values()), \
-            f"{won} won on {best[won]:.3f} while {max(best.values()):.3f} existed"
-        assert won != order[0], "and not by being first in the list"
+            f"{won} won on {best[won]:.4f} while {max(best.values()):.4f} existed"
+        winners.append(won)
+
+    assert winners[0] == winners[1], \
+        f"the winner moved with the list order: {winners}"
 
 
 def test_the_sweep_skips_what_the_history_already_rules_out():

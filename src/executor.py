@@ -306,11 +306,10 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
 
         top = max(o["price"] for o in rivals)
         answer = next_above(top)
-        # Answering is a fresh decision to pay, so it is held to the bid - the
-        # most the margin floor allows - and not to the ceiling, which is only
-        # break-even. Raising toward break-even would quietly spend the whole
-        # allowance the floor exists to keep.
-        limit = band.bid if band.bid is not None else new_ceiling
+        # Answering is held to the ceiling, which is the margin floor turned
+        # into a price. We opened below it on purpose; this is what that room
+        # was for.
+        limit = new_ceiling
         if answer > limit + 1e-9:
             actions.append(Action(
                 CANCEL, item, key[0], key[1], price, new_ceiling,

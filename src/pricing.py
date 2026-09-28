@@ -493,16 +493,12 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
 def _as_band(rung) -> Band:
     """One rung, in the shape the rest of the bot already speaks.
 
-    Two limits, not one, because placing and holding are different decisions.
-    The bid is the most we will PAY: the highest price still clearing the
-    margin floor, which is the risk we chose. The ceiling is the most we will
-    HOLD: break-even, where the trade stops making money at all.
-
-    Setting the ceiling to the bid instead churned the book. An order placed
-    at the floor yesterday fell outside it the moment the median moved a cent,
-    and the defence cancelled a position that was still perfectly profitable.
-    Placing with a cushion and bailing only once the cushion is gone is the
-    hysteresis that stops that.
+    Two limits, not one, because opening and defending are different
+    decisions. The bid is where we open: one step over the best rival, the
+    cheapest price that leads. The ceiling is where we stop: the highest price
+    still clearing the margin floor. The gap between them is the room the
+    defence has to answer an outbid, and it is bought by not overpaying at the
+    start.
     """
     return Band(
         float_min=rung.low,
@@ -511,7 +507,7 @@ def _as_band(rung) -> Band:
         market=rung.market,
         priced_from=rung.priced_from or "история",
         top=rung.rival,
-        ceiling=rung.exit_net,
+        ceiling=rung.ceiling,
         bid=rung.bid,
         step=increment(rung.bid) if rung.bid else 0.0,
         margin=rung.margin,

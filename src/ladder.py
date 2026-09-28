@@ -73,7 +73,8 @@ class Rung:
     queue_price: float | None = None  # what the standing lots allow
     priced_from: str = ""            # which of the two bound
     exit_net: float | None = None    # after the fee
-    bid: float | None = None
+    ceiling: float | None = None     # most we may pay: the margin floor
+    bid: float | None = None         # what we place: one step over the rival
     margin: float | None = None
     rival: float = 0.0               # best competing bid over our range
     lots: int = 0                    # lots listed in the band
@@ -89,7 +90,7 @@ class Rung:
             "low": self.low, "top": self.top, "sample": self.sample,
             "market": self.market, "queue_price": self.queue_price,
             "priced_from": self.priced_from, "exit_net": self.exit_net,
-            "bid": self.bid, "margin": self.margin, "rival": self.rival,
+            "ceiling": self.ceiling, "bid": self.bid, "margin": self.margin, "rival": self.rival,
             "lots": self.lots, "lots_cleared": round(self.lots_cleared, 1),
             "fills": self.fills, "lam": self.lam, "rank": self.rank,
             "take": self.take, "reason": self.reason,
@@ -238,6 +239,15 @@ def fills_at(sales: Sequence[dict], orders: Sequence[dict],
     return out
 
 
+def snap_up(price: float, step: float) -> float:
+    """Up to the grid: a bid between ticks is not one CSFloat will take, and a
+    bid rounded DOWN onto a rival's own price does not lead them."""
+    if step <= 0:
+        return price
+    ticks = int(price / step + 1e-9)
+    return ticks * step if abs(ticks * step - price) < 1e-9 else (ticks + 1) * step
+
+
 def snap_down(price: float, step: float) -> float:
     """Down to the grid: a bid between ticks is not one CSFloat will take.
 
@@ -299,13 +309,22 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         exit_gross, rung.priced_from = rung.market, "история"
     rung.exit_net = exit_gross * (1 - params.fee)
 
-    # The highest bid that still clears the margin floor.
+    # Two prices, and the difference between them is the room to fight.
+    #
+    # The ceiling is the highest bid that still clears the margin floor. We
+    # never pay more than that, whoever else is bidding.
+    #
+    # The bid is the cheapest price that leads: one step over the best rival
+    # for the lot we will be handed. Paying more than it takes to lead buys
+    # nothing on the sellers already willing to come to us - and what it does
+    # buy, reach over the ones who want more, is bought again later and only
+    # when someone actually forces it. With nobody to lead, there is nothing
+    # to undercut, so the ceiling itself is the bid and the reach is taken.
     step = price_step(rung.exit_net)
-    rung.bid = snap_down(rung.exit_net / (1 + params.min_margin), step)
-    if rung.bid <= 0:
+    rung.ceiling = snap_down(rung.exit_net / (1 + params.min_margin), step)
+    if rung.ceiling <= 0:
         rung.reason = "цена выхода слишком мала"
         return rung
-    rung.margin = (rung.exit_net - rung.bid) / rung.bid
 
     # What has to be beaten for the item we will actually receive - the one at
     # the top. Deliberately NOT the strongest bid anywhere in the range: a
@@ -313,6 +332,32 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     # Judging every rung against the range's best bid rejected all 23 tops of
     # a live item because one order covered 0.15-0.16.
     rung.rival = rival_bid(orders, top)
+
+    if rung.rival > 0:
+        lead = snap_up(rung.rival + price_step(rung.rival), price_step(rung.rival))
+        if lead > rung.ceiling + 1e-9:
+            rung.bid = rung.ceiling
+            rung.margin = (rung.exit_net - rung.bid) / rung.bid
+            rung.reason = (f"перебить стоит ${lead:.2f}, а маржа позволяет "
+                           f"лишь ${rung.ceiling:.2f}")
+            return rung
+        # Leading is necessary, not sufficient. A rival parked far under the
+        # market makes leading cheap and worthless: a bid a step over him can
+        # sit below every price anyone has sold at, and then it leads a queue
+        # nobody joins. So walk up from there to the first price the history
+        # says somebody would actually have taken, and no further.
+        rung.bid = lead
+        price = lead
+        while price <= rung.ceiling + 1e-9:
+            if fills_at(sales, orders, low, top, price):
+                rung.bid = price
+                break
+            price = round(price + price_step(price), 4)
+        else:
+            rung.bid = rung.ceiling
+    else:
+        rung.bid = rung.ceiling
+    rung.margin = (rung.exit_net - rung.bid) / rung.bid
 
     mine = fills_at(sales, orders, low, top, rung.bid)
     rung.fills = len(mine)
