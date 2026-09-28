@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
-from .pricing import Band, next_above
+from .pricing import Band, increment, next_above
 
 def human_wait(days: float) -> str:
     """A wait, in the unit a person would say it in.
@@ -327,10 +327,17 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
     for key, band in by_band.items():
         if key in seen:
             continue
+        # Headroom in grid steps, which is how many times the defence can
+        # answer before the margin floor stops it. The old count of "outbids
+        # the reserve pays for" was a field nothing fills any more, and the
+        # line read "запас None перебив." on every row.
+        room = (band.ceiling or 0.0) - (band.bid or 0.0)
+        steps = int(room / increment(band.bid)) if band.bid else 0
         actions.append(Action(
             PLACE, item, key[0], key[1], band.bid, band.ceiling,
             f"маржа {(band.margin or 0) * 100:.1f}%, "
-            f"запас {band.wars} перебив."))
+            f"налив {(band.lam or 0.0):.2f}/день, "
+            f"запас ${room:.2f} = {steps} перебив."))
 
     order = {CANCEL: 0, RAISE: 1, PLACE: 2, KEEP: 3}
     actions.sort(key=lambda a: (order[a.kind], a.float_min))

@@ -1012,10 +1012,26 @@ def api_analysis_plan():
     wanted_by_item = select_portfolio(candidates, limits, holding)
 
     actions: list[dict] = []
+    ranked: dict[tuple, float] = {}
     for name in mine_by_item:
+        wanted = wanted_by_item.get(name, [])
+        for b in wanted:
+            ranked[(name, round(b.float_min, 4), round(b.float_max, 4))] = \
+                (b.lam or 0.0) * (b.margin or 0.0)
         actions += [a.as_dict() for a in
-                    reconcile(name, wanted_by_item.get(name, []),
-                              mine_by_item[name], books[name], limits)]
+                    reconcile(name, wanted, mine_by_item[name],
+                              books[name], limits)]
+
+    # Shown best-first, across every item. Grouping by item was the order the
+    # names happened to be typed in, so the page said nothing about which
+    # order is worth placing first - the very thing the rank is for. Cancels
+    # and raises stay on top: they free capacity the places then use.
+    kind_order = {"cancel": 0, "raise": 1, "place": 2, "keep": 3}
+    actions.sort(key=lambda a: (
+        kind_order.get(a["kind"], 9),
+        -ranked.get((a["item"], round(a["float_min"], 4),
+                     round(a["float_max"], 4)), 0.0),
+        a["item"], a["float_max"]))
 
     # What each item would hold once the plan is applied. Several orders on one
     # item are not several bets: they are one bet in pieces, and they fill

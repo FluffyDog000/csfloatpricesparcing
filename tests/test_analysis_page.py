@@ -832,3 +832,72 @@ def test_the_suggested_amend_body_raises_no_such_warning():
     c.post("/api/analysis/placement", json=SUGGESTED.as_dict())
     warnings = c.get("/api/analysis/placement").get_json()["warnings"]
     assert not any("границы float" in w for w in warnings), warnings
+
+
+def test_the_plan_is_listed_best_first_across_every_item():
+    """Grouped by item, the page listed orders in the sequence the names were
+    typed in and said nothing about which to place first - which is the whole
+    job of the rank. Cancels and raises stay on top: they free the capacity
+    the places then spend."""
+    import datetime as dt
+
+    # Worth falls as the float rises; each item stops at a different rival, so
+    # neither item is better than the other at every rung.
+    market = {"A Tight | Book (Field-Tested)": 92.0,
+              "B Loose | Book (Field-Tested)": 86.0}
+    spread = (-12.0, -8.0, -4.0, 0.0, 4.0, 8.0, 12.0, 16.0)
+    c = _app(list(market))
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    now = dt.datetime.now(dt.timezone.utc)
+    for name, rival in market.items():
+        item_id = db.get_item_id(name)
+        rows = []
+        for k, f in enumerate((0.155, 0.165, 0.175, 0.185)):
+            worth = 104.0 - 3.0 * k
+            for i in range(16):
+                price = worth + spread[i % len(spread)]
+                rows.append((f"{name}-{f}-{i}", item_id, name, int(price * 100),
+                             price, f,
+                             (now - dt.timedelta(days=(i % 13) + 0.5)).isoformat()))
+        db.conn.executemany(
+            "INSERT INTO sales (sale_id, item_id, market_hash_name, "
+            "price_cents, price, float_value, sold_at, sold_at_estimated, "
+            "scraped_at) VALUES (?,?,?,?,?,?,?,0,?)",
+            [r + (r[-1],) for r in rows])
+        db.replace_buy_orders(item_id, [
+            {"price": rival, "qty": 1, "float_min": 0.15, "float_max": 0.19}])
+        db.conn.commit()
+        c.post("/api/analysis/items", json={"market_hash_name": name})
+    db.close()
+    c.post("/api/analysis/params",
+           json={"an_total_capital": "5000", "an_max_per_item": "4"})
+
+    actions = c.get("/api/analysis/plan").get_json()["actions"]
+    places = [a for a in actions if a["kind"] == "place"]
+    assert len(places) > 4, places
+
+    scored = {i["item"]: {round(b["float_max"], 4): (b["lam"] or 0.0) * b["margin"]
+                          for b in i["bands"] if b["take"]}
+              for i in c.get("/api/analysis").get_json()["items"]}
+    ranks = [scored[a["item"]][round(a["float_max"], 4)] for a in places]
+    assert ranks == sorted(ranks, reverse=True), ranks
+
+    # And not merely all of one item and then all of the other, which sorting
+    # by name alone would also satisfy.
+    listed = [a["item"][0] for a in places]
+    assert len(set(listed)) > 1 and listed != sorted(listed), listed
+
+
+def test_a_placement_reports_the_room_it_has_to_answer_an_outbid():
+    """"запас None перебив." shipped on every row: the field it read belonged
+    to a model that no longer exists."""
+    from src.executor import Limits, reconcile
+    from src.pricing import Band
+
+    band = Band(float_min=0.15, float_max=0.17, bid=48.40, ceiling=48.90,
+                margin=0.051, lam=0.125, take=True)
+    act = reconcile("x", [band], [], [], Limits())[0]
+    assert "None" not in act.reason
+    assert "$0.50" in act.reason and "5 перебив" in act.reason
+    assert "0.12/день" in act.reason
