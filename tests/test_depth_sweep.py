@@ -343,14 +343,15 @@ def test_the_wait_reports_what_csfloat_said_about_the_budget():
     assert "осталось 0 из 100" in said and "сброс через 5.0 мин" in said
 
 
-def test_a_client_with_no_quota_headers_says_nothing_rather_than_zero():
-    """Printing 'осталось 0' when nothing was reported would read as an
-    exhausted budget."""
+def test_nothing_reported_is_not_reported_as_a_spent_budget():
+    """Printing 'осталось 0' when no header said so would read as exhausted.
+    With nothing at all to go on, the bare refusal is itself the finding."""
     from src.depth_sweep import quota
 
     col = FakeCollector({})
-    assert quota(col) == ""
-    assert quota(object()) == ""
+    assert "осталось" not in quota(col)
+    assert "отказ пустой" in quota(col)
+    assert quota(object()) == "", "no client, nothing to say"
 
 
 def test_the_pause_is_never_shorter_than_the_reset_csfloat_names():
@@ -383,3 +384,56 @@ def test_an_epoch_reset_is_not_read_as_a_duration():
     client = CSFloatClient(cfg.http, cfg.polling)
     client.rate_state = {"reset": _t.time() + 120, "seen_at": _t.time()}
     assert 115 < client.reset_in() < 125
+
+
+def test_a_refusal_with_no_quota_headers_still_names_who_refused():
+    """CSFloat saying the budget is spent and Cloudflare saying it dislikes
+    the address look identical from here - and only one is fixed by waiting."""
+    from src.depth_sweep import quota
+
+    col = FakeCollector({})
+    col.client.rate_state = {}
+    col.client.last_429_headers = {"cf-ray": "9a1b", "Retry-After": "30"}
+    col.client.last_429_body = "<html>Please disable your VPN and try again</html>"
+    said = quota(col)
+    assert "Retry-After: 30" in said
+    assert "disable your VPN" in said
+
+
+def test_an_empty_refusal_says_so_rather_than_nothing():
+    """Printing nothing reads as 'the tool has no idea', which is true but
+    unhelpful; saying the refusal was bare is the actual finding."""
+    from src.depth_sweep import quota
+
+    col = FakeCollector({})
+    col.client.rate_state = {}
+    col.client.last_429_headers = {}
+    col.client.last_429_body = ""
+    assert "отказ пустой" in quota(col)
+
+
+def test_the_sweep_path_keeps_what_the_refusal_said():
+    """Only the sales poll recorded it, so every 429 a sweep drew left nothing
+    behind - which is why two identical runs could not be told apart."""
+    import logging
+
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, RateLimited
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+
+    class Resp:
+        status_code = 429
+        headers = {"cf-ray": "9a1b", "Retry-After": "30"}
+        text = "rate limited by CSFloat"
+
+        def json(self):
+            return {}
+
+    route = client.pool.pick()
+    with pytest.raises(RateLimited):
+        client._read(Resp(), route, "https://csfloat.com/api/v1/listings")
+    assert client.last_429_body == "rate limited by CSFloat"
+    assert client.last_429_headers.get("Retry-After") == "30"

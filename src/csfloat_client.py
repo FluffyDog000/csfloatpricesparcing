@@ -271,6 +271,26 @@ class CSFloatClient:
         self._cooldown_until = time.monotonic() + wait
         return wait
 
+    def _remember_429(self, resp) -> None:
+        """What the refusal itself said, kept for the next person to ask why.
+
+        The body is the part that names who is refusing: CSFloat's own
+        account-level message reads nothing like a Cloudflare challenge, and
+        the difference decides whether waiting helps at all.
+        """
+        try:
+            self.last_429_headers = {
+                k: v for k, v in resp.headers.items()
+                if k.lower().startswith(("retry-after", "x-ratelimit", "ratelimit",
+                                         "x-rate-limit", "cf-ray"))
+            }
+        except Exception:  # noqa: BLE001 - diagnosis must not raise
+            self.last_429_headers = {}
+        try:
+            self.last_429_body = (resp.text or "")[:300]
+        except Exception:  # noqa: BLE001
+            self.last_429_body = ""
+
     def _capture_rate_headers(self, resp) -> None:
         """CSFloat sends x-ratelimit-* on every response. Tracking them lets the
         collector plan against the real remaining quota instead of guessing."""
@@ -369,6 +389,11 @@ class CSFloatClient:
                     retry_after = float(hdr)
                 except ValueError:
                     retry_after = None
+            # Keep what the refusal said, as the sales poll already does. Only
+            # that path recorded it, so every 429 drawn by a sweep or a write
+            # left nothing behind - and a refusal with no headers and no body
+            # cannot be told apart from a quota that simply ran out.
+            self._remember_429(resp)
             wait = self._enter_cooldown(retry_after)
             self.pool.record_429(route, wait)
             raise RateLimited(

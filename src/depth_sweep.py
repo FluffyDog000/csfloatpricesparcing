@@ -88,7 +88,7 @@ def quota(collector) -> str:
     client = getattr(collector, "client", None)
     state = getattr(client, "rate_state", None) or {}
     if not state:
-        return ""
+        return refusal(client)
     left, limit = state.get("remaining"), state.get("limit")
     said = []
     if left is not None:
@@ -101,7 +101,33 @@ def quota(collector) -> str:
             seconds = 0.0
         if seconds > 0:
             said.append(f"сброс через {seconds / 60:.1f} мин")
-    return ", ".join(said)
+    return ", ".join(said) or refusal(client)
+
+
+def refusal(client) -> str:
+    """What the 429 itself said, when it carried no quota headers at all.
+
+    A refusal with no numbers is the one that cannot be waited out blindly:
+    CSFloat saying the budget is spent and Cloudflare saying it does not like
+    the address look identical from here, and only one of them is fixed by
+    sitting still. The body names which.
+    """
+    if client is None:
+        return ""
+    headers = getattr(client, "last_429_headers", None) or {}
+    body = (getattr(client, "last_429_body", None) or "").strip()
+    said = []
+    for key in ("retry-after", "x-ratelimit-remaining", "x-ratelimit-reset"):
+        for name, value in headers.items():
+            if name.lower() == key:
+                said.append(f"{name}: {value}")
+    if body:
+        flat = " ".join(body.split())
+        said.append(f"ответ: {flat[:140]}")
+    if not said:
+        said.append("CSFloat не прислал ни заголовков квоты, ни текста — "
+                    "отказ пустой")
+    return "; ".join(said)
 
 
 def cooldown(collector) -> float:
