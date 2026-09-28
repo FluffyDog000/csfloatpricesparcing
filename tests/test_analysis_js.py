@@ -75,12 +75,13 @@ def test_a_failure_midway_does_not_blank_the_list():
     c = _app([name])
     c.post("/api/analysis/items", json={"market_hash_name": name})
     body = _api(c)
-    # A band missing the fields the row renderer reads. The item has no sales,
-    # so the screen reports it instead of scoring it - the malformed band is
-    # put in by hand, which is the point of the test either way.
+    # A report the renderer cannot walk at all. It used to be a band missing
+    # the fields the row reads, but the row now prints "—" for a field that is
+    # not there rather than throwing - which is better behaviour and a worse
+    # vehicle for this test, whose subject is the list surviving, not which
+    # field breaks.
     body["items"][0]["screened_out"] = ""
-    body["items"][0]["bands"] = [{"float_min": 0.15, "float_max": 0.17,
-                                  "take": True}]
+    body["items"][0]["bands"] = "не массив"
     result = _run(body, expect_ok=False)
     assert result["chips"] == 1, "the list survives a broken report"
     assert "Ошибка" in result["status"], \
@@ -440,16 +441,45 @@ def test_a_screened_out_item_renders_as_one_line_not_a_table():
     assert "запросов" in got["funnelText"]
 
 
-def test_the_surcharge_says_what_the_cheap_price_would_have_earned():
-    """"Why bid over the book" has been asked twice from behind a tooltip.
-    The surcharge is only defensible by the number it buys, so that number is
-    in the table rather than on hover."""
+def test_the_table_shows_the_rival_it_is_outbidding():
+    """The bid is one step over whoever covers our top, so the bid alone is
+    unreadable: $48.40 says nothing until the $48.30 beside it does."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
-    assert "cheapWhy" in row
-    assert "ордер бы не исполнился" in row, \
-        "the minimum leading a band it cannot fill is the case that gets asked about"
-    assert "по ней набор" in row
+    assert "b.top" in row, "the rival's bid is its own column"
+    assert "никого" in row, \
+        "an empty band is said outright - it is why the bid is the ceiling"
+    header = source.split("полоса</th>")[1].split("</thead>")[0]
+    assert "соперник" in header
+
+
+def test_the_table_shows_the_rank_the_plan_orders_by():
+    """The plan places in rank order, and the rank was nowhere on the page:
+    "why is this one first" had no answer you could read off the table."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "const rank = (b.lam || 0) * (b.margin || 0)" in row
+    header = source.split("полоса</th>")[1].split("</thead>")[0]
+    assert "ранг" in header
+
+
+def test_the_headroom_is_shown_in_outbids_not_only_dollars():
+    """Dollars of room mean nothing without the grid step: $1.20 is twelve
+    outbids at a dime and one at a dollar."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.step" in row and "Math.floor" in row
+
+
+def test_no_column_reads_a_field_the_ladder_stopped_filling():
+    """The old disjoint-band model left `entry`, `wars`, `t_buy` and `t_sell`
+    behind. Nothing fills them now, so a column reading one renders a blank
+    or throws - which is how "запас None перебив." reached the plan page."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    for dead in ("b.entry", "b.wars", "b.t_buy", "b.t_sell", "b.entry_lam",
+                 "b.paid", "b.margin_worst"):
+        assert dead not in row, f"{dead} is not filled any more"
 
 
 def test_the_table_spans_its_own_columns():
@@ -458,7 +488,7 @@ def test_the_table_spans_its_own_columns():
     one left."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
-    headers = source.split("<th>float</th>")[1].split("</thead>")[0].count("<th")
+    headers = source.split("полоса</th>")[1].split("</thead>")[0].count("<th")
     span = int(row.split('colspan="')[1].split('"')[0])
     assert span == headers, f"{span} columns spanned, {headers} exist"
 
@@ -498,18 +528,6 @@ def test_the_journal_shows_where_each_order_stands():
     assert "Перебили 1 из 2" in got["positions"]
 
 
-
-
-def test_the_table_shows_what_a_fill_would_actually_cost():
-    """The margin changed meaning: it is figured on the listing's price now,
-    not on our bid. A column that kept the old name and the old look while
-    meaning something else would be the worst of both."""
-    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
-    row = source.split("function bandRow")[1].split("\n  }")[0]
-    assert "b.paid" in row, "what a fill costs is its own column"
-    assert "b.margin_worst" in row, "and the bid-priced margin is beside it"
-    header = source.split("<th>float</th>")[1].split("</thead>")[0]
-    assert "платим" in header
 
 
 def test_the_price_column_says_where_the_number_came_from():

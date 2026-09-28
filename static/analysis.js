@@ -263,43 +263,29 @@
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="10" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
       return tr;
     }
     tr.className = "band-take";
-    // The cheapest price that leads the band, beside the one we would pay.
-    // Without it the surcharge looks arbitrary next to the order book.
-    const over = b.bid - b.entry;
-    // Why we are not simply bidding the minimum. Asked twice from a tooltip,
-    // so it goes in the open: the surcharge buys flow, and the number it buys
-    // is the only thing that justifies it.
-    const cheapWhy = (b.entry_t_buy === null || b.entry_t_buy === undefined)
-      ? "по ней сделок нет — ордер бы не исполнился"
-      : `по ней набор ${days(b.entry_t_buy)}`;
-    const why = (b.entry_t_buy === null || b.entry_t_buy === undefined)
-      ? `по ${money(b.entry)} мы были бы первыми в стакане, но ни одна сделка `
-        + "не проходит по этой цене — ордер стоял бы вечно"
-      : `по ${money(b.entry)}: λ ${b.entry_lam.toFixed(2)}/сут, `
-        + `набор ${days(b.entry_t_buy)}`;
+    // Two limits, not one. The bid is where we open - a step over the rival,
+    // the cheapest price that leads. The ceiling is where we stop. The gap
+    // between them is the room the defence has to answer an outbid, and it is
+    // bought by not overpaying at the start.
+    const room = (b.ceiling || 0) - (b.bid || 0);
+    const steps = b.step ? Math.floor(room / b.step + 1e-9) : 0;
+    const rank = (b.lam || 0) * (b.margin || 0);
     tr.innerHTML = `
       <td><b>${band}</b></td>
-      <td class="muted" title="${why}">${money(b.entry)}${
-        over > 0 ? ` <span class="over">+${over.toFixed(2)}</span>`
-          + `<br><small>${cheapWhy}</small>` : ""}</td>
+      <td class="muted">${b.top ? money(b.top) : "никого"}</td>
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
-      <td>${b.wars}</td>
-      <td>${money(b.paid)}<span class="muted">${
-        b.paid && b.bid ? ` −${(b.bid - b.paid).toFixed(2)}` : ""}</span></td>
+      <td>${b.bid && b.ceiling
+        ? `${money(room)}<span class="muted"> = ${steps}</span>` : "—"}</td>
       <td>${money(b.market)}<span class="muted" title="медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам"> ${b.priced_from}</span></td>
-      <td><b>${pct(b.margin)}</b>${
-        b.margin_worst !== null && b.margin_worst !== undefined
-          ? ` <span class="muted" title="если бы лот обошёлся в полную ставку`
-            + ` ${money(b.bid)} — потолок гарантирует, что и тогда не в убыток"`
-            + `>(${pct(b.margin_worst)})</span>` : ""}</td>
-      <td>${b.lam.toFixed(2)}</td>
-      <td>${days(b.t_buy)}</td>
-      <td>${days(b.t_sell)}</td>`;
+      <td><b>${pct(b.margin)}</b></td>
+      <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
+      <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
+      <td class="muted">${b.queue || 0}</td>`;
     return tr;
   }
 
@@ -455,17 +441,24 @@
       const t = document.createElement("table");
       t.className = "stat";
       t.innerHTML = `<thead><tr>
-        <th>float</th>
-        <th title="минимальная цена, которая ставит нас первыми в полосе">минимум</th>
-        <th>ставить</th><th>потолок</th><th>запас</th>
-        <th title="во сколько обойдётся лот на самом деле: CSFloat берёт цену
-лота, а не нашу ставку — ставка это лишь потолок">платим</th>
-        <th>рынок</th>
-        <th title="считается от того, что платим. В скобках — если бы каждый
-лот обошёлся в нашу полную ставку: это то, что гарантирует потолок">маржа</th>
-        <th>λ/сут</th>
-        <th title="сколько ждать, пока ордер наберётся">набор</th>
-        <th title="сколько ждать покупателя после того, как снимут бан">продажа</th>
+        <th title="ордер идёт от минимума износа до этого верха — вложенные,
+не соседние: верх задаёт ценность, низ только ограничивает охват">полоса</th>
+        <th title="лучшая чужая ставка, накрывающая наш верх. Её и надо
+перебить, иначе лот уйдёт ему">соперник</th>
+        <th title="на шаг выше соперника, но не выше потолка">ставить</th>
+        <th title="выше этой цены маржа не набирается — сюда защита может
+поднимать ставку, отбиваясь от перебоев">потолок</th>
+        <th title="сколько перебоев умещается между ставкой и потолком">запас</th>
+        <th title="цена выхода: медиана продаж в последней сотой перед верхом
+либо цена очереди лотов — что ниже">выход</th>
+        <th title="считается от ставки: CSFloat берёт цену лота, а не нашу,
+так что это худший случай, а не ожидаемый">маржа</th>
+        <th title="как часто наш ордер исполнялся бы: не поток через полосу,
+а наша доля в нём">λ/сут</th>
+        <th title="λ × маржа — отдача на доллар в сутки. По нему план
+расставляет, что ставить первым, когда лимита на всех не хватает">ранг</th>
+        <th title="лотов в полосе стакана продаж — за ними мы встанем
+в очередь, когда пойдём продавать">очередь</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
       it.bands.forEach((b) => tb.appendChild(bandRow(b)));
