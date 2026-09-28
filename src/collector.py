@@ -328,6 +328,30 @@ class Collector:
         key = self.config.http.api_key
         return {"Authorization": key} if key else None
 
+    def _fetch_band(self, url: str, headers=None, tries: int = 2):
+        """One band, retried once when the connection itself failed.
+
+        A proxy that closes the connection without answering is not a refusal:
+        nothing was counted against the quota, the address is not blocked, and
+        the band is simply lost. One dropped band leaves a gap in the book or
+        the queue that nothing later fills, because the sweep records what it
+        read and moves on.
+
+        Only connection-level errors are retried. A 429 or a credential
+        refusal answers the same way however often it is asked, and asking
+        again is what draws the complaint.
+        """
+        import requests
+
+        for attempt in range(tries):
+            try:
+                return self.client.fetch_json(url, headers=headers)
+            except requests.RequestException as exc:
+                if attempt + 1 >= tries:
+                    raise
+                log.info("Band request failed (%s); retrying once", exc)
+        raise RuntimeError("unreachable")
+
     def _book_headers(self) -> dict[str, str | None] | None:
         """Read the order book on the API key, deliberately without the cookie.
 
@@ -455,7 +479,7 @@ class Collector:
                        f"{ORDERS_PATH.format(listing_id=step['id'])}"
                        f"?limit={DEFAULT_LIMIT}")
                 batches.append(parse_orders(
-                    self.client.fetch_json(url, headers=self._book_headers())))
+                    self._fetch_band(url, headers=self._book_headers())))
                 result["requests"] += 1
                 result["bands"] += 1
             except VpnBlocked as exc:
@@ -1150,7 +1174,7 @@ class Collector:
         while a < hi - 1e-9 and result["bands"] < MAX_BANDS:
             b = round(min(a + DEPTH_STEP, hi), 4)
             try:
-                payload = self.client.fetch_json(
+                payload = self._fetch_band(
                     depth_url(self.config.http.base_url, name, round(a, 4), b),
                     headers=self._listings_headers())
                 result["requests"] += 1

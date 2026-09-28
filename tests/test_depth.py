@@ -525,3 +525,80 @@ def test_neither_half_is_lost_when_the_other_fails():
     assert out["orders"] is not None
     assert "limit" in (out["depth"] or {}).get("error", "")
     db.close()
+
+
+def test_a_dropped_connection_costs_a_retry_not_a_band():
+    """A proxy that closes the connection without answering is not a refusal:
+    nothing was counted against the quota and the address is not blocked. The
+    band was simply lost, leaving a gap nothing later fills - one of nineteen
+    on a live sweep, and one of twelve on the one beside it."""
+    import logging
+    import os
+    import tempfile
+
+    import requests
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    calls = []
+
+    def flaky(url, headers=None):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.ConnectionError("Remote end closed connection")
+        return {"data": [{"id": "L1", "price": 16000, "type": "buy_now",
+                          "min_offer_price": None,
+                          "created_at": "2026-09-10T00:00:00Z",
+                          "item": {"float_value": 0.16}}]}
+
+    col.client.fetch_json = flaky
+    result = col.sweep_listing_depth(name, item_id)
+    assert result["failed_bands"] == 0, "the drop was retried, not counted"
+    assert result["bands"] == 12, "every band of the wear range answered"
+    db.close()
+
+
+def test_a_refusal_is_not_retried():
+    """A 429 or a credential refusal answers the same however often it is
+    asked, and asking again is what draws the complaint."""
+    import logging
+
+    import pytest
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, RateLimited
+    from src.db import Database
+    import os
+    import tempfile
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    calls = []
+
+    def refused(url, headers=None):
+        calls.append(url)
+        raise RateLimited("429")
+
+    col.client.fetch_json = refused
+    with pytest.raises(RateLimited):
+        col._fetch_band("https://csfloat.com/x")
+    assert len(calls) == 1
+    db.close()
