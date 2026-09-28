@@ -622,3 +622,22 @@ def test_a_truncated_band_is_marked_in_the_count_and_explained():
     assert "b.queue_read" in row, \
         "with the band's own size, or '8+' against a limit of fifty reads " \
         "as a contradiction"
+
+
+def test_the_queue_count_carries_the_age_of_the_reading():
+    """The listings are written only by a requested sweep, never on a
+    schedule, so the count is exactly as old as that sweep. Eight hours was
+    enough for three lots to sell and a fourth to be repriced, and the number
+    read as a claim about the market now rather than about the market then."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "staleness(depthAt)" in row
+    assert "86400000" in row, "a reading over a day old is marked, not just aged"
+    assert "function bandRow(b, depthAt)" in source
+
+
+def test_the_age_is_given_in_units_a_reader_thinks_in():
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    fn = source.split("function staleness")[1].split("\n  }")[0]
+    for unit in ("мин назад", "ч назад", "дн назад"):
+        assert unit in fn

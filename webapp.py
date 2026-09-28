@@ -950,6 +950,11 @@ def api_analysis():
             "orders": len(orders),
             "swept_at": orders[0]["fetched_at"] if orders else None,
             "depth": len(depth),
+            # When the sell side was last read, which is not when the book was:
+            # the listings are written only by a requested sweep, never on a
+            # schedule, so the queue count is exactly as old as that. A lot
+            # repriced or sold since is still in it.
+            "depth_at": max((b["fetched_at"] for b in depth), default=None),
             "bands": bands,
             "capital": round(sum(b["bid"] for b in take), 2),
             # What the orders would make once, not per month: the annualised

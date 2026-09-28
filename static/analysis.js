@@ -258,7 +258,17 @@
     search.focus();
   }
 
-  function bandRow(b) {
+  /** How old a reading is, in the units a reader thinks in. */
+  function staleness(iso) {
+    if (!iso) return "";
+    const hours = (Date.now() - Date.parse(iso)) / 3600000;
+    if (!isFinite(hours) || hours < 0) return "";
+    if (hours < 1) return `${Math.round(hours * 60)} мин назад`;
+    if (hours < 48) return `${Math.round(hours)} ч назад`;
+    return `${Math.round(hours / 24)} дн назад`;
+  }
+
+  function bandRow(b, depthAt) {
     const tr = document.createElement("tr");
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
@@ -288,6 +298,7 @@
     // The "+" on the count is not decoration: the band came back full at the
     // endpoint's page limit and the median is above the dearest lot in it, so
     // lots cheaper than the median may exist that were never returned.
+    const aged = b.queue ? staleness(depthAt) : "";
     const capped = b.queue_capped
       ? `. Полоса прочитана до предела выдачи (${b.queue_read} лотов), и все `
         + "они дешевле медианы — значит непрочитанные тоже могут быть, счёт "
@@ -317,7 +328,10 @@
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
-      <td class="muted">${b.queue || 0}${b.queue_capped ? "+" : ""}</td>`;
+      <td class="muted">${b.queue || 0}${b.queue_capped ? "+" : ""}${
+        aged ? `<br><small${
+          Date.now() - Date.parse(depthAt) > 86400000 ? ' class="over"' : ""
+        }>${aged}</small>` : ""}</td>`;
     return tr;
   }
 
@@ -498,7 +512,11 @@
 продаже. Дороже медианы не в счёт: такие мы подрезаем">очередь</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
-      it.bands.forEach((b) => tb.appendChild(bandRow(b)));
+      // The queue is exactly as old as the last sweep, and the sweep runs on a
+      // button rather than a schedule. Eight hours was enough for three lots
+      // to sell and a fourth to be repriced, and the count read as a claim
+      // about the market right now - it is a claim about the market then.
+      it.bands.forEach((b) => tb.appendChild(bandRow(b, it.depth_at)));
       t.appendChild(tb);
       sec.appendChild(t);
       box.appendChild(sec);
