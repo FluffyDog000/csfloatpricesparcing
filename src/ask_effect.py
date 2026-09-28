@@ -36,6 +36,12 @@ class Change:
     full_margin: float | None
     blind_take: bool = False
     full_take: bool = False
+    # Why the exit price is what it is: how many of the standing lots the
+    # seven-day lock disposes of, and which of the two candidates bound.
+    # Without these, "no difference" is a result with no explanation, and an
+    # unexplained null is indistinguishable from a broken measurement.
+    lots_cleared: float = 0.0
+    priced_from: str = ""
     reason: str = ""
 
     @property
@@ -96,6 +102,7 @@ def compare(sales: Sequence[dict], orders: Sequence[dict],
             blind_ceiling=b.ceiling, full_ceiling=f.ceiling,
             blind_margin=b.margin, full_margin=f.margin,
             blind_take=b.take, full_take=f.take,
+            lots_cleared=f.lots_cleared, priced_from=f.priced_from,
             reason=f.reason or b.reason,
         ))
     return out
@@ -114,6 +121,17 @@ def summarise(changes: Sequence[Change]) -> dict[str, Any]:
     return {
         "rungs": len(changes),
         "moved": len(moved),
+        # The two ways the sell side can fail to matter, counted apart. A
+        # queue that empties during the lock caps nothing at any price; a
+        # queue that stands but sits above the history median is outranked by
+        # it. Only the second would start binding if the market cooled.
+        "queue_gone": sum(1 for c in changes if c.full_exit is None),
+        "median_binds": sum(1 for c in changes
+                            if c.full_exit is not None
+                            and c.priced_from == "история"),
+        "queue_binds": sum(1 for c in changes if c.priced_from == "очередь"),
+        "lots_cleared": max((c.lots_cleared for c in changes), default=0.0),
+        "lots": max((c.lots for c in changes), default=0),
         "opened": sum(1 for c in changes if c.flipped == "открылась"),
         "closed": sum(1 for c in changes if c.flipped == "закрылась"),
         "best_gain": max((c.ceiling_gain for c in changes), default=0.0),

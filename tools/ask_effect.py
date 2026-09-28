@@ -114,6 +114,15 @@ def main() -> int:
                       f"худший: {money(found['worst_gain'])}")
             print(f"  проходных ступеней было {found['take_before']}, "
                   f"стало {found['take_after']}")
+            # Why, when nothing moved. An unexplained null cannot be told
+            # apart from a measurement that never ran.
+            if not found["moved"]:
+                print(f"  почему без разницы: очередь уходит за блокировку "
+                      f"у {found['queue_gone']} ступеней, "
+                      f"медиана истории ниже очереди у {found['median_binds']}"
+                      f"; лотов в полосе до {found['lots']}, "
+                      f"блокировка успевает убрать "
+                      f"{found['lots_cleared']:.0f}")
 
             shown = [c for c in changes
                      if args.all_rungs or abs(c.ceiling_gain) > 1e-9 or c.flipped]

@@ -98,3 +98,31 @@ def test_every_rung_is_paired_so_a_gain_is_like_for_like():
 
 def test_an_item_with_no_wear_range_yields_nothing_rather_than_guessing():
     assert compare(sales({0.16: [10.0] * 20}), [], None, [], Params()) == []
+
+
+# -- why there was no difference -------------------------------------------
+
+def test_a_null_result_says_which_of_the_two_reasons_it_was():
+    """An unexplained null cannot be told apart from a measurement that never
+    ran. The two reasons behave differently: a queue that empties during the
+    lock caps nothing at any price, while one that stands but sits above the
+    history median would start binding if the market cooled."""
+    # Liquid: 30 sales in the band over 14 days clears any queue of two.
+    history = sales({0.165: [110.0] * 30})
+    depth = [band(0.15, 0.17, [(95.0, 0.165), (108.0, 0.165)])]
+    found = summarise(compare(history, [], (0.15, 0.38), depth,
+                              Params(window_days=16.0)))
+    assert found["moved"] == 0
+    assert found["queue_gone"] > 0, "the lock disposed of the queue"
+    assert found["lots_cleared"] > found["lots"]
+
+
+def test_a_standing_queue_priced_above_the_median_is_counted_apart():
+    """It did not move, but for the other reason - and that one is one cold
+    week away from mattering."""
+    history = sales({0.165: [60.0] * 12})
+    depth = [band(0.15, 0.17, [(200.0, 0.165)] * 40)]
+    found = summarise(compare(history, [], (0.15, 0.38), depth,
+                              Params(window_days=16.0)))
+    assert found["median_binds"] > 0
+    assert found["queue_gone"] < found["rungs"]
