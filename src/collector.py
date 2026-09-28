@@ -1046,12 +1046,18 @@ class Collector:
             out["depth"] = {"error": f"{type(exc).__name__}: {exc}"}
         return out
 
-    def sweep_listing_depth(self, name: str, item_id: int) -> dict:
+    def sweep_listing_depth(self, name: str, item_id: int,
+                            start: float | None = None) -> dict:
         """Read the sell side band by band: who you queue behind when you list.
 
-        Costs one request per band, but against the documented endpoint and the
-        API key — a different budget than the order sweep's cookie and
-        residential address, so the two do not compete for the same quota.
+        Costs one request per band. It spends the API key on the documented
+        endpoint rather than the order sweep's cookie and residential address,
+        but the budget CSFloat counts is the outgoing IP, so a sweep from the
+        same address as the collector does compete with it.
+
+        `start` resumes a sweep a rate limit cut short, at the float it stopped
+        on: the bands below it are already stored, and reading them again buys
+        nothing but the refusal that follows.
         """
         span = wear_range(name)
         result: dict[str, Any] = {"bands": 0, "requests": 0, "listings": 0,
@@ -1064,8 +1070,15 @@ class Collector:
         lo, hi = span
         result["span"] = f"{lo:.2f}-{hi:.2f}"
         rows: list[dict] = []
+        # Which bands actually answered. A band that was never asked for is not
+        # a band with nothing in it, and the difference matters: the profile is
+        # built across the whole span, so recording it wholesale after a sweep
+        # that stopped halfway writes "no lots" over every band still to come -
+        # newer than the real reading, and read in its place.
+        read: list[tuple[float, float]] = []
         failed = 0
-        a = lo
+        a = lo if start is None else max(lo, round(start, 4))
+        result["started_at"] = a
         while a < hi - 1e-9 and result["bands"] < MAX_BANDS:
             b = round(min(a + DEPTH_STEP, hi), 4)
             try:
@@ -1074,12 +1087,14 @@ class Collector:
                     headers=self._listings_headers())
                 result["requests"] += 1
                 rows.extend(extract_depth(payload))
+                read.append((round(a, 4), b))
                 result["bands"] += 1
             except RateLimited as exc:
                 log.warning("Depth sweep for '%s' stopped at %.2f: %s", name, a, exc)
                 result["error"] = (f"лимит CSFloat после {result['bands']} полос "
                                    "— часть листингов не прочитана")
                 result["rate_limited"] = True
+                result["stopped_at"] = round(a, 4)
                 break
             except Exception as exc:  # noqa: BLE001 - one band must not lose the rest
                 failed += 1
@@ -1095,7 +1110,10 @@ class Collector:
         if not result["bands"]:
             return result
 
-        profile = depth_profile(rows, span)
+        seen = {(round(x, 4), round(y, 4)) for x, y in read}
+        profile = [band for band in depth_profile(rows, span)
+                   if (round(band["float_min"], 4),
+                       round(band["float_max"], 4)) in seen]
         self.db.record_listing_depth(item_id, profile)
         result["listings"] = len(rows)
         log.info("'%s': sell side %d band(s) [float %s] -> %d listing(s)",

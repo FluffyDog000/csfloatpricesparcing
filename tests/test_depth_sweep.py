@@ -67,10 +67,11 @@ def test_the_unpriced_are_chosen_and_the_priced_are_told_why_not():
         " listings, cheapest) VALUES (?,?,?,?,?,?)",
         (old, "2026-09-01T00:00:00+00:00", 0.15, 0.17, 50, 52.09))
     d.conn.commit()
+    # The whole wear range, as a finished sweep leaves it.
     d.record_listing_depth(new, depth_profile(
         [{"id": "L1", "price": 52.09, "float": 0.165, "type": "buy_now",
           "created_at": "2026-09-01T00:00:00+00:00", "min_offer_price": None}],
-        (0.15, 0.17), step=0.02))
+        (0.15, 0.38)))
 
     wanted, skipped = pick(d, ["Old | Book (Field-Tested)",
                                "New | Book (Field-Tested)"])
@@ -97,7 +98,7 @@ def test_force_takes_the_priced_ones_too():
     d.record_listing_depth(item, depth_profile(
         [{"id": "L1", "price": 52.09, "float": 0.165, "type": "buy_now",
           "created_at": "2026-09-01T00:00:00+00:00", "min_offer_price": None}],
-        (0.15, 0.17), step=0.02))
+        (0.15, 0.38)))
     wanted, skipped = pick(d, ["New | Book (Field-Tested)"], force=True)
     assert len(wanted) == 1 and skipped == []
     d.close()
@@ -105,14 +106,34 @@ def test_force_takes_the_priced_ones_too():
 
 # -- the run ---------------------------------------------------------------
 
+class FakeClient:
+    def __init__(self, pause=60.0):
+        self.pause = pause
+
+    def cooldown_remaining(self):
+        return self.pause
+
+    class _Pool:
+        def wait_seconds(self):
+            return 0.0
+
+    pool = _Pool()
+
+
 class FakeCollector:
-    def __init__(self, results):
+    """Answers per item; a list of answers is consumed one call at a time, so
+    an item can be refused and then succeed on the retry."""
+
+    def __init__(self, results, pause=60.0):
         self.results = results
         self.asked = []
+        self.client = FakeClient(pause)
 
-    def sweep_listing_depth(self, name, item_id):
-        self.asked.append(name)
+    def sweep_listing_depth(self, name, item_id, start=None):
+        self.asked.append((name, start))
         out = self.results.get(name, {"bands": 2, "listings": 9, "requests": 2})
+        if isinstance(out, list):
+            out = out.pop(0) if len(out) > 1 else out[0]
         if isinstance(out, Exception):
             raise out
         return out
@@ -124,7 +145,7 @@ def test_a_rate_limit_stops_the_run_instead_of_burning_it_item_by_item():
     col = FakeCollector({"B": {"bands": 1, "listings": 3, "requests": 1,
                                "rate_limited": True, "error": "лимит"}})
     out = sweep(col, [("A", 1), ("B", 2), ("C", 3)])
-    assert col.asked == ["A", "B"], "C was not attempted"
+    assert [n for n, _ in col.asked] == ["A", "B"], "C was not attempted"
     assert "запусти ещё раз позже" in out["stopped"]
     assert out["requests"] == 3, "what it did spend is still counted"
 
@@ -132,7 +153,7 @@ def test_a_rate_limit_stops_the_run_instead_of_burning_it_item_by_item():
 def test_one_item_blowing_up_does_not_lose_the_rest():
     col = FakeCollector({"A": RuntimeError("boom")})
     out = sweep(col, [("A", 1), ("B", 2)])
-    assert col.asked == ["A", "B"]
+    assert [n for n, _ in col.asked] == ["A", "B"]
     assert out["failed"][0][0] == "A" and "boom" in out["failed"][0][1]
     assert [n for n, _ in out["swept"]] == ["B"]
 
@@ -246,3 +267,63 @@ def test_without_an_environment_it_says_where_to_look_for_one(
     with pytest.raises(SystemExit):
         tool.project_imports()
     assert "systemctl cat csfloat-collector" in capsys.readouterr().err
+
+
+# -- waiting out the limit -------------------------------------------------
+
+def test_with_patience_it_waits_and_resumes_where_it_stopped():
+    """The pause was one minute and the run gave up on it, having read nothing.
+    Resuming from the float it stopped on keeps the bands already stored from
+    being bought a second time."""
+    col = FakeCollector({"A": [
+        {"bands": 3, "listings": 5, "requests": 3, "rate_limited": True,
+         "stopped_at": 0.21, "error": "лимит"},
+        {"bands": 8, "listings": 40, "requests": 8},
+    ]}, pause=60.0)
+    slept = []
+    out = sweep(col, [("A", 1), ("B", 2)], patience=600.0, sleep=slept.append)
+
+    assert slept == [60.0], "it waited exactly the pause the client named"
+    assert col.asked == [("A", None), ("A", 0.21), ("B", None)]
+    assert out["requests"] == 13 and out["listings"] == 54
+    assert out["stopped"] == "", "the run finished"
+
+
+def test_patience_is_bounded_so_a_run_cannot_turn_into_a_hang():
+    """The pauses escalate - 1, 2, 4 minutes and up - so an unbounded wait is
+    indistinguishable from a hang."""
+    col = FakeCollector({"A": {"bands": 1, "listings": 2, "requests": 1,
+                               "rate_limited": True, "stopped_at": 0.17}},
+                        pause=300.0)
+    slept = []
+    out = sweep(col, [("A", 1)], patience=120.0, sleep=slept.append)
+    assert slept == [], "300s of waiting does not fit in 120s of patience"
+    assert "запусти ещё раз позже" in out["stopped"]
+    assert out["requests"] == 1, "what it did read is still counted"
+
+
+def test_a_refused_item_is_not_also_filed_as_failed():
+    """It is coming back to this item, either after the wait or on the next
+    run. Listing it as failed reads as 'this one is broken'."""
+    col = FakeCollector({"A": {"bands": 0, "listings": 0, "requests": 0,
+                               "rate_limited": True, "error": "лимит"}})
+    out = sweep(col, [("A", 1)], patience=0.0)
+    assert out["failed"] == []
+    assert "запусти ещё раз позже" in out["stopped"]
+
+
+def test_the_wait_is_the_longer_of_the_account_pause_and_the_route_park():
+    """Two clocks, parked separately. Waiting the shorter one walks straight
+    back into the limit."""
+    col = FakeCollector({})
+    col.client.pause = 30.0
+    col.client.pool = type("P", (), {"wait_seconds": lambda self: 90.0})()
+    from src.depth_sweep import cooldown
+    assert cooldown(col) == 90.0
+
+
+def test_a_client_that_cannot_say_still_yields_a_sane_wait():
+    """A collector without the clocks must not end the run with an
+    AttributeError."""
+    from src.depth_sweep import cooldown
+    assert cooldown(object()) == 5.0

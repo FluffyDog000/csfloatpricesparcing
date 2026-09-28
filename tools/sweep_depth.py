@@ -12,6 +12,7 @@ it again after a rate limit: the items it finished are skipped the second time.
     .venv/bin/python tools/sweep_depth.py --all              # every active item
     .venv/bin/python tools/sweep_depth.py --item "AWP | Printstream (Field-Tested)"
     .venv/bin/python tools/sweep_depth.py --dry-run          # say what it would read
+    .venv/bin/python tools/sweep_depth.py --wait 30 # sit out the pauses, 30 min
     .venv/bin/python tools/sweep_depth.py --force --limit 20 # re-read, 20 items at most
 """
 from __future__ import annotations
@@ -85,6 +86,9 @@ def main() -> int:
                     help="re-read items whose prices are already stored")
     ap.add_argument("--limit", type=int, default=0,
                     help="stop after this many items (0 = no limit)")
+    ap.add_argument("--wait", type=float, default=0.0, metavar="MINUTES",
+                    help="wait out CSFloat's pauses for up to this long in "
+                         "total, resuming where the limit stopped it")
     ap.add_argument("--dry-run", action="store_true",
                     help="print what would be read and exit")
     ap.add_argument("--db", help="path to the database")
@@ -131,18 +135,23 @@ def main() -> int:
         collector = Collector(config, db, CSFloatClient(config.http, config.polling))
 
         def report(name: str, result: dict) -> None:
-            if result.get("bands"):
+            if result.get("waiting"):
+                print(f"  {name}: {result['error']}", flush=True)
+            elif result.get("bands"):
                 print(f"  {name}: {result['bands']} полос, "
                       f"{result['listings']} лотов, "
                       f"{result['requests']} запрос(ов)"
-                      + (f" — {result['error']}" if result.get("error") else ""))
+                      + (f" — {result['error']}" if result.get("error") else ""),
+                      flush=True)
             else:
                 print(f"  {name}: НЕ ПРОЧИТАНО — "
-                      f"{result.get('error') or 'полос не прочитано'}")
+                      f"{result.get('error') or 'полос не прочитано'}", flush=True)
 
-        out = sweep(collector, wanted, report)
+        out = sweep(collector, wanted, report, patience=args.wait * 60.0)
         print(f"\nПрочитано {len(out['swept'])} из {len(wanted)}: "
-              f"{out['listings']} лотов за {out['requests']} запрос(ов).")
+              f"{out['listings']} лотов за {out['requests']} запрос(ов)"
+              + (f", в ожидании лимита {out['waited'] / 60:.0f} мин."
+                 if out.get("waited") else "."))
         if out["failed"]:
             print(f"Не прочитано: {len(out['failed'])}")
         if out["stopped"]:

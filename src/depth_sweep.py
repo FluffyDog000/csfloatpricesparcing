@@ -17,18 +17,33 @@ re-reading a book already priced spends quota to learn what is known.
 """
 from __future__ import annotations
 
+import time
+
 from typing import Any, Callable, Iterable, Sequence
 
+from .orders import wear_range
 
-def needs_prices(depth: Sequence[dict[str, Any]]) -> bool:
-    """Whether this item's stored sell side predates the price list.
 
-    An empty band is not evidence of anything: a float range nobody is selling
-    in has no prices to store. What gives the old rows away is a band that
-    counted lots and kept none of their prices.
+def needs_prices(depth: Sequence[dict[str, Any]],
+                 span: tuple[float, float] | None = None) -> bool:
+    """Whether this item's stored sell side is missing prices, or bands.
+
+    Two ways to be short. A band that counted lots and kept none of their
+    prices is a row written before the column existed. A band that is not
+    there at all is a sweep a rate limit cut short - and that one has to be
+    caught by counting against the wear range, because the rows that did get
+    written look perfectly healthy on their own.
+
+    An empty band is not evidence of either: a float range nobody is selling
+    in has no prices to store, and reading it again buys the same nothing.
     """
     if not depth:
         return True
+    if span:
+        from .depth import depth_profile
+
+        if len(depth) < len(depth_profile([], span)):
+            return True
     return any(int(b.get("listings") or 0) > 0 and not (b.get("asks") or [])
                for b in depth)
 
@@ -55,27 +70,62 @@ def pick(db, names: Iterable[str], force: bool = False) -> tuple[list[tuple[str,
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
-        if needs_prices(depth):
+        if needs_prices(depth, wear_range(name)):
             wanted.append((name, item_id))
         else:
             skipped.append((name, f"цены уже есть ({len(depth)} полос)"))
     return wanted, skipped
 
 
-def sweep(collector, targets: Sequence[tuple[str, int]],
-          report: Callable[[str, dict], None] | None = None) -> dict[str, Any]:
-    """Read the sell side of each target, newest first, until the quota says no.
+def cooldown(collector) -> float:
+    """How long the client says to wait, from whichever clock knows.
 
-    A rate limit stops the whole run rather than moving on. The next item would
-    be refused too, and a hundred refusals spend the reset window learning that
-    once per item; stopping leaves the ones already read stored and the rest to
-    be picked up by the next run, which by then skips what this one finished.
+    Two of them: the account-wide pause a 429 arms, and the pool's own, since
+    the route that drew the refusal is parked separately. Waiting the shorter
+    one walks straight back into the limit.
+    """
+    seconds = [5.0]
+    client = getattr(collector, "client", None)
+    remaining = getattr(client, "cooldown_remaining", None)
+    if callable(remaining):
+        try:
+            seconds.append(float(remaining()))
+        except Exception:  # noqa: BLE001 - a clock must not end the run
+            pass
+    pool = getattr(client, "pool", None)
+    waiting = getattr(pool, "wait_seconds", None)
+    if callable(waiting):
+        try:
+            seconds.append(float(waiting()))
+        except Exception:  # noqa: BLE001
+            pass
+    return max(seconds)
+
+
+def sweep(collector, targets: Sequence[tuple[str, int]],
+          report: Callable[[str, dict], None] | None = None,
+          patience: float = 0.0,
+          sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Read the sell side of each target, waiting out the limits it draws.
+
+    A rate limit never moves on to the next item: it would be refused too, and
+    a hundred refusals spend the whole reset window learning that once per
+    item. With `patience` seconds to spend it waits for the pause to lift and
+    resumes the same item at the float it stopped on - the bands below are
+    already stored. With none, it stops, and the next run picks up the rest.
+
+    The waiting is bounded rather than open-ended because the pauses escalate:
+    1, 2, 4 minutes and up. A run that waits forever is one nobody can tell
+    from a hang.
     """
     out: dict[str, Any] = {"swept": [], "failed": [], "requests": 0,
-                           "listings": 0, "stopped": ""}
-    for name, item_id in targets:
+                           "listings": 0, "stopped": "", "waited": 0.0}
+    queue = list(targets)
+    start: float | None = None
+    while queue:
+        name, item_id = queue[0]
         try:
-            result = collector.sweep_listing_depth(name, item_id)
+            result = collector.sweep_listing_depth(name, item_id, start=start)
         except Exception as exc:  # noqa: BLE001 - one item must not lose the rest
             result = {"error": f"{type(exc).__name__}: {exc}", "requests": 0,
                       "bands": 0, "listings": 0}
@@ -83,12 +133,30 @@ def sweep(collector, targets: Sequence[tuple[str, int]],
         out["listings"] += int(result.get("listings") or 0)
         if result.get("bands"):
             out["swept"].append((name, result))
-        else:
+        elif not result.get("rate_limited"):
             out["failed"].append((name, result.get("error") or "полос не прочитано"))
         if report:
             report(name, result)
-        if result.get("rate_limited"):
-            out["stopped"] = (f"CSFloat отказал на '{name}' — остальные "
-                              "предметы не тронуты, запусти ещё раз позже")
+
+        if not result.get("rate_limited"):
+            queue.pop(0)
+            start = None
+            continue
+
+        pause = cooldown(collector)
+        left = patience - out["waited"]
+        if pause > left:
+            out["stopped"] = (
+                f"CSFloat отказал на '{name}' — ждать ещё "
+                f"{pause / 60:.0f} мин, это больше отпущенного. Остальные "
+                "предметы не тронуты, запусти ещё раз позже")
             break
+        out["waited"] += pause
+        if report:
+            report(name, {"bands": 0, "waiting": pause,
+                          "error": f"жду {pause / 60:.1f} мин до снятия лимита"})
+        sleep(pause)
+        # Resume where it stopped: the bands below are stored, and reading
+        # them again buys nothing but the next refusal.
+        start = result.get("stopped_at")
     return out

@@ -303,3 +303,85 @@ def test_a_narrow_reading_does_not_hide_the_grid_sweep():
     bands = {(r["float_min"], r["float_max"]) for r in db.listing_depth(item_id)}
     assert (0.30, 0.32) in bands, "the far band of the full sweep survives"
     assert (0.15, 0.16) in bands, "and the narrow reading is there too"
+
+
+def test_a_sweep_cut_short_records_only_the_bands_it_read():
+    """The profile is built across the whole wear range, so recording it
+    wholesale after a rate limit wrote "no lots" over every band still to
+    come - newer than the real reading, and read in its place. A band with no
+    lots is not a neutral record: it tells the pricing there is no queue.
+    """
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient, RateLimited
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    calls = []
+
+    def two_then_refused(url, headers=None):
+        calls.append(url)
+        if len(calls) > 2:
+            raise RateLimited("429")
+        return {"data": [{"id": f"L{len(calls)}", "price": 16000,
+                          "type": "buy_now", "min_offer_price": None,
+                          "created_at": "2026-09-10T00:00:00Z",
+                          "item": {"float_value": 0.16 + (len(calls) - 1) * 0.02}}]}
+
+    col.client.fetch_json = two_then_refused
+    result = col.sweep_listing_depth(name, item_id)
+
+    assert result["rate_limited"] and result["bands"] == 2
+    stored = db.listing_depth(item_id)
+    assert len(stored) == 2, "only what answered was written"
+    assert [(b["float_min"], b["float_max"]) for b in stored] == \
+        [(0.15, 0.17), (0.17, 0.19)], stored
+    assert all(b["listings"] > 0 for b in stored), stored
+    assert result["stopped_at"] == stored[-1]["float_max"], \
+        "and it says where to resume"
+    db.close()
+
+
+def test_a_resumed_sweep_starts_at_the_float_it_stopped_on():
+    """The bands below are already stored; reading them again spends the quota
+    that stopped the sweep in the first place."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    asked = []
+    col.client.fetch_json = lambda url, headers=None: (
+        asked.append(url), {"data": []})[1]
+    result = col.sweep_listing_depth(name, item_id, start=0.30)
+
+    assert result["started_at"] == 0.30
+    assert all("min_float=0.3" in u or "min_float=0.3" not in u for u in asked)
+    assert not any("min_float=0.15" in u for u in asked), \
+        "the stored bands were not read again"
+    db.close()
