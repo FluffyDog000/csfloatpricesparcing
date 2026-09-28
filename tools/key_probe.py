@@ -78,10 +78,26 @@ def main() -> int:
     if args.pool:
         # The bot's own routes, named by key rather than by address: a proxy
         # string holds a password.
-        from src.proxies import ProxyPool
+        #
+        # From the database, not from `.env`. The dashboard owns the list -
+        # `.env` only seeds it on a first run - so reading the config here
+        # showed one route on a server running forty-two, and a conclusion was
+        # drawn from that.
+        from src.db import Database
+        from src.proxies import ProxyPool, parse_proxy_list
 
-        pool = ProxyPool(list(config.http.proxies),
-                         use_direct=config.http.use_direct)
+        db = Database(config.db_path)
+        try:
+            raw = db.get_setting("proxies")
+            urls = (parse_proxy_list(raw) if raw is not None
+                    else list(config.http.proxies))
+            direct = ((db.get_setting("use_direct", "1") or "1") != "0"
+                      if raw is not None else config.http.use_direct)
+        finally:
+            db.close()
+        print(f"маршрутов в базе: {len(urls)}"
+              + (" + свой IP" if direct else ", свой IP выключен"))
+        pool = ProxyPool(urls, use_direct=direct)
         for state in pool.routes.values():
             proxies = state.proxies()
             routes.append((state.key, (proxies or {}).get("https")))
