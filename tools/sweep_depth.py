@@ -8,11 +8,11 @@ By default it sweeps only the items whose stored bands counted lots but kept no
 prices, which is what the rows written before the `asks` column look like. Run
 it again after a rate limit: the items it finished are skipped the second time.
 
-    python3 tools/sweep_depth.py                    # the analysis list
-    python3 tools/sweep_depth.py --all              # every active item
-    python3 tools/sweep_depth.py --item "AWP | Printstream (Field-Tested)"
-    python3 tools/sweep_depth.py --dry-run          # say what it would read
-    python3 tools/sweep_depth.py --force --limit 20 # re-read, 20 items at most
+    .venv/bin/python tools/sweep_depth.py                    # the analysis list
+    .venv/bin/python tools/sweep_depth.py --all              # every active item
+    .venv/bin/python tools/sweep_depth.py --item "AWP | Printstream (Field-Tested)"
+    .venv/bin/python tools/sweep_depth.py --dry-run          # say what it would read
+    .venv/bin/python tools/sweep_depth.py --force --limit 20 # re-read, 20 items at most
 """
 from __future__ import annotations
 
@@ -43,6 +43,36 @@ def active_items(db) -> list[str]:
     return [r["market_hash_name"] for r in rows]
 
 
+def project_imports():
+    """The bot's own modules, or an answer that names the real problem.
+
+    Ubuntu has no `python` at all and its `python3` is the system one, while
+    the dependencies live in the project's environment - so the first thing a
+    server run hits is a traceback ending in `No module named 'dotenv'`, which
+    says nothing about which interpreter to use instead. The README warns about
+    this; a tool that only prints the traceback makes the reader go find it.
+    """
+    try:
+        from src.config import load_config
+        from src.db import Database
+        return load_config, Database
+    except ModuleNotFoundError as exc:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        venv = os.path.join(root, ".venv", "bin", "python")
+        here = os.path.relpath(__file__, os.getcwd())
+        print(f"не хватает модуля '{exc.name}' — это системный python3, "
+              f"а зависимости стоят в окружении проекта.", file=sys.stderr)
+        if os.path.exists(venv):
+            print(f"\nзапусти так:\n  {os.path.relpath(venv, os.getcwd())} "
+                  f"{here} {' '.join(sys.argv[1:])}".rstrip(), file=sys.stderr)
+        else:
+            print(f"\nокружение не найдено в {venv}. Чем запускается "
+                  f"коллектор, покажет:\n"
+                  f"  systemctl cat csfloat-collector | grep ExecStart",
+                  file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -60,9 +90,7 @@ def main() -> int:
     ap.add_argument("--db", help="path to the database")
     args = ap.parse_args()
 
-    from src.config import load_config
-    from src.db import Database
-
+    load_config, Database = project_imports()
     config = load_config()
     if args.db:
         config.db_path = args.db

@@ -3,8 +3,8 @@
 The extraction lives in src/item_dump.py, shared with the bot's /dump command
 so a file fetched from the phone and one written on the server cannot disagree.
 
-    python3 tools/dump_item.py "AWP | Printstream (Field-Tested)"
-    python3 tools/dump_item.py "AWP | Printstream (Field-Tested)" --days 90
+    .venv/bin/python tools/dump_item.py "AWP | Printstream (Field-Tested)"
+    .venv/bin/python tools/dump_item.py "AWP | Printstream (Field-Tested)" --days 90
 """
 from __future__ import annotations
 

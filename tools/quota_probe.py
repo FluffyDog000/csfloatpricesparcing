@@ -13,8 +13,8 @@ key A, then make the first request on key B and read what CSFloat says is left:
 Keys are read from a file (one per line) so they never pass through a shell
 history or a chat window, and only a short fingerprint is ever printed.
 
-    python3 tools/quota_probe.py keys.txt
-    python3 tools/quota_probe.py keys.txt --proxy http://user:pass@host:port
+    .venv/bin/python tools/quota_probe.py keys.txt
+    .venv/bin/python tools/quota_probe.py keys.txt --proxy http://user:pass@host:port
 """
 from __future__ import annotations
 

@@ -180,3 +180,69 @@ def test_after_the_sweep_the_queue_is_priced_off_the_survivor():
                      asks=[[95.0, 0.165]] + [[108.0, 0.165]] * 39, params=p)
     assert after.queue_price > before.queue_price
     assert after.ceiling > before.ceiling
+
+
+# -- running it on the server ----------------------------------------------
+
+def _tool():
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parent.parent / "tools" / "sweep_depth.py"
+    spec = importlib.util.spec_from_file_location("sweep_depth_tool", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_missing_dependency_names_the_interpreter_to_use_instead(
+        monkeypatch, capsys, tmp_path):
+    """Ubuntu has no `python` and its `python3` is the system one, so a server
+    run ends in `No module named 'dotenv'` - which says nothing about which
+    interpreter would have worked."""
+    import builtins
+
+    tool = _tool()
+    real = builtins.__import__
+
+    def missing(name, *a, **kw):
+        if name == "src.config":
+            raise ModuleNotFoundError("No module named 'dotenv'", name="dotenv")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(tool.__file__)))
+    venv = os.path.join(root, ".venv", "bin", "python")
+    os.makedirs(os.path.dirname(venv), exist_ok=True)
+    open(venv, "a").close()
+    try:
+        with pytest.raises(SystemExit) as exit:
+            tool.project_imports()
+    finally:
+        os.remove(venv)
+
+    assert exit.value.code == 1
+    err = capsys.readouterr().err
+    assert "dotenv" in err, "say which module, not just that one is missing"
+    assert ".venv/bin/python" in err and "tools/sweep_depth.py" in err
+
+
+def test_without_an_environment_it_says_where_to_look_for_one(
+        monkeypatch, capsys):
+    """Guessing a path that does not exist is worse than saying so: the
+    service file is the one place that knows what actually runs the bot."""
+    import builtins
+
+    tool = _tool()
+    real = builtins.__import__
+
+    def missing(name, *a, **kw):
+        if name == "src.config":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+    with pytest.raises(SystemExit):
+        tool.project_imports()
+    assert "systemctl cat csfloat-collector" in capsys.readouterr().err
