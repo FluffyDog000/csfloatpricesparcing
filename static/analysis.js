@@ -289,7 +289,9 @@
     // endpoint's page limit and the median is above the dearest lot in it, so
     // lots cheaper than the median may exist that were never returned.
     const capped = b.queue_capped
-      ? ". Полоса обрезана на пределе выдачи — дешёвых лотов может быть больше"
+      ? `. Полоса прочитана до предела выдачи (${b.queue_read} лотов), и все `
+        + "они дешевле медианы — значит непрочитанные тоже могут быть, счёт "
+        + "занижен"
       : "";
     const exitSecond = noQueue
       ? (b.queue

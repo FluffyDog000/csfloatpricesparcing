@@ -115,6 +115,7 @@ class Band:
     # The band hit the endpoint's page limit and the median is above the
     # dearest lot it returned, so the queue count is a floor, not a figure.
     queue_capped: bool = False
+    queue_read: int = 0                # lots in the band before either filter
     priced_from: str = "история"
     top: float = 0.0                   # best competing bid in the band
     entry: float | None = None         # cheapest price that puts us first
@@ -247,6 +248,7 @@ def _as_band(rung) -> Band:
         queue_price=rung.queue_price,
         lots_cleared=round(rung.lots_cleared, 1),
         queue_capped=rung.lots_capped,
+        queue_read=rung.lots_read,
         priced_from=rung.priced_from or "история",
         top=rung.rival,
         ceiling=rung.ceiling,

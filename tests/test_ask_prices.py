@@ -202,3 +202,22 @@ def test_the_page_carries_the_mark_through_to_the_band():
                                 PricingParams(window_days=16.0))
                 if abs(b.float_max - 0.16) < 1e-9)
     assert band.queue_capped is True
+
+
+def test_the_mark_can_only_appear_when_every_stored_lot_is_under_the_median():
+    """"8+" against a fifty-lot limit invites the obvious question: eight of
+    what? The answer is that the mark fires only when all fifty are cheaper
+    than the median, so the eight is what survives the FLOAT filter - and the
+    band's own size has to be reported beside it for that to be readable."""
+    from src.ladder import Params, evaluate
+
+    # Fifty lots, all cheap, but only eight are as good as our top.
+    asks = ([[90.0 + i, 0.155] for i in range(8)]
+            + [[90.0 + i, 0.169] for i in range(42)])
+    sales = [{"price": 200.0, "float_value": 0.155, "age_days": i % 14 + 0.5}
+             for i in range(20)]
+    rung = evaluate(0.16, sales, [], (0.15, 0.38), lots=50, asks=asks,
+                    params=Params(window_days=16.0))
+    assert rung.lots == 8, "the float filter is what cut it, not the price"
+    assert rung.lots_capped, "and the band was read to the limit"
+    assert rung.lots_read == 50, "so the row can say eight of what"

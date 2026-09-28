@@ -617,4 +617,8 @@ def test_a_truncated_band_is_marked_in_the_count_and_explained():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert 'b.queue_capped ? "+" : ""' in row
-    assert "Полоса обрезана" in row, "and the row says what the plus means"
+    assert "Полоса прочитана до предела выдачи" in row, \
+        "and the row says what the plus means"
+    assert "b.queue_read" in row, \
+        "with the band's own size, or '8+' against a limit of fifty reads " \
+        "as a contradiction"
