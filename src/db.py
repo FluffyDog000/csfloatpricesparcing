@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS listing_depth (
     oldest_days         REAL,
     offerable           INTEGER NOT NULL DEFAULT 0,  -- reachable below ask
     best_offer          REAL,
+    -- Every lot as [price, float], cheapest first, as JSON. `cheapest` is
+    -- only the first of these, and one seller undercutting the rest moved it
+    -- far enough to reject whole bands. The float travels with the price
+    -- because these bands are 0.02 wide while an order's top moves by 0.01:
+    -- without it we cannot tell which lots our order would actually queue
+    -- behind, which left four bands of one item swinging between -2% and +5%.
+    asks                TEXT,
     PRIMARY KEY (item_id, fetched_at, float_min)
 );
 
@@ -243,6 +250,14 @@ class Database:
             # With it our orders are recognisable outright rather than guessed
             # at by price and bounds.
             self.conn.execute("ALTER TABLE buy_orders ADD COLUMN order_id TEXT")
+
+        depth_cols = {
+            r["name"]
+            for r in self.conn.execute(
+                "PRAGMA table_info(listing_depth)").fetchall()
+        }
+        if "asks" not in depth_cols:
+            self.conn.execute("ALTER TABLE listing_depth ADD COLUMN asks TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -481,7 +496,20 @@ class Database:
             sql += " AND fetched_at >= ?"
             args.append(since)
         sql += " ORDER BY fetched_at, float_min"
-        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+        import json as _json
+
+        out = []
+        for row in self.conn.execute(sql, args).fetchall():
+            band = dict(row)
+            # Decoded here rather than at every reader: a band written before
+            # the column existed has no list, and the pricing must see an
+            # empty one, not a null it then has to guess about.
+            try:
+                band["asks"] = _json.loads(band.get("asks") or "[]")
+            except (TypeError, ValueError):
+                band["asks"] = []
+            out.append(band)
+        return out
 
     def record_order_event(self, *, name: str, kind: str, ok: bool,
                            dry: bool, source: str,
@@ -605,15 +633,18 @@ class Database:
         """Append one sell-side sweep: the queue per band and its age."""
         if not profile:
             return 0
+        import json as _json
+
         now = utcnow_iso()
         self.conn.executemany(
             "INSERT OR REPLACE INTO listing_depth (item_id, fetched_at, "
             "float_min, float_max, listings, cheapest, median_age_days, "
-            "oldest_days, offerable, best_offer) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "oldest_days, offerable, best_offer, asks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(item_id, now, b["float_min"], b["float_max"], b["listings"],
               b["cheapest"], b["median_age_days"], b["oldest_days"],
-              b["offerable"], b["best_offer"]) for b in profile],
+              b["offerable"], b["best_offer"],
+              _json.dumps(b.get("asks") or [])) for b in profile],
         )
         self.conn.commit()
         return len(profile)
@@ -629,7 +660,7 @@ class Database:
         that stopped halfway on a rate limit.
         """
         sql = ("SELECT fetched_at, float_min, float_max, listings, cheapest, "
-               "median_age_days, oldest_days, offerable, best_offer "
+               "median_age_days, oldest_days, offerable, best_offer, asks "
                "FROM listing_depth d WHERE item_id = ?")
         args: list[Any] = [item_id]
         if latest_only:
@@ -637,7 +668,20 @@ class Database:
                     "listing_depth WHERE item_id = d.item_id "
                     "AND float_min = d.float_min AND float_max = d.float_max)")
         sql += " ORDER BY fetched_at, float_min"
-        return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+        import json as _json
+
+        out = []
+        for row in self.conn.execute(sql, args).fetchall():
+            band = dict(row)
+            # Decoded here rather than at every reader: a band written before
+            # the column existed has no list, and the pricing must see an
+            # empty one, not a null it then has to guess about.
+            try:
+                band["asks"] = _json.loads(band.get("asks") or "[]")
+            except (TypeError, ValueError):
+                band["asks"] = []
+            out.append(band)
+        return out
 
     def buy_orders(self, item_id: int) -> list[dict[str, Any]]:
         rows = self.conn.execute(

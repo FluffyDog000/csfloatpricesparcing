@@ -130,7 +130,7 @@ def test_a_rung_opens_one_step_over_the_rival_not_at_its_ceiling():
     willing to come, and spends the room the defence needs."""
     p = Params(min_margin=0.05, window_days=16.0)
     r = evaluate(0.17, item(), [order(48.30, 0.15, 0.17)], (0.15, 0.38),
-                 lots=0, ask_prices=[], params=p)
+                 lots=0, asks=[], params=p)
     assert r.take
     assert r.bid == pytest.approx(48.40, abs=0.01), "a step over $48.30"
     assert r.ceiling == pytest.approx(50.90, abs=0.01), "the margin floor"
@@ -141,7 +141,7 @@ def test_with_nobody_to_lead_the_ceiling_itself_is_the_bid():
     """Nothing to undercut, so there is no cheaper way to be first, and the
     reach over the sellers who want more is worth taking."""
     p = Params(min_margin=0.05, window_days=16.0)
-    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=0, asks=[],
                  params=p)
     assert r.take
     assert r.bid == r.ceiling == pytest.approx(50.90, abs=0.01)
@@ -150,7 +150,7 @@ def test_with_nobody_to_lead_the_ceiling_itself_is_the_bid():
 def test_a_rival_too_dear_to_lead_within_the_margin_is_refused():
     p = Params(min_margin=0.05, window_days=16.0)
     r = evaluate(0.17, item(), [order(50.90, 0.15, 0.17)], (0.15, 0.38),
-                 lots=0, ask_prices=[], params=p)
+                 lots=0, asks=[], params=p)
     assert not r.take
     assert "перебить стоит" in r.reason and "маржа позволяет" in r.reason
 
@@ -159,7 +159,7 @@ def test_the_median_is_used_not_a_low_quantile():
     """A low quantile understated the exit and lost rungs that cleared the
     floor honestly; the top-of-range estimate already handles the bad float."""
     p = Params()
-    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=0, asks=[],
                  params=p)
     assert r.market == pytest.approx(54.62)
 
@@ -167,7 +167,7 @@ def test_the_median_is_used_not_a_low_quantile():
 def test_a_thin_sample_is_refused_rather_than_guessed():
     p = Params(min_sample=8)
     sales = [sale(54.0, 0.165) for _ in range(3)]
-    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, asks=[],
                  params=p)
     assert not r.take and "мало продаж" in r.reason
 
@@ -177,7 +177,7 @@ def test_a_rung_priced_out_by_a_rival_says_both_numbers():
     what the margin allows."""
     p = Params()
     r = evaluate(0.17, item(), [order(60.0, 0.15, 0.17)], (0.15, 0.38),
-                 lots=0, ask_prices=[], params=p)
+                 lots=0, asks=[], params=p)
     assert not r.take
     assert "перебить стоит" in r.reason
 
@@ -187,7 +187,7 @@ def test_a_rival_scoped_to_a_sliver_does_not_veto_the_rung():
     the gate was the range's strongest bid. It takes a sliver of the flow."""
     p = Params()
     book = [order(56.80, 0.15, 0.16), order(48.30, 0.15, 0.17)]
-    r = evaluate(0.17, item(), book, (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, item(), book, (0.15, 0.38), lots=0, asks=[],
                  params=p)
     assert r.take, r.reason
     assert r.rival == pytest.approx(48.30), "report the bid for what we get"
@@ -197,7 +197,7 @@ def test_a_rung_nobody_sells_into_is_refused():
     """Outbidding the book buys nothing if every seller wants more."""
     p = Params()
     sales = [sale(54.62, 0.165) for _ in range(80)]
-    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, asks=[],
                  params=p)
     assert not r.take and "никто не продавал" in r.reason
 
@@ -207,7 +207,7 @@ def test_a_queue_too_deep_for_the_lock_binds_instead_of_the_history():
     survivors, and the survivors set the price rather than the median."""
     p = Params()
     asks = [50.0] * 200
-    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=200, ask_prices=asks,
+    r = evaluate(0.17, item(), [], (0.15, 0.38), lots=200, asks=asks,
                  params=p)
     assert r.priced_from == "очередь"
     assert r.exit_net == pytest.approx(49.90 * (1 - p.fee))
@@ -217,7 +217,7 @@ def test_the_same_queue_costs_nothing_when_the_item_moves_fast_enough():
     """The mirror image: identical lots, but the flow disposes of them."""
     p = Params()
     r = evaluate(0.17, item(), [], (0.15, 0.38), lots=20,
-                 ask_prices=[50.0] * 20, params=p)
+                 asks=[50.0] * 20, params=p)
     assert r.priced_from == "история"
     assert r.market == pytest.approx(54.62)
 
@@ -284,7 +284,7 @@ def test_a_rung_is_priced_at_the_lot_it_will_actually_be_handed():
     comes from the sales at the top, not from the whole range."""
     sales = [sale(80.0, 0.155) for _ in range(20)]     # pristine, never ours
     sales += [sale(50.0, 0.168) for _ in range(20)]    # what we will get
-    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, ask_prices=[],
+    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, asks=[],
                  params=Params())
     assert r.market == pytest.approx(50.0), "the top prices it, not the range"
 

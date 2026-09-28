@@ -191,6 +191,22 @@ def sale_rate(sales: Sequence[dict], lo: float, hi: float,
     return len(in_range(sales, lo, hi)) / window_days
 
 
+def _pairs(asks: Sequence):
+    """(price, float) for each lot, tolerating a bare price list."""
+    out = []
+    for item in asks or ():
+        if isinstance(item, (int, float)):
+            out.append((float(item), None))
+            continue
+        try:
+            price = float(item[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        f = item[1] if len(item) > 1 else None
+        out.append((price, None if f is None else float(f)))
+    return out
+
+
 def queue_price(prices: Sequence[float], lots: int, cleared: float,
                 step: float) -> float | None:
     """What the standing lots let us sell for, once the lock has run.
@@ -273,7 +289,7 @@ def price_step(price: float) -> float:
 
 def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
              span: tuple[float, float], lots: int,
-             ask_prices: Sequence[float], params: Params,
+             asks: Sequence, params: Params,
              lot_span: tuple[float, float] | None = None) -> Rung:
     """One rung of the ladder: the order [span_low, top], priced.
 
@@ -301,7 +317,25 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     rate = sale_rate(sales, q_lo, q_hi, params.window_days)
     rung.lots_cleared = rate * params.lock_days
     step = price_step(rung.market)
-    rung.queue_price = queue_price(ask_prices, lots, rung.lots_cleared, step)
+    # Only the lots our order would actually queue behind. A depth band is
+    # 0.02 wide while the top moves by 0.01, so half of one can be worse items
+    # than we would be selling; a buyer who wants our float cannot use those,
+    # and letting them set our price cost a band three dollars of exit. A lot
+    # whose float was never recorded is kept: unknown counts against us.
+    pairs = _pairs(asks)
+    if len(pairs) >= lots > 0:
+        # The whole band is on hand, so the ones we would not queue behind can
+        # be dropped and the count reduced with them.
+        ours = [p for p, f in pairs if f is None or f <= top]
+        rung.lots = len(ours)
+    else:
+        # Partial: older rows kept only the cheapest ask. Dropping the count
+        # to match would read as a queue that clears, which is the optimistic
+        # direction and the wrong one - so the recorded count stands and the
+        # prices we do have are used as they were before.
+        ours = [p for p, _ in pairs]
+        rung.lots = lots
+    rung.queue_price = queue_price(ours, rung.lots, rung.lots_cleared, step)
 
     if rung.queue_price is not None and rung.queue_price < rung.market:
         exit_gross, rung.priced_from = rung.queue_price, "очередь"
@@ -395,10 +429,22 @@ def lots_in_band(depth: Sequence[dict], top: float):
         except (KeyError, TypeError, ValueError):
             continue
         count = int(row.get("listings") or 0)
-        prices = [float(x) for x in (row.get("ask_prices") or [])]
-        if not prices and row.get("cheapest") is not None:
-            prices = [float(row["cheapest"])]
-        bands.append((band_lo, band_hi, (count, prices)))
+        asks: list[tuple[float, float | None]] = []
+        for pair in (row.get("asks") or []):
+            try:
+                price = float(pair[0])
+            except (TypeError, ValueError, IndexError):
+                continue
+            try:
+                f = float(pair[1]) if pair[1] is not None else None
+            except (TypeError, ValueError, IndexError):
+                f = None
+            asks.append((price, f))
+        if not asks and row.get("cheapest") is not None:
+            # Written before the column existed: the minimum is all there is,
+            # and its float is unknown, so it is kept and counted against us.
+            asks = [(float(row["cheapest"]), None)]
+        bands.append((band_lo, band_hi, (count, sorted(asks))))
     bands.sort()
     for band_lo, band_hi, value in bands:
         if band_lo < top <= band_hi:

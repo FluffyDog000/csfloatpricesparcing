@@ -126,11 +126,21 @@ def depth_profile(rows: list[dict[str, Any]],
         offerable = [r for r in here
                      if r.get("min_offer_price") is not None
                      and r["min_offer_price"] < r["price"]]
+        # Every lot as (price, float), cheapest first. Price alone is not
+        # enough: these bands are 0.02 wide while an order's top moves by
+        # 0.01, so half the lots in a band can be worse items than the one we
+        # would be selling, and a buyer who wants our float cannot use them.
+        # Keeping the float lets the pricing drop those. And keeping all of
+        # them, rather than the minimum, stops one seller undercutting the
+        # rest from pricing a band nobody else was near.
+        asks = sorted(((r["price"], r.get("float")) for r in here),
+                      key=lambda pf: pf[0])
         profile.append({
             "float_min": a,
             "float_max": b,
             "listings": len(here),
-            "cheapest": min((r["price"] for r in here), default=None),
+            "cheapest": asks[0][0] if asks else None,
+            "asks": [[p, f] for p, f in asks],
             "median_age_days": _median(ages),
             "oldest_days": max(ages, default=None),
             # How much of the band is reachable without an order at all.
