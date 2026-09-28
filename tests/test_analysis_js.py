@@ -440,15 +440,6 @@ def test_a_screened_out_item_renders_as_one_line_not_a_table():
     assert "запросов" in got["funnelText"]
 
 
-def test_a_borrowed_price_is_labelled_as_borrowed():
-    """A price worked out from neighbouring bands looks exactly like a
-    measured one in a table, and it is not the same claim."""
-    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
-    row = source.split("function bandRow")[1].split("\n  }")[0]
-    assert "b.borrowed" in row and "b.reach" in row
-    assert "priced_from" in row
-
-
 def test_the_surcharge_says_what_the_cheap_price_would_have_earned():
     """"Why bid over the book" has been asked twice from behind a tooltip.
     The surcharge is only defensible by the number it buys, so that number is
@@ -519,3 +510,14 @@ def test_the_table_shows_what_a_fill_would_actually_cost():
     assert "b.margin_worst" in row, "and the bid-priced margin is beside it"
     header = source.split("<th>float</th>")[1].split("</thead>")[0]
     assert "платим" in header
+
+
+def test_the_price_column_says_where_the_number_came_from():
+    """History or the sell queue: the two can differ by three dollars, and
+    which one bound is the first thing a reader needs."""
+    import pathlib
+
+    source = pathlib.Path("static/analysis.js").read_text()
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.priced_from" in row
+    assert "b.sample" in row, "and on how many sales it rests"

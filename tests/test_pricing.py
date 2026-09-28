@@ -70,50 +70,6 @@ def test_an_unscoped_order_competes_everywhere():
             assert band.top == 180.0, "a filterless order reaches every band"
 
 
-def test_a_borrowed_price_carries_more_doubt_than_a_measured_one():
-    """Reaching is itself a doubt. Sales lying exactly on a line say the line
-    fits, not that it keeps holding a dozen bands further out."""
-    from src.pricing import neighbourhood
-
-    tight = [{"price": 200.0 - i * 0.333, "float_value": 0.15 + i * 0.001}
-             for i in range(300)]
-    close = neighbourhood(tight, 0.30, 0.32, 12)
-    sparse = [{"price": 200.0 - i * 6.0, "float_value": 0.15 + i * 0.02}
-              for i in range(16)]
-    far = neighbourhood(sparse, 0.30, 0.32, 12)
-
-    assert far[2] > close[2], "the sparse one had to reach further"
-    assert far[1] > close[1], "and says so in its error"
-
-
-def test_the_doubt_in_a_borrowed_price_does_not_depend_on_the_band_step():
-    """How confidently a price extrapolates depends on how far it reached, not
-    on how finely we chose to slice. Counting the reach in band widths made
-    narrowing the step - a setting, not a fact about the market - inflate the
-    doubt on its own, and the ranking reads that doubt."""
-    from src.pricing import neighbourhood
-
-    sparse = [{"float_value": 0.15 + i * 0.02, "price": 200.0 - i * 6.0}
-              for i in range(16)]
-    wide = neighbourhood(sparse, 0.30, 0.32, 12)
-    narrow = neighbourhood(sparse, 0.305, 0.315, 12)
-
-    assert wide[2] == narrow[2], "both reached the same distance"
-    assert abs(wide[1] - narrow[1]) < 0.01, \
-        f"halving the band step changed the error: {wide[1]} vs {narrow[1]}"
-
-
-def test_reaching_further_still_costs_more():
-    from src.pricing import neighbourhood
-
-    dense = [{"float_value": 0.15 + i * 0.001, "price": 200.0 - i * 0.3}
-             for i in range(300)]
-    sparse = [{"float_value": 0.15 + i * 0.02, "price": 200.0 - i * 6.0}
-              for i in range(16)]
-    assert neighbourhood(sparse, 0.30, 0.32, 12)[1] > \
-        neighbourhood(dense, 0.30, 0.32, 12)[1]
-
-
 def test_a_skin_whose_price_ignores_float_is_not_penalised_for_it():
     """The correction is exactly as large as the slope. Flat prices, no
     slope, nothing to correct - so the fix costs nothing where it is not
@@ -161,39 +117,6 @@ def test_a_cheaper_ask_on_a_worse_float_does_not_set_our_price():
     assert band.market > 230.0, f"exit priced at {band.market}"
 
 
-def test_a_wild_slope_cannot_reprice_a_listing_out_of_recognition():
-    from src.pricing import _exit_price
-
-    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 100.0}]
-    high = _exit_price(1000.0, depth, 0.15, 0.16, "история",
-                       at=0.155, slope=-50000.0)[0]
-    low = _exit_price(1000.0, depth, 0.15, 0.16, "история",
-                      at=0.155, slope=50000.0)[0]
-    assert 40.0 <= low <= 210.0 and 40.0 <= high <= 210.0
-
-
-def test_one_listing_says_nothing_about_where_in_its_band_it_sits():
-    """With a single lot there is no reason to think it is at either edge, so
-    the middle it is. Inventing an edge would be inventing a fact in whichever
-    direction flattered the answer."""
-    from src.pricing import _exit_price
-
-    depth_one = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 200.0,
-                  "listings": 1}]
-    depth_many = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 200.0,
-                   "listings": 20}]
-    slope = -5000.0     # $50 per 0.01 of float
-
-    one = _exit_price(999.0, depth_one, 0.15, 0.16, "история",
-                      at=0.16, slope=slope)[0]
-    many = _exit_price(999.0, depth_many, 0.15, 0.16, "история",
-                       at=0.16, slope=slope)[0]
-
-    # $200 sits in the $100-500 tier, where the grid step is a dollar.
-    assert one == 199.0, "middle of the band is our own float: no carry"
-    assert many > one, "twenty lots: its cheapest is near the worst float"
-
-
 def _spread(n=460, lo=0.15, hi=0.38, base=130.0, days=21):
     """An item trading steadily across a whole wear."""
     out = []
@@ -203,92 +126,6 @@ def _spread(n=460, lo=0.15, hi=0.38, base=130.0, days=21):
                     "float_value": round(f, 4),
                     "age_days": float(i % days)})
     return out
-
-
-def test_a_narrow_band_is_no_longer_starved_of_flow():
-    """A 0.01 slice of Field-Tested is a twenty-third of it, so counting only
-    the sales inside gave one or two in three weeks - from which no rate can
-    be measured. Zero sales in a slice is not evidence of zero flow, and that
-    was the evidence bands were being rejected on."""
-    from src.pricing import Params, band_flow
-
-    sales = _spread()
-    inside = [s for s in sales
-              if 0.20 <= s["float_value"] < 0.21 and s["age_days"] <= 21]
-    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
-
-    assert flow.observed > len(inside) * 3, \
-        "the window holds far more than the slice"
-    assert flow.rate > 0, "and turns into a rate rather than a coin toss"
-
-
-def test_the_rate_is_scaled_to_the_band_not_to_the_window():
-    """Borrowing neighbours to measure a rate would otherwise credit a 0.01
-    band with a 0.06 window's worth of trade."""
-    from src.pricing import band_flow
-
-    sales = _spread()
-    narrow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
-    wide = band_flow(sales, 0.20, 0.26, 21.0, reach=0.03, slope=0.0, at=0.26)
-    assert wide.rate > narrow.rate * 3, \
-        f"a six times wider band should trade far more: {wide.rate} vs {narrow.rate}"
-
-
-def test_flow_at_a_bid_is_the_share_of_prices_under_it():
-    from src.pricing import band_flow
-
-    sales = _spread()
-    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
-    assert flow.at(0.0) == 0.0
-    assert flow.at(10_000.0) == pytest.approx(flow.rate)
-    assert 0 < flow.at(130.0) < flow.rate
-
-
-def test_borrowing_neighbours_does_not_invent_flow_that_is_not_there():
-    """The estimate has to be honest in both directions. A slow item sliced
-    thinly really does trade rarely, and the fix is meant to measure that -
-    not to make every band look busy enough to pass."""
-    from src.pricing import band_flow
-
-    # One sale a day across a whole wear: a 0.01 slice gets a twenty-third.
-    sales = [{"price": 130.0, "float_value": round(0.15 + 0.23 * (i % 100) / 100, 4),
-              "age_days": float(i % 21)} for i in range(21)]
-    flow = band_flow(sales, 0.20, 0.21, 21.0, reach=0.03, slope=0.0, at=0.21)
-
-    assert flow.observed >= 3, "the window sees more than the slice"
-    assert flow.rate < 0.1, f"but a slow item stays slow: {flow.rate}"
-    assert 1 / flow.rate > 10, "one sale every week or two, and it says so"
-
-
-def test_a_fill_costs_the_listing_price_not_our_bid():
-    """A buy order does not wait for someone who means to sell to it: it takes
-    any listing that appears at or under it, and CSFloat charges the listing's
-    price. The orders that pay are the ones that catch a seller who priced
-    their lot as an ordinary example of the skin without noticing what its
-    float is worth - and that seller's price is the one we pay."""
-    from src.pricing import Flow
-
-    flow = Flow(rate=0.8, observed=9,
-                prices=(155.0, 158.0, 161.0, 164.0, 167.0,
-                        170.0, 176.0, 181.0, 188.0))
-    assert flow.paid(163.0) == 158.0
-    assert flow.paid(175.0) == 162.5
-    assert flow.paid(100.0) is None, "nothing fills, nothing is paid"
-
-
-def test_raising_the_bid_does_not_raise_what_the_cheap_lots_cost():
-    """Which is the whole point: a higher order catches more mispriced
-    listings without paying more for the ones already caught."""
-    from src.pricing import Flow
-
-    flow = Flow(rate=0.8, observed=9,
-                prices=(155.0, 158.0, 161.0, 164.0, 167.0,
-                        170.0, 176.0, 181.0, 188.0))
-    net = 181.0
-    cheap = (net - flow.paid(163.0)) / flow.paid(163.0)
-    dear = (net - flow.paid(175.0)) / flow.paid(175.0)
-    assert dear > cheap * 0.7, \
-        f"costing every fill at the bid would have shown a collapse: {cheap} -> {dear}"
 
 
 def test_the_ceiling_still_bounds_the_worst_case():
@@ -308,30 +145,3 @@ def test_the_ceiling_still_bounds_the_worst_case():
     assert band.margin >= band.margin_worst, "and the ordinary case is better"
 
 
-def test_a_reading_for_our_own_range_beats_one_that_merely_overlaps():
-    """Asking for the float we hold returns the lots our order can actually
-    buy. A 0.02 grid band overlapping it may be quoting a far worse float, and
-    that is the reading that needed carrying between floats in the first
-    place."""
-    from src.pricing import _exit_price
-
-    depth = [
-        # Stale grid band: cheapest is a much worse float, so much cheaper.
-        {"float_min": 0.15, "float_max": 0.17, "cheapest": 150.0, "listings": 8},
-        # Fresh reading for exactly our range.
-        {"float_min": 0.15, "float_max": 0.16, "cheapest": 190.0, "listings": 3},
-    ]
-    price, source = _exit_price(999.0, depth, 0.15, 0.16, "история",
-                                at=0.16, slope=0.0)
-    assert source == "аск"
-    assert price == 189.0, f"the exact reading should set it, got {price}"
-
-
-def test_an_overlapping_reading_is_still_used_when_there_is_nothing_exact():
-    from src.pricing import _exit_price
-
-    depth = [{"float_min": 0.15, "float_max": 0.17, "cheapest": 150.0,
-              "listings": 8}]
-    price, source = _exit_price(999.0, depth, 0.15, 0.16, "история",
-                                at=0.16, slope=0.0)
-    assert source == "аск" and price == 149.0

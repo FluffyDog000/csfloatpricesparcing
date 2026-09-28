@@ -291,12 +291,7 @@
       <td>${b.wars}</td>
       <td>${money(b.paid)}<span class="muted">${
         b.paid && b.bid ? ` −${(b.bid - b.paid).toFixed(2)}` : ""}</span></td>
-      <td>${money(b.market)}<span class="muted"${
-        b.borrowed ? ` title="своих продаж ${b.sample}, взято ${b.borrowed} `
-          + `ближайших, дальняя за ${b.reach.toFixed(3)} по float. `
-          + `Погрешность ${(b.market_error * 100).toFixed(1)}%"` : ""
-        }> ${b.priced_from}${b.borrowed ? " ±" + (b.market_error * 100).toFixed(0)
-          + "%" : ""}</span></td>
+      <td>${money(b.market)}<span class="muted" title="медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам"> ${b.priced_from}</span></td>
       <td><b>${pct(b.margin)}</b>${
         b.margin_worst !== null && b.margin_worst !== undefined
           ? ` <span class="muted" title="если бы лот обошёлся в полную ставку`
