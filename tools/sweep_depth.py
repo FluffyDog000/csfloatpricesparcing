@@ -143,6 +143,11 @@ def main() -> int:
                       f"{result['requests']} запрос(ов)"
                       + (f" — {result['error']}" if result.get("error") else ""),
                       flush=True)
+            elif result.get("rate_limited"):
+                # Not a failure: either the wait below picks it up again, or
+                # the next run does. Calling it "НЕ ПРОЧИТАНО" reads as broken.
+                print(f"  {name}: лимит после {result.get('bands', 0)} полос",
+                      flush=True)
             else:
                 print(f"  {name}: НЕ ПРОЧИТАНО — "
                       f"{result.get('error') or 'полос не прочитано'}", flush=True)
