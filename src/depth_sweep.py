@@ -44,6 +44,16 @@ def needs_prices(depth: Sequence[dict[str, Any]],
 
         if len(depth) < len(depth_profile([], span)):
             return True
+    # Not one band carries a price. Either nothing on this item is for sale
+    # anywhere in its wear range, or these rows predate the column - and a
+    # sweep cut short used to write "no lots" over every band it never asked
+    # for, which makes the second case look exactly like the first.
+    #
+    # The two are worth telling apart by re-reading, because an item with a
+    # live sales history and no listings at all is the rarer of the two by a
+    # long way, and the cost of being wrong is one sweep.
+    if not any(b.get("asks") for b in depth):
+        return True
     return any(int(b.get("listings") or 0) > 0 and not (b.get("asks") or [])
                for b in depth)
 

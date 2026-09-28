@@ -35,10 +35,13 @@ def test_a_band_that_counted_lots_but_kept_no_prices_is_the_old_shape():
     assert needs_prices([band(50, [])])
 
 
-def test_a_band_with_no_lots_is_not_missing_anything():
-    """A float range nobody sells in has no prices to store. Reading it again
-    would cost a request to learn the same nothing."""
-    assert not needs_prices([band(0, [])])
+def test_an_empty_band_beside_a_priced_one_is_not_missing_anything():
+    """A float range nobody sells in has no prices to store, and reading it
+    again costs a request to learn the same nothing. That holds once we can
+    see the rows are real - which takes one price somewhere on the item, since
+    a sweep cut short used to write "no lots" over bands it never asked for.
+    """
+    assert not needs_prices([band(2, [[52.0, 0.16]]), band(0, [], 0.17, 0.19)])
 
 
 def test_an_item_with_prices_is_left_alone():
@@ -489,3 +492,19 @@ def test_a_flag_left_over_from_an_earlier_run_does_not_stop_this_one():
     col.client.account_ip_block_at = "2026-09-28T09:00:00Z"   # hours ago
     out = sweep(col, [("A", 1)], patience=600.0, sleep=lambda s: None)
     assert out["stopped"] == "", "the stamp did not change, so nothing new"
+
+
+def test_an_item_whose_bands_all_read_empty_is_swept_again():
+    """A sweep cut short used to write "no lots" over every band it never
+    asked for, so the rows look read and empty. `needs_prices` treated an
+    empty band as legitimate and skipped such an item forever - on a live item
+    whose header said twelve bands were read and whose every rung showed a
+    queue of zero."""
+    assert needs_prices([band(0, []), band(0, [], 0.17, 0.19)])
+
+
+def test_an_item_with_prices_somewhere_is_judged_band_by_band():
+    """One real price is enough to show the rows are not from before the
+    column, and then an empty band means an empty band."""
+    rows = [band(2, [[52.0, 0.16], [53.0, 0.165]]), band(0, [], 0.17, 0.19)]
+    assert not needs_prices(rows)

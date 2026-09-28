@@ -268,7 +268,7 @@
     return `${Math.round(hours / 24)} дн назад`;
   }
 
-  function bandRow(b, depthAt) {
+  function bandRow(b, depthAt, depthBands) {
     const tr = document.createElement("tr");
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
     if (!b.take) {
@@ -304,11 +304,20 @@
         + "они дешевле медианы — значит непрочитанные тоже могут быть, счёт "
         + "занижен"
       : "";
+    // Three cases, and the page used to give two of them the same sentence.
+    // A band that was read and holds nothing is not a band nobody read: the
+    // first says the float range is empty, the second says we are guessing.
+    // They looked identical on an item whose header said twelve bands were
+    // read - because a sweep cut short used to write "no lots" over the bands
+    // it never asked for.
+    const noBands = !depthBands;
     const exitSecond = noQueue
       ? (b.queue
         ? `очередь не ограничивает: ${b.queue} лот(ов), за блокировку `
           + `уходит ${b.lots_cleared}${capped}`
-        : "лоты не собраны — очередь не учтена")
+        : noBands
+          ? "стакан продаж не читался — очередь не учтена"
+          : "в этой полосе лотов не было при обходе — очередь не ограничивает")
       : `против ${money(other)} `
         + (exit_from === "очередь" ? "по истории" : "по очереди")
         + ` (${b.queue} лот(ов), уходит ${b.lots_cleared})${capped}`;
@@ -516,7 +525,7 @@
       // button rather than a schedule. Eight hours was enough for three lots
       // to sell and a fourth to be repriced, and the count read as a claim
       // about the market right now - it is a claim about the market then.
-      it.bands.forEach((b) => tb.appendChild(bandRow(b, it.depth_at)));
+      it.bands.forEach((b) => tb.appendChild(bandRow(b, it.depth_at, it.depth)));
       t.appendChild(tb);
       sec.appendChild(t);
       box.appendChild(sec);

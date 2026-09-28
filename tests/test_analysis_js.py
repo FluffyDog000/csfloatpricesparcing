@@ -594,7 +594,8 @@ def test_a_queue_that_cannot_bind_says_so_in_the_row_not_on_hover():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "очередь не ограничивает" in row
-    assert "лоты не собраны" in row, "and an item never swept is its own case"
+    assert "стакан продаж не читался" in row, \
+        "and an item never swept is its own case"
     # The second line is unconditional: every branch of exitSecond produces text.
     assert "other !== null ?" not in row
 
@@ -633,7 +634,7 @@ def test_the_queue_count_carries_the_age_of_the_reading():
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "staleness(depthAt)" in row
     assert "86400000" in row, "a reading over a day old is marked, not just aged"
-    assert "function bandRow(b, depthAt)" in source
+    assert "function bandRow(b, depthAt, depthBands)" in source
 
 
 def test_the_age_is_given_in_units_a_reader_thinks_in():
@@ -654,3 +655,15 @@ def test_a_sweep_counts_as_done_only_when_both_halves_landed():
     assert '(it.swept_at || "") !== (before[it.item]' not in sweep
     assert "только стакан покупки" in sweep, \
         "and the half that is missing is named"
+
+
+def test_a_band_read_empty_is_not_called_uncollected():
+    """The header said twelve bands were read while every rung said "лоты не
+    собраны": a band read and holding nothing got the same sentence as a band
+    nobody read. The first says the float range is empty; the second says we
+    are guessing."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "стакан продаж не читался" in row
+    assert "в этой полосе лотов не было при обходе" in row
+    assert "function bandRow(b, depthAt, depthBands)" in source
