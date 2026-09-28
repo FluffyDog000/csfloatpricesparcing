@@ -954,3 +954,30 @@ def test_the_rank_shown_is_the_rank_sorted_by():
     assert "a.rank" in plan
     assert "round(ranked.get(" not in open("webapp.py", encoding="utf-8").read(), \
         "and not rounded before the ordering"
+
+
+def test_the_stale_script_warning_compares_like_with_like():
+    """It compared a script's own `?v=` stamp against `asset_build`, which is
+    neither the same file nor the same length: the newest mtime across all of
+    static, cut to its last six digits for the header. The two could never be
+    equal, so the page announced "браузер выполняет старый analysis.js" on
+    every single load, while the script it named was current."""
+    c = _app()
+    page = c.get("/analysis").get_data(as_text=True)
+
+    import re
+    expect = re.search(r'var expect = "(\d*)"', page)
+    src = re.search(r'analysis\.js\?v=(\d+)', page)
+    assert expect and src, page[:400]
+    assert expect.group(1) == src.group(1), \
+        "the expected stamp is the one actually put in the script's URL"
+
+
+def test_the_header_still_shows_the_short_build_of_all_assets():
+    """Two different jobs: the header names the deployment at a glance, the
+    check names one file exactly. Collapsing them is what broke the check."""
+    c = _app()
+    page = c.get("/analysis").get_data(as_text=True)
+    import re
+    header = re.search(r'сб\. (\S+)</span>', page)
+    assert header and len(header.group(1)) <= 6

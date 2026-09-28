@@ -160,7 +160,24 @@ def _asset_version():
             return url
         return f"{url}?v={stamp}"
 
+    def asset_version(filename: str) -> str:
+        """The exact stamp `asset()` puts in that file's URL.
+
+        The staleness check compared a script's own `?v=` against
+        `asset_build`, which is neither the same file nor the same length - it
+        is the newest mtime across all of static, cut to its last six digits
+        for the header. The two could never be equal, so the page cried
+        "браузер выполняет старый analysis.js" on every load, including this
+        one, while the script it named was current.
+        """
+        try:
+            return str(int(os.path.getmtime(
+                os.path.join(app.static_folder, filename))))
+        except OSError:
+            return ""
+
     return {"asset": asset, "asset_build": _build_stamp(),
+            "asset_version": asset_version,
             "session_persistent": bool(config.web.secret_key)}
 
 

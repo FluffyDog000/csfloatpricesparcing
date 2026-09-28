@@ -161,13 +161,16 @@
   // than the server's, with nothing on screen able to say so.
   (function () {
     var note = document.getElementById("an-note");
-    var expect = "{{ asset_build }}";
+    // This script's own stamp, not the newest across all of static: they are
+    // different numbers, and comparing them made the warning permanent.
+    var expect = "{{ asset_version('analysis.js') }}";
+    var build = "{{ asset_build }}";
     function show(text, cls) {
       if (!note) return;
       note.textContent = text;
       note.className = cls || "muted";
     }
-    show("Загружаю скрипт страницы… (сборка " + expect + ")");
+    show("Загружаю скрипт страницы… (сборка " + build + ")");
     window.addEventListener("error", function (e) {
       show("Ошибка в скрипте: " + (e.message || e.type)
         + (e.filename ? " — " + e.filename.split("/").pop() : ""), "err");
