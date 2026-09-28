@@ -870,8 +870,12 @@
             renderResults(data);
             const done = data.items.filter(
               (it) => (it.swept_at || "") !== (before[it.item] || "")).length;
+            // Two counters side by side, and only the first is about the
+            // work: "проверка 3 из 25" read as a count of float bands on an
+            // item that has four. It is this page asking the server again.
+            const left = Math.round((total - tries) * 6 / 60 * 10) / 10;
             say(`Жду сборщик: обойдено ${done} из ${r.queued.length}`
-              + ` · проверка ${tries} из ${total}`
+              + ` · спрашиваю ещё ${left} мин`
               + (data.error ? ` · последняя ошибка: ${data.error}` : ""));
             if (done >= r.queued.length) { clearInterval(timer); resolve(); }
           } catch (e) {
@@ -965,7 +969,10 @@
             return;
           }
           const w = $("plan-waiting");
-          if (w) w.textContent = `Жду сборщик… проверка ${i} из 24`;
+          if (w) {
+            w.textContent = "Жду сборщик… спрашиваю ещё "
+              + (Math.round((24 - i) * 5 / 60 * 10) / 10) + " мин";
+          }
         }
         say("Сборщик не отчитался за две минуты — посмотри «Нагрузка», "
           + "не на паузе ли он.", "err");

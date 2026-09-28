@@ -539,3 +539,14 @@ def test_the_price_column_says_where_the_number_came_from():
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "b.priced_from" in row
     assert "b.sample" in row, "and on how many sales it rests"
+
+
+def test_waiting_is_counted_in_minutes_not_in_polls():
+    """"проверка 3 из 25" sat beside "обойдено 0 из 1" and read as a second
+    progress bar over the same work - it was asked whether 25 was the float
+    bands of a Minimal Wear skin, which has four. It is this page asking the
+    server again, and what the reader wants from it is how long is left."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    assert "проверка ${tries} из" not in source
+    assert "проверка ${i} из" not in source
+    assert source.count("спрашиваю ещё") == 2, "both waits say it the same way"
