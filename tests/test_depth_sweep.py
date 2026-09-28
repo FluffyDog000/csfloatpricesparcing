@@ -508,3 +508,19 @@ def test_an_item_with_prices_somewhere_is_judged_band_by_band():
     column, and then an empty band means an empty band."""
     rows = [band(2, [[52.0, 0.16], [53.0, 0.165]]), band(0, [], 0.17, 0.19)]
     assert not needs_prices(rows)
+
+
+# -- the tool's own pool ---------------------------------------------------
+
+def test_the_tool_loads_the_proxy_list_the_dashboard_owns():
+    """A client is born with the `.env` pool, which on a server managed from
+    the dashboard is empty - so the tool ran every sweep from the one address
+    the dashboard had been told not to use, while forty-two working routes sat
+    in the database. The service syncs on startup and each cycle; a tool that
+    builds its own collector has to as well."""
+    source = __import__("pathlib").Path("tools/sweep_depth.py").read_text(
+        encoding="utf-8")
+    assert "collector.sync_proxies()" in source
+    assert source.index("collector.sync_proxies()") \
+        < source.index("sweep(collector"), "synced before the first request"
+    assert "маршрутов:" in source, "and it says how many it ended up with"

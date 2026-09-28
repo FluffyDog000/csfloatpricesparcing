@@ -133,6 +133,16 @@ def main() -> int:
         from src.csfloat_client import CSFloatClient
 
         collector = Collector(config, db, CSFloatClient(config.http, config.polling))
+        # The pool the client is born with comes from `.env`, which on a server
+        # managed through the dashboard is empty - so this ran every sweep from
+        # the one address the dashboard had been told not to use, while forty-
+        # two working routes sat in the database. The service does this on
+        # startup and on every cycle; a tool that reuses the collector has to
+        # do it too.
+        collector.sync_proxies()
+        routes = collector.client.pool.routes
+        print(f"маршрутов: {len(routes)}"
+              + (" (только свой IP)" if len(routes) == 1 else ""))
 
         def report(name: str, result: dict) -> None:
             if result.get("waiting"):
