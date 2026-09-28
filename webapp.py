@@ -877,9 +877,14 @@ def _json_setting(db, key: str):
 def _sales_for(db, item_id: int, params) -> list[dict]:
     """An item's sales with each one's age, which is what the scoring reads.
 
-    Three windows of history are kept rather than one: the rates are measured
-    over `window_days`, but a band's median needs more than that to mean
-    anything, and the two are not the same number."""
+    More history is loaded than the window uses. The screen wants a long-run
+    median and the quiet-days figure, which need every row; the ladder windows
+    what it is given down to `window_days` itself.
+
+    That last part used to be untrue, and the comment here was the excuse: the
+    rates were said to use the window while the medians used more. Nothing
+    windowed anything - a quarter of sales was divided by a fortnight, and
+    every flow in the model came out six times too large."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=max(params.window_days * 3, 90))).isoformat()
     rows = [dict(r) for r in db.conn.execute(

@@ -12,8 +12,14 @@ from src.ladder import (LOCK_DAYS, Params, Rung, evaluate, fills_at,
                         top_rival)
 
 
-def sale(price, f):
-    return {"price": price, "float_value": f}
+def sale(price, f, age=1.0):
+    """A sale carries its age, because the model windows on it.
+
+    Fixtures used to leave it out, which is not a shape production ever has -
+    every row the dashboard loads is stamped with one - and it let a whole
+    class of window bug through untouched.
+    """
+    return {"price": price, "float_value": f, "age_days": age}
 
 
 def order(price, lo=None, hi=None):
@@ -230,8 +236,9 @@ def spread():
     for i in range(24):
         f = round(0.16 + i * 0.01, 4)
         price = 55.0 - i * 0.5
-        out += [sale(price, f) for _ in range(10)]
-        out.append(sale(price * 0.85, f))       # one bargain per band
+        out += [sale(price, f, age=j % 14 + 0.5) for j in range(10)]
+        # one bargain per band
+        out.append(sale(price * 0.85, f, age=i % 14 + 0.5))
     return out
 
 
@@ -343,3 +350,50 @@ def test_and_it_stops_at_the_first_price_that_fills():
     r = evaluate(0.17, sales, [order(30.0, 0.15, 0.17)], (0.15, 0.38), 0, [],
                  Params())
     assert r.bid == pytest.approx(49.0, abs=0.11), r.bid
+
+
+# -- the window the rates divide by ----------------------------------------
+
+def test_sales_older_than_the_window_do_not_count_towards_the_rates():
+    """The dashboard loads ninety days so a thin band still has a median to
+    read, and every rate here divides by `window_days`. Nothing windowed the
+    rows, so a quarter's sales were counted at a fortnight's rate - over six
+    times the real flow at the defaults, and an overstated flow is what
+    decides that a sell queue always clears."""
+    from src.ladder import within
+
+    fresh = [sale(50.0, 0.16, age=a) for a in (0.5, 3.0, 13.0)]
+    stale = [sale(50.0, 0.16, age=a) for a in (20.0, 60.0, 89.0)]
+    assert len(within(fresh + stale, 14.0)) == 3
+
+
+def test_the_ladder_itself_applies_the_window():
+    """Not only the helper: the entry point has to use it, or every caller
+    has to remember to."""
+    recent = spread()
+    old = [dict(s, age_days=80.0) for s in spread()]
+    rungs = {r.top: r for r in ladder(recent + old, [], (0.15, 0.38))}
+    alone = {r.top: r for r in ladder(recent, [], (0.15, 0.38))}
+    for top, rung in alone.items():
+        assert rungs[top].lam == pytest.approx(rung.lam), \
+            f"the stale copies inflated {top}"
+
+
+def test_a_sale_with_no_usable_date_is_dropped_not_counted():
+    """An unknown date cannot be placed inside the window, and counting it
+    towards a rate per day is the one reading that is certainly wrong."""
+    from src.ladder import within
+
+    rows = [sale(50.0, 0.16, age=1.0),
+            {"price": 50.0, "float_value": 0.16, "age_days": None},
+            {"price": 50.0, "float_value": 0.16}]
+    assert len(within(rows, 14.0)) == 1
+
+
+def test_a_window_of_zero_windows_nothing_rather_than_everything():
+    """Dividing by it is already guarded; silently emptying the history on a
+    zero would turn a bad setting into "this item never traded"."""
+    from src.ladder import within
+
+    rows = [sale(50.0, 0.16, age=900.0)]
+    assert len(within(rows, 0.0)) == 1

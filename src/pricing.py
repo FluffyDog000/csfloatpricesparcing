@@ -182,8 +182,10 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
 
     p = params or Params()
     lots, prices, lot_span = _ladder.lots_in_band(depth, hi)
+    # The same windowing `ladder` does for a whole climb. Without it this path
+    # priced a held order off a quarter of history at a fortnight's rate.
     rung = _ladder.evaluate(
-        hi, sales, orders, (lo, hi), lots, prices,
+        hi, _ladder.within(sales, p.window_days), orders, (lo, hi), lots, prices,
         _ladder.Params(fee=p.fee, min_margin=p.min_margin,
                        window_days=p.window_days, min_sample=p.min_sample),
         lot_span=lot_span)

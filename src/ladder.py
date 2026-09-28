@@ -129,6 +129,34 @@ def sale_price(row: dict) -> float | None:
         return None
 
 
+def within(rows: Sequence[dict], window_days: float) -> list[dict]:
+    """Sales young enough to count, by the same window the rates divide by.
+
+    Nothing here read `age_days` at all, while the caller loaded ninety days
+    of history and every rate divided by `window_days`. A fortnight's setting
+    against a quarter's sales overstated both the flow and our own fill rate
+    by the ratio between them - over six times at the defaults - and an
+    overstated flow is what decides that a sell queue always clears.
+
+    A sale whose date would not parse has no age. It is dropped rather than
+    kept: an unknown date cannot be placed inside the window, and counting it
+    towards a rate per day is the one reading that is certainly wrong.
+    """
+    if not window_days or window_days <= 0:
+        return list(rows)
+    out = []
+    for row in rows:
+        age = row.get("age_days")
+        if age is None:
+            continue
+        try:
+            if float(age) <= window_days:
+                out.append(row)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def in_range(rows: Sequence[dict], lo: float, hi: float) -> list[dict]:
     """Sales whose float lands in [lo, hi]. Both ends inclusive: the bounds
     are the order's own, and CSFloat accepts an item sitting exactly on one."""
@@ -298,6 +326,11 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     far more narrowly. The queue drains at the rate of ITS OWN band, and
     measuring that rate over the rung's whole range counted sales that will
     never touch those lots.
+
+    `sales` must already be windowed - `ladder` does it once for the whole
+    climb, and `pricing.evaluate` does it for a single held order. Everything
+    here divides by `window_days`, so a longer history reaching this far would
+    be counted at the wrong rate.
     """
     low = span[0]
     rung = Rung(low=low, top=top, lots=lots)
@@ -475,6 +508,11 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
     if not span:
         return []
     low, high = span
+    # Windowed once, here, rather than in every rate: the caller loads far
+    # more history than the window so a thin band still has a median to read,
+    # and dividing that wider count by the narrower window is what overstated
+    # every flow in the model.
+    sales = within(sales, p.window_days)
 
     out: list[Rung] = []
     claimed: set[int] = set()
