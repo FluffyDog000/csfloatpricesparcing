@@ -584,3 +584,16 @@ def test_the_exit_shows_the_candidate_that_lost_as_well():
     assert "против" in row, "the losing candidate is named beside the winner"
     assert "за блокировку" in row, \
         "and when the queue cannot bind, why - the lock cleared it"
+
+
+def test_a_queue_that_cannot_bind_says_so_in_the_row_not_on_hover():
+    """The case with no second price - the lock emptying the queue - is the
+    one that most needs saying, and it rendered as a blank cell with the
+    explanation hidden in a tooltip. Half of this is read on a phone, where
+    there is no hover at all."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "очередь не ограничивает" in row
+    assert "лоты не собраны" in row, "and an item never swept is its own case"
+    # The second line is unconditional: every branch of exitSecond produces text.
+    assert "other !== null ?" not in row

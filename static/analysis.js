@@ -280,12 +280,22 @@
     // prices exist to answer.
     const exit_from = b.priced_from;
     const other = exit_from === "очередь" ? b.market : (b.queue_price ?? null);
-    const exitWhy = b.queue_price === null || b.queue_price === undefined
-      ? `медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам.`
-        + ` Очередь не ограничивает: за блокировку успевает уйти`
-        + ` ${b.lots_cleared} лот(ов) из ${b.queue}`
-      : `медиана по ${b.sample} сделкам против цены очереди;`
-        + ` за блокировку уходит ${b.lots_cleared} из ${b.queue} лотов`;
+    // Spelled out in the row, not in a tooltip. Half of this is read on a
+    // phone, where there is no hover at all - and the case with nothing to
+    // compare against, the queue emptying during the lock, is exactly the one
+    // that needs saying. It rendered as a blank.
+    const noQueue = b.queue_price === null || b.queue_price === undefined;
+    const exitSecond = noQueue
+      ? (b.queue
+        ? `очередь не ограничивает: ${b.queue} лот(ов), за блокировку `
+          + `уходит ${b.lots_cleared}`
+        : "лоты не собраны — очередь не учтена")
+      : `против ${money(other)} `
+        + (exit_from === "очередь" ? "по истории" : "по очереди")
+        + ` (${b.queue} лот(ов), уходит ${b.lots_cleared})`;
+    const exitWhy = noQueue
+      ? `медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам`
+      : `медиана по ${b.sample} сделкам против цены очереди лотов`;
     tr.innerHTML = `
       <td><b>${band}</b></td>
       <td class="muted">${b.top ? money(b.top) : "никого"}</td>
@@ -294,9 +304,8 @@
       <td>${b.bid && b.ceiling
         ? `${money(room)}<span class="muted"> = ${steps}</span>` : "—"}</td>
       <td>${money(exit_from === "очередь" ? b.queue_price : b.market)}
-        <span class="muted" title="${exitWhy}">${b.priced_from}</span>${
-        other !== null ? `<br><small class="muted">против ${money(other)}
-          ${exit_from === "очередь" ? "по истории" : "по очереди"}</small>` : ""}</td>
+        <span class="muted" title="${exitWhy}">${b.priced_from}</span>
+        <br><small class="muted">${exitSecond}</small></td>
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
