@@ -138,25 +138,25 @@ def _key(row: Any) -> tuple[float, float]:
 def rank(band: Band) -> float:
     """What a band is worth, for choosing between them.
 
-    Margin, discounted for how well the exit price is known. Not an annualised
-    return: that is margin divided by a cycle time built from a measured flow,
-    an assumed sale rate and a trade lock, and dividing a number we trust by
-    one we do not is how a band that fills in two days beat one that pays
-    twice as much. Whether a band fills fast enough at all is what the flow
-    filters are for, and they answer it before anything gets ranked.
+    Fills a day times margin: the return on a dollar of a finite allowance,
+    per day it is tied up. Both halves are needed and neither alone will do.
+    Ranking on margin sent the allowance to bands that pay well and never
+    fill; ranking on flow sent it to the fast ones that pay nothing. Measured
+    on a live item, the two extremes earned within 6% of each other while the
+    middle beat both.
 
-    The discount stays, and it is the whole reason this is not just `margin`.
-    Scoring three hundred items means testing thousands of bands, and the ones
-    that come out on top are disproportionately the ones a small sample
-    flattered. A band whose price is well pinned down keeps most of its
-    number; one resting on eight sales gives most of it back.
+    Per dollar rather than per order, because the allowance is what runs out
+    first: a $500 order earning more in absolute terms than a $48 one still
+    loses, having taken ten times the room to do it.
+
+    Not an annualised return. Turning this into one needs the trade lock and
+    the payout wait, a fortnight that nothing here measures, and dividing a
+    number we trust by one we do not is how a band that fills in two days beat
+    one paying twice as much.
     """
     if band.margin is None:
         return -1.0
-    # The margin moves with the exit price, so the price's relative error
-    # carries straight through to it.
-    error = band.market_error if band.market_error is not None else 1.0
-    return band.margin * max(0.0, 1.0 - RANK_Z * error)
+    return (band.lam or 0.0) * band.margin
 
 
 def select(bands: Sequence[Band], limits: Limits,
@@ -266,7 +266,18 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
                   and (o.get("float_max") if o.get("float_max") is not None else 1.0) > key[0]
                   and o["price"] >= price]
         ahead = sum(int(o.get("qty") or 1) for o in rivals)
-        new_ceiling = band.ceiling if band.ceiling is not None else ceiling
+
+        if band.ceiling is None:
+            # Nothing near this order's top has sold, so there is no honest
+            # price for it. Not knowing what a position is worth is not a
+            # reason to close it; acting on no information is worse than
+            # waiting for some.
+            actions.append(Action(
+                KEEP, item, key[0], key[1], price, ceiling,
+                "нечем оценить: у верха полосы нет продаж — оставляем",
+                order_id=row.get("id"), remote_id=row.get("remote_id")))
+            continue
+        new_ceiling = band.ceiling
 
         if price > new_ceiling + 1e-9:
             actions.append(Action(
@@ -295,11 +306,16 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
 
         top = max(o["price"] for o in rivals)
         answer = next_above(top)
-        if answer > new_ceiling + 1e-9:
+        # Answering is a fresh decision to pay, so it is held to the bid - the
+        # most the margin floor allows - and not to the ceiling, which is only
+        # break-even. Raising toward break-even would quietly spend the whole
+        # allowance the floor exists to keep.
+        limit = band.bid if band.bid is not None else new_ceiling
+        if answer > limit + 1e-9:
             actions.append(Action(
                 CANCEL, item, key[0], key[1], price, new_ceiling,
-                f"перебили до ${top:.2f}, ответ ${answer:.2f} выше потолка "
-                f"${new_ceiling:.2f}", order_id=row.get("id"),
+                f"перебили до ${top:.2f}, ответ ${answer:.2f} выше того, "
+                f"что позволяет маржа (${limit:.2f})", order_id=row.get("id"),
                 remote_id=row.get("remote_id")))
             continue
 

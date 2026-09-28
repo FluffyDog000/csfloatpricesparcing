@@ -84,23 +84,20 @@ def next_above(price: float) -> float:
 
 @dataclass
 class Params:
+    """The three numbers the model reads, and no more.
+
+    Everything else that used to live here - band width, a minimum flow, a
+    fill deadline, an outbid reserve, a sigma multiplier, a borrowing reach -
+    described machinery the ladder does not have. Leaving them on the settings
+    page as knobs that quietly did nothing would be worse than removing them.
+
+    `min_margin` is the one that matters: it is the entire allowance for the
+    exit price being wrong, and it is what decides how many orders there are.
+    """
     fee: float = 0.02              # CSFloat's cut when we sell
-    min_margin: float = 0.03       # below this the trade is not worth doing
-    window_days: float = 28.0      # history used for the rates
-    band_step: float = 0.02        # float width of one order
-    min_lambda: float = 0.10       # fills per day, under which capital idles
-    min_wars: int = 2              # outbids we must be able to answer
-    max_fill_days: float = 21.0
+    min_margin: float = 0.05       # the allowance for a wrong exit price
+    window_days: float = 16.0      # history the medians are read from
     min_sample: int = 8            # sales needed before a median means anything
-    # How far, in float, a band may borrow sales from to price itself when it
-    # has too few of its own. Past this the neighbours are a different item in
-    # all but name. 0 switches the borrowing off.
-    max_reach: float = 0.05
-    # A thin margin is not the same trade as a fat one at the same return: it
-    # is far more exposed to the exit price being wrong. The median of a
-    # band's sales carries its own error, so require the margin to clear that
-    # error by this many multiples before the trade is believed.
-    sigma_k: float = 2.0
 
 
 def _median_error(prices: Sequence[float]) -> float:
@@ -443,169 +440,86 @@ def _exit_price(history: float, depth: Sequence[dict], lo: float, hi: float,
 
 
 def evaluate(lo: float, hi: float, sales: Sequence[dict],
-             orders: Sequence[dict], span: tuple[float, float] | None,
+             orders: Sequence[dict], span: tuple[float, float] | None = None,
              depth: Sequence[dict] = (),
              params: Params | None = None) -> Band:
-    """Score one float range, whoever chose it.
+    """Price one order that already exists, over exactly [lo, hi].
 
-    The grid moves: band edges are cut at the bounds of other people's orders,
-    so a rival appearing or leaving reshapes them. An order we already hold has
-    a fixed range of its own, and it has to be judged on that range rather than
-    looked up in today's grid - a shifted edge would otherwise read as "this
-    band no longer qualifies" and withdraw a perfectly good position.
+    Planning asks "which orders are worth placing"; this asks "what is the one
+    we are holding worth now", which the defence and the holdings report both
+    need. Same model, same numbers - the range is simply given rather than
+    scanned, so a held order whose bounds match no scan step is still priced.
     """
+    from . import ladder as _ladder
+
     p = params or Params()
-    out: list[Band] = []
-    for lo, hi in ((lo, hi),):
-        band = [s["price"] for s in sales
-                if s.get("float_value") is not None and lo <= s["float_value"] < hi]
-        row = Band(float_min=lo, float_max=hi, sample=len(band))
-
-        # One path for both cases. The band's own sales are used when it has
-        # them and the window widens past its edges when it does not, and
-        # either way the price is read off the fitted line at the band's
-        # high-float edge rather than off a median in its middle: an order
-        # filters on a range, and the sellers who take it hand over the worst
-        # lot the filter allows.
-        history, error, reach, used, slope = neighbourhood(
-            sales, lo, hi, p.min_sample)
-        if history is None:
-            row.reason = f"мало данных: {len(band)} продаж, занять не у кого"
-            out.append(row)
-            continue
-        if len(band) >= p.min_sample:
-            source = "история"
-        else:
-            row.borrowed = used
-            row.reach = reach
-            if p.max_reach and reach > p.max_reach:
-                row.reason = (f"мало данных: {len(band)} продаж, ближайшие "
-                              f"{used} — за {reach:.3f} по float")
-                out.append(row)
-                continue
-            source = "соседи"
-
-        market, source = _exit_price(history, depth, lo, hi, source,
-                                     at=hi, slope=slope)
-        net = market * (1.0 - p.fee)
-        step = increment(market)
-        ceiling = snap_down(net / (1.0 + p.min_margin))
-        rivals = _competing(orders, lo, hi, span)
-        top = max((o["price"] for o in rivals), default=0.0)
-        flow = band_flow(sales, lo, hi, p.window_days, reach, slope, at=hi)
-        if top:
-            entry = next_above(top)
-        else:
-            # Nobody is bidding here, so nothing forces a floor: any price
-            # leads a band of one. The scan starts at the cheapest price that
-            # could catch anything - below the cheapest sale there is no flow
-            # to be had, and above it every price is worth considering. It
-            # used to start at a flat 85% of market, a number from nowhere
-            # that simply forbade the cheaper half of an uncontested band.
-            entry = (snap_down(min(flow.prices)) if flow.prices
-                     else snap_down(market * 0.85))
-
-        row.market, row.priced_from, row.step = market, source, step
-        row.market_error = error
-        row.top, row.entry, row.ceiling = top, entry, ceiling
-
-        if entry > ceiling:
-            row.reason = (f"вход ${entry:.2f} выше потолка ${ceiling:.2f}"
-                          " — кто-то ценит полосу выше нас")
-            out.append(row)
-            continue
-
-        lam_sell = flow.rate
-        row.flow_sample = flow.observed
-        found: list[Band] = []
-        thin = False
-        blocked = "нет цены с потоком и запасом"
-        bid = entry
-        steps = 0
-        while bid <= ceiling + 1e-9 and steps < MAX_SCAN_STEPS:
-            steps += 1
-            lam = flow.at(bid)
-            wars = int(round((ceiling - bid) / step))
-            queue = sum(int(o.get("qty") or 1) for o in rivals
-                        if o["price"] >= bid)
-            # What a fill would cost, which is the listing's price and not
-            # ours. The bid is the most we would pay; the ceiling already
-            # guarantees that even that much leaves the margin we demand, so
-            # the worst case is covered and this is the ordinary one.
-            paid = flow.paid(bid)
-            if paid is None or paid <= 0:
-                bid = round(bid + step, 2)
-                continue
-            margin = (net - paid) / paid
-            worst = (net - bid) / bid
-            t_buy = (1 + queue) / lam if lam > 0 else None
-            if (lam >= p.min_lambda and wars >= p.min_wars and margin > 0
-                    and t_buy is not None and t_buy <= p.max_fill_days
-                    and lam_sell > 0
-                    and margin >= p.sigma_k * error):
-                t_sell = 1.0 / lam_sell
-                found.append(Band(
-                    float_min=lo, float_max=hi, sample=len(band),
-                    market=market, market_error=error,
-                    priced_from=source, top=top, entry=entry,
-                    ceiling=ceiling, bid=bid, step=step, margin=margin,
-                    paid=paid, margin_worst=worst,
-                    wars=wars, lam=lam, queue=queue, t_buy=t_buy,
-                    t_sell=t_sell, take=True))
-            elif (lam >= p.min_lambda and wars >= p.min_wars
-                  and 0 < margin < p.sigma_k * error):
-                # Everything else about this price is fine; only the margin is
-                # inside the error bar on what the lot resells for.
-                thin = True
-            bid = round(bid + step, 2)
-
-        # Measured whether or not the entry passes the filters: when it does
-        # not, why it does not is the answer to "why are we bidding over the
-        # book", and that is the question the number gets asked.
-        entry_lam = flow.at(entry)
-        entry_queue = sum(int(o.get("qty") or 1) for o in rivals
-                          if o["price"] >= entry)
-        entry_t_buy = (1 + entry_queue) / entry_lam if entry_lam > 0 else None
-        if found:
-            # The cheapest price that passes. Margin falls as the bid rises,
-            # so the cheapest qualifying price is also the fattest margin, and
-            # the two rules are one rule.
-            #
-            # What decides how high we have to go is the flow the filters
-            # insist on - min_lambda and max_fill_days - not an appetite for
-            # turnover. Those are the speed controls now; this only refuses to
-            # pay more than they require.
-            best = min(found, key=lambda b: b.bid)
-            best.entry_lam = entry_lam
-            best.entry_t_buy = entry_t_buy
-            out.append(best)
-        else:
-            if thin:
-                blocked = (f"маржа не перекрывает погрешность цены "
-                           f"(±{error * 100:.1f}% на {len(band)} продажах)")
-            row.reason = blocked
-            row.entry_lam = entry_lam
-            row.entry_t_buy = entry_t_buy
-            out.append(row)
-
-    return out[0]
+    lots, prices, lot_span = _ladder.lots_in_band(depth, hi)
+    rung = _ladder.evaluate(
+        hi, sales, orders, (lo, hi), lots, prices,
+        _ladder.Params(fee=p.fee, min_margin=p.min_margin,
+                       window_days=p.window_days, min_sample=p.min_sample),
+        lot_span=lot_span)
+    return _as_band(rung)
 
 
 def plan(sales: Sequence[dict], orders: Sequence[dict],
          span: tuple[float, float] | None,
          depth: Sequence[dict] = (),
          params: Params | None = None) -> list[Band]:
-    """Score every float band of an item, taken or not.
+    """Score every candidate order for an item, taken or not.
 
-    Rejected bands are returned with their reason: "why not this one" is the
-    question the numbers are read for, and dropping them silently makes an
-    over-bid band indistinguishable from one nobody has looked at.
+    The scoring lives in `ladder`, which prices nested orders running from the
+    wear minimum to their own top. This keeps the Band shape the executor and
+    the dashboard already read, so the change of model does not ripple through
+    them; the fields the old disjoint-band model needed and the new one does
+    not are left at their defaults rather than filled with invented numbers.
+
+    Rejected rungs are returned with their reason: "why not this one" is the
+    question the table is read for, and dropping them silently makes an
+    over-bid top indistinguishable from one nobody has looked at.
     """
+    from . import ladder as _ladder
+
     p = params or Params()
     if not span:
         return []
-    out = [evaluate(lo, hi, sales, orders, span, depth, p)
-           for lo, hi in _bands(span, p.band_step, orders)]
-    # Best margin first, the same order the portfolio is chosen in.
-    out.sort(key=lambda r: (not r.take, -(r.margin or 0), r.float_min))
-    return out
+    rungs = _ladder.ladder(
+        sales, orders, span, depth,
+        _ladder.Params(fee=p.fee, min_margin=p.min_margin,
+                       window_days=p.window_days, min_sample=p.min_sample))
+    return [_as_band(r) for r in rungs]
+
+
+def _as_band(rung) -> Band:
+    """One rung, in the shape the rest of the bot already speaks.
+
+    Two limits, not one, because placing and holding are different decisions.
+    The bid is the most we will PAY: the highest price still clearing the
+    margin floor, which is the risk we chose. The ceiling is the most we will
+    HOLD: break-even, where the trade stops making money at all.
+
+    Setting the ceiling to the bid instead churned the book. An order placed
+    at the floor yesterday fell outside it the moment the median moved a cent,
+    and the defence cancelled a position that was still perfectly profitable.
+    Placing with a cushion and bailing only once the cushion is gone is the
+    hysteresis that stops that.
+    """
+    return Band(
+        float_min=rung.low,
+        float_max=rung.top,
+        sample=rung.sample,
+        market=rung.market,
+        priced_from=rung.priced_from or "история",
+        top=rung.rival,
+        ceiling=rung.exit_net,
+        bid=rung.bid,
+        step=increment(rung.bid) if rung.bid else 0.0,
+        margin=rung.margin,
+        paid=rung.bid,
+        margin_worst=rung.margin,
+        lam=rung.lam,
+        queue=rung.lots,
+        flow_sample=rung.sample,
+        take=rung.take,
+        reason=rung.reason,
+    )

@@ -6,9 +6,10 @@ stops agreeing with them it has lost the argument, not the argument the code.
 """
 import pytest
 
-from src.ladder import (LOCK_DAYS, Params, evaluate, fills_at, in_range,
-                        ladder, median, price_step, queue_price, rival_bid,
-                        sale_rate, snap_down, top_rival)
+from src.ladder import (LOCK_DAYS, Params, Rung, evaluate, fills_at,
+                        in_range, ladder, median, price_step,
+                        queue_price, rival_bid, sale_rate, snap_down,
+                        top_rival)
 
 
 def sale(price, f):
@@ -253,3 +254,50 @@ def test_the_lock_is_a_fact_not_a_setting():
 
 def test_no_span_means_no_rungs():
     assert ladder(spread(), [], None) == []
+
+
+# -- principles carried over from the model this replaced ------------------
+
+def test_a_rung_is_priced_at_the_lot_it_will_actually_be_handed():
+    """A seller keeps the good float and hands over the bad one, so the price
+    comes from the sales at the top, not from the whole range."""
+    sales = [sale(80.0, 0.155) for _ in range(20)]     # pristine, never ours
+    sales += [sale(50.0, 0.168) for _ in range(20)]    # what we will get
+    r = evaluate(0.17, sales, [], (0.15, 0.38), lots=0, ask_prices=[],
+                 params=Params())
+    assert r.market == pytest.approx(50.0), "the top prices it, not the range"
+
+
+def test_a_wider_rung_is_priced_lower_than_a_tighter_one_inside_it():
+    """The whole reason the ladder differs by its top: reaching further up the
+    wear range means accepting a worse lot, and that is worth less."""
+    sales = []
+    for i in range(6):
+        f = round(0.16 + i * 0.01, 4)
+        sales += [sale(55.0 - i * 3, f) for _ in range(12)]
+    p = Params()
+    tight = evaluate(0.17, sales, [], (0.15, 0.38), 0, [], p)
+    wide = evaluate(0.21, sales, [], (0.15, 0.38), 0, [], p)
+    assert wide.market < tight.market
+    assert wide.bid < tight.bid
+
+
+def test_a_rival_bidding_above_what_the_rung_resells_for_takes_it_all():
+    """Outbidding is pointless above the exit: there is no price at which the
+    trade still pays, so the flow belongs to whoever is overpaying."""
+    p = Params()
+    book = [order(80.0, 0.15, 0.17)]
+    r = evaluate(0.17, item(), book, (0.15, 0.38), 0, [], p)
+    assert not r.take
+    assert r.bid < r.rival
+
+
+def test_nothing_in_the_scoring_reads_an_annualised_return():
+    """Turning a margin into a rate needs the trade lock and the payout wait,
+    a fortnight nothing here measures. The rank is per day of holding, and
+    that is a ranking number, not a yield."""
+    from dataclasses import fields
+
+    names = {f.name for f in fields(Rung)} | {f.name for f in fields(Params)}
+    for banned in ("monthly", "annual", "apr", "yield", "cycle"):
+        assert not any(banned in n for n in names), banned

@@ -814,13 +814,7 @@
     $("p-fee").value = (p.fee * 100).toFixed(1);
     $("p-margin").value = (p.min_margin * 100).toFixed(1);
     $("p-window").value = p.window_days;
-    $("p-step").value = p.band_step;
-    $("p-lambda").value = p.min_lambda;
-    $("p-wars").value = p.min_wars;
-    $("p-fill").value = p.max_fill_days;
     $("p-sample").value = p.min_sample;
-    $("p-reach").value = p.max_reach;
-    $("p-sigma").value = p.sigma_k;
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -1032,15 +1026,9 @@
     $("p-save").onclick = () => action("Сохраняю пороги", async () => {
       const r = await postJSON("/api/analysis/params", {
         an_fee: (parseFloat($("p-fee").value) / 100) || 0.02,
-        an_min_margin: (parseFloat($("p-margin").value) / 100) || 0.03,
+        an_min_margin: (parseFloat($("p-margin").value) / 100) || 0.05,
         an_window: $("p-window").value,
-        an_step: $("p-step").value,
-        an_min_lambda: $("p-lambda").value,
-        an_min_wars: $("p-wars").value,
-        an_max_fill: $("p-fill").value,
         an_min_sample: $("p-sample").value,
-        an_reach: $("p-reach").value,
-      an_sigma_k: $("p-sigma").value,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,
       an_max_orders: $("l-max").value,

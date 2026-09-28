@@ -57,13 +57,14 @@ def test_being_outbid_is_not_by_itself_a_reason_to_answer():
     assert patient[0].kind == KEEP
     assert "очередь разойдётся" in patient[0].reason
 
-    # The same outbid on a band that trades once a month is a real delay.
+    # The same outbid on a band that trades once a month is a real delay, and
+    # there is no answering it: the bid is already the most the margin floor
+    # allows, so the position is released and its allowance goes elsewhere.
     slow = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=0.03)],
                      [row(0.15, 0.17, 100.0, 110.0)], book,
                      Limits(patience_minutes=20160.0))
-    assert slow[0].kind == RAISE
-    assert slow[0].price == 102.0, "one tier step over the rival"
-    assert slow[0].was == 100.0
+    assert slow[0].kind == CANCEL
+    assert "позволяет маржа" in slow[0].reason
 
 
 def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
@@ -74,7 +75,7 @@ def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
                      [row(0.15, 0.17, 100.0, 110.0)], book,
                      Limits(patience_minutes=1440.0))
     assert acts[0].kind == CANCEL
-    assert "выше потолка" in acts[0].reason
+    assert "позволяет маржа" in acts[0].reason
 
 
 def test_an_order_whose_ceiling_has_fallen_under_it_is_pulled():
@@ -131,9 +132,14 @@ def test_patience_is_counted_in_minutes():
     waiting = reconcile("x", [band], held, book, Limits(patience_minutes=60))
     assert waiting[0].kind == KEEP and "мин" in waiting[0].reason
 
-    answering = reconcile("x", [band], held, book, Limits(patience_minutes=10))
-    assert answering[0].kind == RAISE
-    assert answering[0].price > 10.5, "a raise has to clear the rival"
+    # Shrink the patience below that wait and the defence stops waiting. It
+    # releases rather than answers: the bid is already the most the margin
+    # floor allows, so there is no price left to answer with. What this test
+    # pins is the threshold being read in minutes at all - a day-scale one
+    # answered "wait" to both of these.
+    acting = reconcile("x", [band], held, book, Limits(patience_minutes=10))
+    assert acting[0].kind != KEEP
+    assert acting[0].kind == CANCEL
 
 
 def test_a_wait_is_reported_in_the_unit_a_person_would_say_it_in():
@@ -176,10 +182,10 @@ def test_selection_spends_the_allowed_budget_not_the_asked_one():
     assert len(got) == 3
 
 
-def _cand(item, lo, bid, margin, error=0.0):
+def _cand(item, lo, bid, margin, lam=1.0):
     return (item, Band(float_min=lo, float_max=lo + 0.02, bid=bid,
                        ceiling=bid * 1.2, step=0.10, margin=margin,
-                       market_error=error, take=True))
+                       lam=lam, take=True))
 
 
 def test_the_budget_goes_to_the_best_bands_not_the_first_item_listed():
@@ -237,29 +243,27 @@ def test_a_band_that_stopped_qualifying_is_not_kept_just_because_it_is_held():
     assert got == {}, "seeding the held is not a reason to hold a bad band"
 
 
-def test_ranking_discounts_a_margin_resting_on_a_shaky_price():
-    """Testing thousands of bands means the top of the list is selected for
-    luck as much as for margin."""
-    from src.executor import rank, select_portfolio
-
-    solid = _cand("solid", 0.10, 100.0, 0.20, error=0.02)
-    shaky = _cand("shaky", 0.10, 100.0, 0.30, error=0.50)
-    assert rank(solid[1]) > rank(shaky[1]), \
-        "30% give or take half of it is worth less than a measured 20%"
-
-    got = select_portfolio([shaky, solid],
-                           Limits(total_capital=100.0, max_orders=1,
-                                  max_orders_per_item=1))
-    assert list(got) == ["solid"]
 
 
-def test_bands_are_ranked_by_margin_discounted_for_doubt():
-    """No rate to rank by any more: a rate needs a cycle, and a cycle needs
-    the trade lock and the payout wait - a fortnight nothing here measures."""
+def test_ranking_needs_both_halves_not_either_alone():
+    """Margin alone sent the allowance to bands that pay well and never fill;
+    flow alone sent it to fast ones paying nothing. On a live item the two
+    extremes earned within 6% of each other and the middle beat both."""
     from src.executor import rank
 
-    fat = Band(float_min=0.1, float_max=0.12, bid=100.0, take=True,
-               margin=0.20, market_error=0.0)
-    thin = Band(float_min=0.2, float_max=0.22, bid=100.0, take=True,
-                margin=0.05, market_error=0.0)
-    assert rank(fat) > rank(thin)
+    fat_and_still = Band(float_min=0.15, float_max=0.17, bid=100.0,
+                         margin=0.12, lam=0.02, take=True)
+    thin_and_quick = Band(float_min=0.15, float_max=0.17, bid=100.0,
+                          margin=0.015, lam=0.40, take=True)
+    middle = Band(float_min=0.15, float_max=0.17, bid=100.0,
+                  margin=0.051, lam=0.125, take=True)
+    assert rank(middle) > rank(fat_and_still)
+    assert rank(middle) > rank(thin_and_quick)
+
+
+def test_a_band_with_no_measured_flow_ranks_at_nothing():
+    """An order nobody sells into is dead capital, whatever its margin."""
+    from src.executor import rank
+
+    assert rank(Band(float_min=0.15, float_max=0.17, bid=100.0,
+                     margin=0.5, lam=0.0, take=True)) == 0.0

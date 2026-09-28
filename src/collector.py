@@ -878,10 +878,13 @@ class Collector:
             span = wear_range(name)
             wanted = []
             for row in rows:
-                scored = evaluate(float(row["float_min"]), float(row["float_max"]),
-                                  sales, book, span, depth, params)
-                if scored.take:
-                    wanted.append(scored)
+                # Passed on whether or not it would be placed anew. "Not worth
+                # opening today" and "worth closing" are different questions,
+                # and dropping the unscored ones here made the defence read a
+                # missing band as a dead one and withdraw a sound position.
+                wanted.append(evaluate(
+                    float(row["float_min"]), float(row["float_max"]),
+                    sales, book, span, depth, params))
 
             actions = [a for a in reconcile(name, wanted, rows, book, limits)
                        if a.kind in (RAISE, CANCEL)]

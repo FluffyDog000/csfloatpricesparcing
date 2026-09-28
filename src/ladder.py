@@ -330,6 +330,40 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     return rung
 
 
+def lots_in_band(depth: Sequence[dict], top: float):
+    """The listings we would queue behind: the band our top lands IN.
+
+    Bands touch at their edges, and the 0.01 scan puts a top on one often, so
+    two can match. The containing band is the lower of them - our item sits at
+    its top, not at the bottom of the next. Taking the higher band priced a
+    rung off lots it would never compete with and cost it three dollars of
+    exit on a live item.
+
+    Returns (count, prices, span). `prices` falls back to the cheapest ask
+    alone, which is all that is stored today.
+    """
+    bands: list[tuple[float, float, tuple[int, list[float]]]] = []
+    for row in depth:
+        try:
+            band_lo = float(row["float_min"])
+            band_hi = float(row["float_max"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        count = int(row.get("listings") or 0)
+        prices = [float(x) for x in (row.get("ask_prices") or [])]
+        if not prices and row.get("cheapest") is not None:
+            prices = [float(row["cheapest"])]
+        bands.append((band_lo, band_hi, (count, prices)))
+    bands.sort()
+    for band_lo, band_hi, value in bands:
+        if band_lo < top <= band_hi:
+            return value + ((band_lo, band_hi),)
+    for band_lo, band_hi, value in bands:          # top on the very first edge
+        if band_lo <= top <= band_hi:
+            return value + ((band_lo, band_hi),)
+    return (0, [], None)
+
+
 def ladder(sales: Sequence[dict], orders: Sequence[dict],
            span: tuple[float, float] | None,
            depth: Sequence[dict] = (),
@@ -351,42 +385,11 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
         return []
     low, high = span
 
-    bands: list[tuple[float, float, tuple[int, list[float]]]] = []
-    for row in depth:
-        try:
-            band_lo = float(row["float_min"])
-            band_hi = float(row["float_max"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        count = int(row.get("listings") or 0)
-        prices = [float(x) for x in (row.get("ask_prices") or [])]
-        if not prices and row.get("cheapest") is not None:
-            prices = [float(row["cheapest"])]
-        bands.append((band_lo, band_hi, (count, prices)))
-    bands.sort()
-
-    def lots_for(top: float):
-        """Listings we would queue behind, which is the band our top lands IN.
-
-        Bands touch at their edges, so a top sitting exactly on one - and the
-        grid puts it there often - matches two. The one that contains the
-        float is the lower: our item is at the top of it, not the bottom of
-        the next. Taking the higher band priced a rung off lots it would never
-        compete with, and cost it three dollars of exit.
-        """
-        for band_lo, band_hi, value in bands:
-            if band_lo < top <= band_hi:
-                return value + ((band_lo, band_hi),)
-        for band_lo, band_hi, value in bands:      # top on the very first edge
-            if band_lo <= top <= band_hi:
-                return value + ((band_lo, band_hi),)
-        return (0, [], None)
-
     out: list[Rung] = []
     claimed: set[int] = set()
     top = round(low + p.top_step, 4)
     while top <= high + 1e-9:
-        lots, prices, lot_span = lots_for(top)
+        lots, prices, lot_span = lots_in_band(depth, top)
         rung = evaluate(top, sales, orders, (low, high), lots, prices, p,
                         lot_span=lot_span)
         if rung.take:

@@ -17,21 +17,18 @@ from .executor import Limits
 from .pricing import Params
 from .screen import Screen
 
+# Three settings, because the model reads three numbers. The band width, the
+# minimum flow, the fill deadline, the outbid reserve, the sigma multiplier and
+# the borrowing reach all described machinery that no longer exists; their
+# stored values are simply ignored rather than silently steering nothing.
 PARAM_BOUNDS = {
     "fee": (0.0, 0.20), "min_margin": (0.0, 1.0),
-    "window_days": (1.0, 365.0), "band_step": (0.005, 0.23),
-    "min_lambda": (0.0, 10.0), "min_wars": (0, 100),
-    "max_fill_days": (1.0, 365.0), "min_sample": (1, 1000),
-    "sigma_k": (0.0, 5.0),
-    "max_reach": (0.0, 0.5),
+    "window_days": (1.0, 365.0), "min_sample": (1, 1000),
 }
 PARAM_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
-    ("an_window", "window_days", float), ("an_step", "band_step", float),
-    ("an_min_lambda", "min_lambda", float), ("an_min_wars", "min_wars", int),
-    ("an_max_fill", "max_fill_days", float), ("an_min_sample", "min_sample", int),
-    ("an_sigma_k", "sigma_k", float),
-    ("an_reach", "max_reach", float),
+    ("an_window", "window_days", float),
+    ("an_min_sample", "min_sample", int),
 )
 
 LIMIT_BOUNDS = {

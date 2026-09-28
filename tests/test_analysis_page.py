@@ -80,12 +80,17 @@ def test_a_band_report_names_the_bid_and_the_reasons():
     rows = []
     # The low band trades either side of the book, so a bid above the top of
     # it reaches real sellers; the high band is bid past what it resells for.
+    # Floats sit inside the hundredth each order stops at, not on its edge: a
+    # sale sitting exactly on 0.16 belongs to the order that stops there, and
+    # that order claims it before the wider one is even asked.
     for i in range(12):
         for price in (170.0 + i * 2, 215.0 + i * 2):
             rows.append((f"lo{i}-{price}", item_id, name, int(price * 100), price,
-                         0.16, (now - dt.timedelta(days=i % 21)).isoformat()))
+                         0.165 + (i % 5) * 0.001,
+                         (now - dt.timedelta(days=i % 21)).isoformat()))
     for i in range(24):
-        rows.append((f"hi{i}", item_id, name, 10000, 100.0 + (i % 6), 0.36,
+        rows.append((f"hi{i}", item_id, name, 10000, 100.0 + (i % 6),
+                     0.355 + (i % 5) * 0.001,
                      (now - dt.timedelta(days=i % 21)).isoformat()))
     db.conn.executemany(
         "INSERT INTO sales (sale_id,item_id,market_hash_name,price_cents,price,"
@@ -101,19 +106,22 @@ def test_a_band_report_names_the_bid_and_the_reasons():
 
     c.post("/api/analysis/items", json={"market_hash_name": name})
     it = c.get("/api/analysis").get_json()["items"][0]
-    bands = {round(b["float_min"], 2): b for b in it["bands"]}
+    # Every order runs from the wear minimum and is named by where it stops,
+    # so the top is what tells them apart.
+    rungs = {round(b["float_max"], 2): b for b in it["bands"]}
+    assert all(b["float_min"] == 0.15 for b in it["bands"])
 
-    low = bands[0.15]
+    low = rungs[0.17]
     assert low["take"] and low["bid"] > low["top"], "we have to be first to fill"
-    assert low["bid"] <= low["ceiling"] and low["wars"] >= 2
+    assert low["bid"] <= low["ceiling"], "the ceiling is break-even, above the bid"
     assert it["capital"] >= low["bid"]
 
-    high = bands[0.35]
+    high = rungs[0.36]
     assert not high["take"], "bid at $150 against a $100 market is a loss"
-    assert "выше потолка" in high["reason"]
+    assert high["reason"], "and it says why"
 
-    # Every band comes back, so "why not this one" is answerable from the page.
-    assert len(it["bands"]) == 12
+    # Every rung comes back, so "why not this one" is answerable from the page.
+    assert len(it["bands"]) == 23, "0.16 through 0.38 at a hundredth a step"
 
 
 def test_thresholds_round_trip_and_change_the_verdict():
@@ -141,36 +149,36 @@ def test_the_page_loads_the_shared_helpers_it_calls():
 
 
 def test_a_threshold_out_of_range_is_pulled_back_and_reported():
-    """A band step of 0.5 spans a whole wear and a flow of 3/day passes
-    nothing; either returns an empty report that reads as "no opportunities"
-    rather than "your threshold did that"."""
+    """A history window of three years is not a window; silently honouring it
+    returns a report that reads as "no opportunities" rather than "your
+    threshold did that"."""
     name = "★ Specialist Gloves | Big Swell (Field-Tested)"
     c = _app([name])
     r = c.post("/api/analysis/params",
-               json={"an_step": "0.5", "an_min_lambda": "3"}).get_json()
+               json={"an_window": "999", "an_min_margin": "0.2"}).get_json()
 
-    assert r["params"]["band_step"] == 0.23, "clamped to the widest wear"
-    assert r["params"]["min_lambda"] == 3.0, "3/day is steep but not absurd"
-    assert any("an_step" in m for m in r["rejected"]), "and the page is told"
+    assert r["params"]["window_days"] == 365.0, "clamped to a year"
+    assert r["params"]["min_margin"] == 0.2, "20% is steep but not absurd"
+    assert any("an_window" in m for m in r["rejected"]), "and the page is told"
 
 
 def test_a_threshold_that_is_not_a_number_is_refused_not_stored():
-    """"0.15-038" typed into the band-step box: it reads like a float range,
-    which is exactly how the label was misread."""
+    """"0.15-038" typed into a numeric box: it reads like a float range, which
+    is exactly how one of these labels was once misread."""
     name = "★ Specialist Gloves | Big Swell (Field-Tested)"
     c = _app([name])
-    before = c.get("/api/analysis").get_json()["params"]["band_step"]
-    r = c.post("/api/analysis/params", json={"an_step": "0.15-038"}).get_json()
+    before = c.get("/api/analysis").get_json()["params"]["window_days"]
+    r = c.post("/api/analysis/params", json={"an_window": "0.15-038"}).get_json()
 
-    assert r["params"]["band_step"] == before, "the old value survives"
+    assert r["params"]["window_days"] == before, "the old value survives"
     assert any("не число" in m for m in r["rejected"])
 
 
 def test_a_comma_decimal_is_accepted():
     name = "★ Specialist Gloves | Big Swell (Field-Tested)"
     c = _app([name])
-    r = c.post("/api/analysis/params", json={"an_step": "0,03"}).get_json()
-    assert r["params"]["band_step"] == 0.03
+    r = c.post("/api/analysis/params", json={"an_min_margin": "0,07"}).get_json()
+    assert r["params"]["min_margin"] == 0.07
 
 
 def test_every_button_reports_what_it_is_doing():
@@ -248,36 +256,6 @@ def test_the_page_can_tell_that_its_own_script_is_stale():
     js = pathlib.Path("static/analysis.js").read_text()
     assert "window.ANALYSIS_BUILD = BUILD" in js, \
         "the script announces its build before doing any work"
-
-
-def test_the_table_shows_what_the_cheapest_leading_price_would_have_given():
-    """Only the chosen bid was shown, so a price well over the book looked
-    arbitrary and could not be checked. Both numbers belong side by side,
-    with what the cheap one would have earned."""
-    import pathlib
-
-    js = pathlib.Path("static/analysis.js").read_text()
-    assert "минимум" in js, "the cheapest leading price is a column"
-    assert "entry_t_buy" in js and "entry_lam" in js, \
-        "and what it would have caught is shown beside it"
-
-    from src.pricing import Params, plan
-    rows = [{"price": p, "float_value": 0.28, "age_days": a} for p, a in
-            [(117.0, 3.0), (118.0, 9.0), (119.0, 15.0)]]
-    rows += [{"price": p, "float_value": 0.28, "age_days": float(i % 27)}
-             for i, p in enumerate([121.0, 122.0] * 3)]
-    rows += [{"price": 135.0, "float_value": 0.28, "age_days": float(i % 27)}
-             for i in range(14)]
-    orders = [{"price": 116.0, "qty": 1, "float_min": 0.27, "float_max": 0.29}]
-    band = plan(rows, orders, (0.27, 0.29), params=Params(min_sample=5))[0]
-
-    # The entry is measured even though it fails the filters - why it fails is
-    # the answer to "why are we bidding over the book".
-    assert band.entry_lam is not None and band.entry_lam < Params().min_lambda
-    # The gap is narrower than it was: the scan no longer pays for turnover,
-    # so the bid it chooses is itself the cheapest that clears the filters.
-    assert band.entry_t_buy > band.t_buy * 2, "leading cheap means waiting"
-    assert band.entry_lam < band.lam, "and catching fewer sales"
 
 
 def _stocked(name="★ Specialist Gloves | Big Swell (Field-Tested)"):

@@ -36,13 +36,18 @@ def _stock(db, name="★ Gloves | Fade (Field-Tested)", rival=None):
 
     item_id = db.add_item(name)
     now = dt.datetime.now(dt.timezone.utc)
+    # Floats sit in the last 0.01 before the orders' top: an order is priced
+    # from the lots it will actually be handed, which are the ones at its
+    # upper edge, so sales parked in the middle price nothing.
     rows = []
     for i in range(12):
         price = 150.0 + (i % 3)
-        rows.append((f"c{i}", item_id, name, int(price * 100), price, 0.36,
+        rows.append((f"c{i}", item_id, name, int(price * 100), price,
+                     0.371 + (i % 5) * 0.001,
                      (now - dt.timedelta(days=i % 20)).isoformat()))
     for i in range(30):
-        rows.append((f"m{i}", item_id, name, 20000, 200.0, 0.36,
+        rows.append((f"m{i}", item_id, name, 20000, 200.0,
+                     0.371 + (i % 7) * 0.001,
                      (now - dt.timedelta(days=i % 20)).isoformat()))
     db.conn.executemany(
         "INSERT INTO sales (sale_id,item_id,market_hash_name,price_cents,price,"
