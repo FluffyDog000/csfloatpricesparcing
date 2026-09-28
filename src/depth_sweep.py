@@ -77,6 +77,33 @@ def pick(db, names: Iterable[str], force: bool = False) -> tuple[list[tuple[str,
     return wanted, skipped
 
 
+def quota(collector) -> str:
+    """What CSFloat last said about the budget, in one line.
+
+    Without it a refusal is indistinguishable from a bug: the same message
+    twice tells you nothing about whether waiting longer would have helped, or
+    whether something else on this address is spending the quota faster than
+    the sweep can use it.
+    """
+    client = getattr(collector, "client", None)
+    state = getattr(client, "rate_state", None) or {}
+    if not state:
+        return ""
+    left, limit = state.get("remaining"), state.get("limit")
+    said = []
+    if left is not None:
+        said.append(f"осталось {left}" + (f" из {limit}" if limit else ""))
+    reset = getattr(client, "reset_in", None)
+    if callable(reset):
+        try:
+            seconds = float(reset())
+        except Exception:  # noqa: BLE001
+            seconds = 0.0
+        if seconds > 0:
+            said.append(f"сброс через {seconds / 60:.1f} мин")
+    return ", ".join(said)
+
+
 def cooldown(collector) -> float:
     """How long the client says to wait, from whichever clock knows.
 
@@ -146,15 +173,19 @@ def sweep(collector, targets: Sequence[tuple[str, int]],
         pause = cooldown(collector)
         left = patience - out["waited"]
         if pause > left:
+            said = quota(collector)
             out["stopped"] = (
                 f"CSFloat отказал на '{name}' — ждать ещё "
-                f"{pause / 60:.0f} мин, это больше отпущенного. Остальные "
-                "предметы не тронуты, запусти ещё раз позже")
+                f"{pause / 60:.0f} мин, это больше отпущенного"
+                + (f" (квота: {said})" if said else "")
+                + ". Остальные предметы не тронуты, запусти ещё раз позже")
             break
         out["waited"] += pause
         if report:
+            said = quota(collector)
             report(name, {"bands": 0, "waiting": pause,
-                          "error": f"жду {pause / 60:.1f} мин до снятия лимита"})
+                          "error": f"жду {pause / 60:.1f} мин до снятия лимита"
+                                   + (f" (квота: {said})" if said else "")})
         sleep(pause)
         # Resume where it stopped: the bands below are stored, and reading
         # them again buys nothing but the next refusal.

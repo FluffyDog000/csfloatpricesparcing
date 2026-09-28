@@ -327,3 +327,59 @@ def test_a_client_that_cannot_say_still_yields_a_sane_wait():
     AttributeError."""
     from src.depth_sweep import cooldown
     assert cooldown(object()) == 5.0
+
+
+# -- saying why ------------------------------------------------------------
+
+def test_the_wait_reports_what_csfloat_said_about_the_budget():
+    """Two identical refusals tell you nothing about whether waiting longer
+    would help, or whether something else on this address is spending it."""
+    from src.depth_sweep import quota
+
+    col = FakeCollector({})
+    col.client.rate_state = {"remaining": 0, "limit": 100, "reset": 300}
+    col.client.reset_in = lambda: 300.0
+    said = quota(col)
+    assert "осталось 0 из 100" in said and "сброс через 5.0 мин" in said
+
+
+def test_a_client_with_no_quota_headers_says_nothing_rather_than_zero():
+    """Printing 'осталось 0' when nothing was reported would read as an
+    exhausted budget."""
+    from src.depth_sweep import quota
+
+    col = FakeCollector({})
+    assert quota(col) == ""
+    assert quota(object()) == ""
+
+
+def test_the_pause_is_never_shorter_than_the_reset_csfloat_names():
+    """Waiting a minute against a quota that refills in ten spends the other
+    nine collecting refusals - which is what gave up on a live run."""
+    import logging
+
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.rate_state = {"remaining": 0, "limit": 100, "reset": 600,
+                         "seen_at": __import__("time").time()}
+    assert client._enter_cooldown() >= 595.0, "the header outranks the guess"
+
+
+def test_an_epoch_reset_is_not_read_as_a_duration():
+    """The header is an epoch second on some routes and a count of seconds on
+    others; reading 1790000000 as a wait would park the route for 56 years."""
+    import logging
+    import time as _t
+
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.rate_state = {"reset": _t.time() + 120, "seen_at": _t.time()}
+    assert 115 < client.reset_in() < 125

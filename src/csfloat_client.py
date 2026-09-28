@@ -226,8 +226,38 @@ class CSFloatClient:
         time.sleep(backoff)
         return None
 
+    def reset_in(self) -> float:
+        """Seconds until the quota refills, by CSFloat's own header.
+
+        `x-ratelimit-reset` comes as an epoch second on some routes and as a
+        count of seconds on others, so it is read as whichever it can only be:
+        a value past the epoch threshold is a moment in time, anything smaller
+        is a duration. Stale by however long ago the header was seen, which is
+        subtracted rather than ignored.
+        """
+        state = self.rate_state or {}
+        reset = state.get("reset")
+        if reset is None:
+            return 0.0
+        try:
+            reset = float(reset)
+        except (TypeError, ValueError):
+            return 0.0
+        now = time.time()
+        if reset > 1_000_000_000:          # an epoch second, not a duration
+            return max(0.0, reset - now)
+        seen = float(state.get("seen_at") or now)
+        return max(0.0, reset - (now - seen))
+
     def _enter_cooldown(self, retry_after: float | None = None) -> float:
-        """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped)."""
+        """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped).
+
+        Never shorter than what CSFloat says is left on the clock. Waiting a
+        minute against a quota that refills in ten spends the other nine
+        collecting refusals, each one escalating the backoff that would have
+        been right the first time - which is how a sweep that only needed to
+        sit still once ends up giving up.
+        """
         self._consecutive_429 += 1
         rl = self.polling.rate_limit
         wait = min(
@@ -236,6 +266,8 @@ class CSFloatClient:
         )
         if retry_after:
             wait = max(wait, retry_after)
+        # The header is a fact about the account; the backoff above is a guess.
+        wait = max(wait, min(self.reset_in(), ACCOUNT_BLOCK_SECONDS))
         self._cooldown_until = time.monotonic() + wait
         return wait
 
