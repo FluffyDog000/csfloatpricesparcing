@@ -558,7 +558,10 @@ def test_the_two_sides_of_the_market_are_named_apart():
     queue behind when selling."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     assert "чужих ордеров на покупку" in source
-    assert "ордеров в стакане" not in source
+    # The old wording survives in the comment explaining why it went; the
+    # check is on what the page renders, not on what it says about itself.
+    rendered = source.split("meta.textContent")[1].split(";")[0]
+    assert "ордеров в стакане" not in rendered
 
 
 def test_the_depth_line_counts_bands_and_says_so():
