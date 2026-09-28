@@ -641,3 +641,16 @@ def test_the_age_is_given_in_units_a_reader_thinks_in():
     fn = source.split("function staleness")[1].split("\n  }")[0]
     for unit in ("мин назад", "ч назад", "дн назад"):
         assert unit in fn
+
+
+def test_a_sweep_counts_as_done_only_when_both_halves_landed():
+    """`swept_at` is the buy side's timestamp. Judging the sweep by it alone
+    reported success whenever the book arrived while the listings were
+    refused - and the queue then stayed empty with nothing saying why."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    sweep = source.split('$("an-sweep")')[1].split('$("an-run")')[0]
+    assert 'const stamp = (it) =>' in sweep
+    assert "it.depth_at" in sweep, "the sell side's own timestamp counts too"
+    assert '(it.swept_at || "") !== (before[it.item]' not in sweep
+    assert "только стакан покупки" in sweep, \
+        "and the half that is missing is named"

@@ -910,9 +910,14 @@
       }
       // The collector owns the routes, so the page waits for it rather than
       // fetching itself. Show that the wait is progress, not a hang.
+      // Both halves, not one. `swept_at` is the buy side's timestamp, and
+      // judging the sweep by it alone reported success whenever the book
+      // arrived while the listings were refused - the queue then stayed empty
+      // with nothing on screen saying why.
+      const stamp = (it) => `${it.swept_at || ""}|${it.depth_at || ""}`;
       const before = {};
       (await getJSON("/api/analysis")).items.forEach((it) => {
-        before[it.item] = it.swept_at || "";
+        before[it.item] = stamp(it);
       });
       let tries = 0;
       const total = 25;
@@ -924,7 +929,7 @@
             renderList(data.items.map((i) => i.item));
             renderResults(data);
             const done = data.items.filter(
-              (it) => (it.swept_at || "") !== (before[it.item] || "")).length;
+              (it) => stamp(it) !== (before[it.item] || "")).length;
             // Two counters side by side, and only the first is about the
             // work: "проверка 3 из 25" read as a count of float bands on an
             // item that has four. It is this page asking the server again.
@@ -941,11 +946,21 @@
       });
       const data = await loadItems(true);
       const fresh = data.items.filter(
-        (it) => (it.swept_at || "") !== (before[it.item] || "")).length;
+        (it) => stamp(it) !== (before[it.item] || "")).length;
+      // Name the half that is missing. "Обойдено 0 из 1" on an item whose
+      // book did arrive sends the reader looking for the wrong fault.
+      const halves = data.items.filter((it) => {
+        const was = (before[it.item] || "").split("|");
+        return (it.swept_at || "") !== was[0]
+          && (it.depth_at || "") === (was[1] || "");
+      }).length;
       say(fresh >= r.queued.length
         ? `Обход закончен: ${fresh} из ${r.queued.length}. Считаю…`
-        : `Обойдено ${fresh} из ${r.queued.length} — сборщик не успел или на паузе. `
-          + "Проверь вкладку «Нагрузка».", fresh ? "ok" : "err");
+        : `Обойдено ${fresh} из ${r.queued.length}`
+          + (halves
+            ? ` · у ${halves} прочитан только стакан покупки, листинги — нет`
+            : " — сборщик не успел или на паузе")
+          + ". Проверь вкладку «Нагрузка».", fresh ? "ok" : "err");
       await loadItems();
     });
 

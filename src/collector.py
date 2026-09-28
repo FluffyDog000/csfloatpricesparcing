@@ -1044,6 +1044,14 @@ class Collector:
         except Exception as exc:  # noqa: BLE001 - one half is not both
             log.warning("Depth sweep for '%s' failed: %s", name, exc)
             out["depth"] = {"error": f"{type(exc).__name__}: {exc}"}
+        # A half that failed has to reach the screen, not only the log. The
+        # page judged the sweep by the book's timestamp alone, so a book that
+        # arrived while the listings were refused reported as a finished sweep
+        # - and the queue stayed empty with nothing on screen saying why.
+        trouble = (out["depth"] or {}).get("error")
+        if trouble and not (out["orders"] or {}).get("error"):
+            self._note_orders_error(
+                name, f"стакан покупки прочитан, листинги — нет: {trouble}"[:160])
         return out
 
     def sweep_listing_depth(self, name: str, item_id: int,
