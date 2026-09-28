@@ -385,3 +385,71 @@ def test_a_resumed_sweep_starts_at_the_float_it_stopped_on():
     assert not any("min_float=0.15" in u for u in asked), \
         "the stored bands were not read again"
     db.close()
+
+
+def test_the_listings_sweep_leaves_from_one_address():
+    """A dozen requests inside a minute is a burst, and letting the pool hop
+    between addresses inside it is what CSFloat's "too many requests from too
+    many IPs" check counts. The order sweep has been pinned since that
+    complaint first appeared; this half never was, so every listings sweep
+    went on showing the account a fresh address per band."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    pinned = []
+    real_pin, real_unpin = col.client.pool.pin, col.client.pool.unpin
+    col.client.pool.pin = lambda *a, **k: (pinned.append("pin"), real_pin(*a, **k))[1]
+    col.client.pool.unpin = lambda: (pinned.append("unpin"), real_unpin())[1]
+    col.client.fetch_json = lambda url, headers=None: {"data": []}
+
+    col.sweep_listing_depth(name, item_id)
+    assert pinned and pinned[0] == "pin", "pinned before the first band"
+    assert pinned[-1] == "unpin", "and released afterwards"
+    db.close()
+
+
+def test_the_pin_is_released_even_when_a_band_blows_up():
+    """A pin nobody releases wedges every later poll onto one address."""
+    import logging
+    import os
+    import tempfile
+
+    import pytest
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    def explode(url, headers=None):
+        raise KeyboardInterrupt("something the sweep does not catch")
+
+    col.client.fetch_json = explode
+    with pytest.raises(KeyboardInterrupt):
+        col.sweep_listing_depth(name, item_id)
+    assert col.client.pool._pinned is None
+    db.close()

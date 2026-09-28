@@ -1066,6 +1066,17 @@ class Collector:
         `start` resumes a sweep a rate limit cut short, at the float it stopped
         on: the bands below it are already stored, and reading them again buys
         nothing but the refusal that follows.
+
+        Pinned to one route, like the order sweep beside it. This is a burst -
+        a dozen requests inside a minute - and letting the pool hop between
+        addresses inside it is exactly what CSFloat's "too many requests from
+        too many IPs" check counts. The order sweep has been pinned since that
+        complaint first appeared; this half never was, so every listings sweep
+        went on showing the account a fresh address per band.
+
+        Not `for_orders`: that also bars the addresses CSFloat refuses as
+        datacenter traffic, which is a restriction on the buy-order endpoint,
+        not this one.
         """
         span = wear_range(name)
         result: dict[str, Any] = {"bands": 0, "requests": 0, "listings": 0,
@@ -1075,6 +1086,14 @@ class Collector:
                                "диапазон float")
             return result
 
+        self.client.pool.pin()
+        try:
+            return self._depth_bands(name, item_id, span, result, start)
+        finally:
+            self.client.pool.unpin()
+
+    def _depth_bands(self, name: str, item_id: int, span, result: dict,
+                     start: float | None) -> dict:
         lo, hi = span
         result["span"] = f"{lo:.2f}-{hi:.2f}"
         rows: list[dict] = []
