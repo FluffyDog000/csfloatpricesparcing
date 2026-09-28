@@ -543,7 +543,10 @@
     const t = document.createElement("table");
     t.className = "stat";
     t.innerHTML = `<thead><tr><th>что</th><th>предмет</th><th>float</th>
-      <th>цена</th><th>потолок</th><th>почему</th></tr></thead>`;
+      <th>цена</th><th>потолок</th>
+      <th title="λ × маржа — отдача на доллар в сутки. Список идёт по нему
+сверху вниз: когда лимита на всех не хватает, ставится то, что выше">ранг</th>
+      <th>почему</th></tr></thead>`;
     const tb = document.createElement("tbody");
     let need = 0;
     d.actions.forEach((a) => {
@@ -558,6 +561,7 @@
         <td><b>${money(a.price)}</b>${
           a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
         <td>${money(a.ceiling)}</td>
+        <td><b>${a.rank ? a.rank.toFixed(4) : "—"}</b></td>
         <td class="muted">${a.reason}</td>`;
       tb.appendChild(tr);
     });

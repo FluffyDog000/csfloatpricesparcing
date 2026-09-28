@@ -119,6 +119,10 @@ class Action:
     order_id: int | None = None
     remote_id: str | None = None
     was: float | None = None        # the price we were bidding, when raising
+    # λ × margin: return per dollar per day, and the order the plan is listed
+    # in. It rides on the action rather than being recomputed by each reader,
+    # so the number shown and the number sorted by cannot drift apart.
+    rank: float = 0.0
     # The body actually sent, filled in by the sender just before the request.
     # A refusal that does not say what was sent leaves "the code was fixed" and
     # "the saved request was fixed" looking identical from the outside, and only

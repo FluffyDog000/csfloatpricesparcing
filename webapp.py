@@ -1022,6 +1022,17 @@ def api_analysis_plan():
                     reconcile(name, wanted, mine_by_item[name],
                               books[name], limits)]
 
+    # The rank travels with the action, not just the sort. Ordering by a
+    # number the page never shows leaves "why is this one first" unanswerable
+    # from the table, which is the question the order exists to answer.
+    # Full precision, rounded only where it is printed: two ranks that agree
+    # to four decimals are still ordered by the difference behind them, and
+    # rounding before the sort turned that into a tie broken by item name.
+    for action in actions:
+        action["rank"] = ranked.get(
+            (action["item"], round(action["float_min"], 4),
+             round(action["float_max"], 4)), 0.0)
+
     # Shown best-first, across every item. Grouping by item was the order the
     # names happened to be typed in, so the page said nothing about which
     # order is worth placing first - the very thing the rank is for. Cancels
@@ -1029,8 +1040,7 @@ def api_analysis_plan():
     kind_order = {"cancel": 0, "raise": 1, "place": 2, "keep": 3}
     actions.sort(key=lambda a: (
         kind_order.get(a["kind"], 9),
-        -ranked.get((a["item"], round(a["float_min"], 4),
-                     round(a["float_max"], 4)), 0.0),
+        -a["rank"],
         a["item"], a["float_max"]))
 
     # What each item would hold once the plan is applied. Several orders on one

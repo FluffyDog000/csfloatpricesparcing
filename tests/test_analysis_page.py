@@ -901,3 +901,56 @@ def test_a_placement_reports_the_room_it_has_to_answer_an_outbid():
     assert "None" not in act.reason
     assert "$0.50" in act.reason and "5 перебив" in act.reason
     assert "0.12/день" in act.reason
+
+
+def test_the_plan_prints_the_rank_it_is_ordered_by():
+    """Ordering by a number the page never shows leaves "why is this one
+    first" unanswerable from the table - which is the question the order
+    exists to answer."""
+    import datetime as dt
+
+    name = "AK-47 | Inheritance (Minimal Wear)"
+    c = _app([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    now = dt.datetime.now(dt.timezone.utc)
+    spread = (-8.0, -4.0, 0.0, 4.0, 8.0, 12.0)
+    rows = []
+    for k, f in enumerate((0.075, 0.085, 0.095)):
+        for i in range(16):
+            price = (60.0 - 3.0 * k) + spread[i % len(spread)]
+            rows.append((f"{name}{f}{i}", item_id, name, int(price * 100), price,
+                         f, (now - dt.timedelta(days=(i % 13) + 0.5)).isoformat()))
+    db.conn.executemany(
+        "INSERT INTO sales (sale_id, item_id, market_hash_name, price_cents, "
+        "price, float_value, sold_at, sold_at_estimated, scraped_at) "
+        "VALUES (?,?,?,?,?,?,?,0,?)", [r + (r[-1],) for r in rows])
+    db.replace_buy_orders(item_id, [
+        {"price": 46.0, "qty": 1, "float_min": 0.07, "float_max": 0.11}])
+    db.conn.commit()
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+    c.post("/api/analysis/params", json={"an_total_capital": "5000"})
+
+    places = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
+              if a["kind"] == "place"]
+    assert places, "the fixture has to produce something to rank"
+    assert all("rank" in a for a in places)
+    ranks = [a["rank"] for a in places]
+    assert ranks == sorted(ranks, reverse=True)
+    assert all(r > 0 for r in ranks), "a placed order has a rank by definition"
+
+
+def test_the_rank_shown_is_the_rank_sorted_by():
+    """Rounding it before the sort made two distinct ranks a tie, broken by
+    item name - so the list stopped matching the column beside it."""
+    import webapp
+
+    source = open("static/analysis.js", encoding="utf-8").read()
+    assert "a.rank.toFixed(4)" in source, "rounded where it is printed"
+    plan = source.split("function renderPlan")[1] if "function renderPlan" in source \
+        else source
+    assert "a.rank" in plan
+    assert "round(ranked.get(" not in open("webapp.py", encoding="utf-8").read(), \
+        "and not rounded before the ordering"
