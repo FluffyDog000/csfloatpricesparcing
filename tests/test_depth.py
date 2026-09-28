@@ -180,7 +180,10 @@ def test_both_sides_are_swept_together():
     col.sweep_listing_depth = lambda n, i: called.append(("depth", n, i))
 
     col.sweep_both_sides(name, item_id)
-    assert [c[0] for c in called] == ["orders", "depth"]
+    # Both, in whichever order the staler half asks for - which side leads is
+    # its own question, tested beside this one.
+    assert sorted(c[0] for c in called) == ["depth", "orders"]
+    assert all(c[1:] == (name, item_id) for c in called)
 
 
 def test_one_half_failing_does_not_cost_the_other():
@@ -452,4 +455,73 @@ def test_the_pin_is_released_even_when_a_band_blows_up():
     with pytest.raises(KeyboardInterrupt):
         col.sweep_listing_depth(name, item_id)
     assert col.client.pool._pinned is None
+    db.close()
+
+
+def _both_sides_collector():
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    order = []
+    col.sweep_buy_orders = lambda n, i: (order.append("book"), {"bands": 1})[1]
+    col.sweep_listing_depth = lambda n, i: (order.append("listings"),
+                                            {"bands": 1})[1]
+    return col, db, name, item_id, order
+
+
+def test_the_half_that_is_missing_is_read_first():
+    """The two halves run one after the other on one client and one account,
+    so whichever goes second pays for what the first spent and takes the
+    limit. With the book hard-coded first, the listings starved every time -
+    which is why the books are current across the database and the listings
+    are not."""
+    col, db, name, item_id, order = _both_sides_collector()
+    db.replace_buy_orders(item_id, [
+        {"price": 50.0, "qty": 1, "float_min": 0.15, "float_max": 0.19}])
+
+    col.sweep_both_sides(name, item_id)
+    assert order == ["listings", "book"], "the side never read goes first"
+    db.close()
+
+
+def test_the_book_goes_first_when_it_is_the_staler_half():
+    col, db, name, item_id, order = _both_sides_collector()
+    from src.depth import depth_profile
+
+    db.record_listing_depth(item_id, depth_profile(
+        [{"id": "L1", "price": 52.0, "float": 0.165, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None}],
+        (0.15, 0.38)))
+    # No book at all: that is the half the pricing is guessing about.
+    col.sweep_both_sides(name, item_id)
+    assert order == ["book", "listings"]
+    db.close()
+
+
+def test_neither_half_is_lost_when_the_other_fails():
+    col, db, name, item_id, order = _both_sides_collector()
+    col.sweep_listing_depth = lambda n, i: (order.append("listings"),
+                                            _raise())[1]
+
+    def _raise():
+        raise RuntimeError("limit")
+
+    out = col.sweep_both_sides(name, item_id)
+    assert "book" in order
+    assert out["orders"] is not None
+    assert "limit" in (out["depth"] or {}).get("error", "")
     db.close()

@@ -1038,12 +1038,30 @@ class Collector:
         does not cost the other.
         """
         out = {"orders": None, "depth": None}
-        out["orders"] = self.sweep_buy_orders(name, item_id)
-        try:
-            out["depth"] = self.sweep_listing_depth(name, item_id)
-        except Exception as exc:  # noqa: BLE001 - one half is not both
-            log.warning("Depth sweep for '%s' failed: %s", name, exc)
-            out["depth"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+        def book() -> None:
+            out["orders"] = self.sweep_buy_orders(name, item_id)
+
+        def listings() -> None:
+            try:
+                out["depth"] = self.sweep_listing_depth(name, item_id)
+            except Exception as exc:  # noqa: BLE001 - one half is not both
+                log.warning("Depth sweep for '%s' failed: %s", name, exc)
+                out["depth"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+        # Sequential, not parallel - one client, one spacing lock, one
+        # account - so whichever half goes second pays for what the first
+        # spent, and a limit reached midway always lands on it. With the book
+        # hard-coded first, the listings were the half that starved every
+        # time: the books are current across the database and the listings are
+        # missing on most of it, which is that order made visible.
+        #
+        # So the staler half goes first. It is the one whose numbers are
+        # wrong, and it is the one worth paying for with a budget that may not
+        # stretch to both.
+        for half in (listings, book) if self._sell_side_is_staler(item_id) \
+                else (book, listings):
+            half()
         # A half that failed has to reach the screen, not only the log. The
         # page judged the sweep by the book's timestamp alone, so a book that
         # arrived while the listings were refused reported as a finished sweep
@@ -1053,6 +1071,29 @@ class Collector:
             self._note_orders_error(
                 name, f"стакан покупки прочитан, листинги — нет: {trouble}"[:160])
         return out
+
+    def _sell_side_is_staler(self, item_id: int) -> bool:
+        """Whether the listings were read longer ago than the book.
+
+        Missing counts as infinitely stale: a side never read is the one the
+        pricing is guessing about.
+        """
+        def newest(rows) -> str:
+            return max((str(r.get("fetched_at") or "") for r in rows), default="")
+
+        try:
+            depth = newest(self.db.listing_depth(item_id))
+        except Exception:  # noqa: BLE001 - an older DB has no such table
+            depth = ""
+        try:
+            book = newest(self.db.buy_orders(item_id))
+        except Exception:  # noqa: BLE001
+            book = ""
+        if not depth:
+            return True
+        if not book:
+            return False
+        return depth < book          # ISO-8601 sorts as text
 
     def sweep_listing_depth(self, name: str, item_id: int,
                             start: float | None = None) -> dict:
