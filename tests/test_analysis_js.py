@@ -609,3 +609,12 @@ def test_the_queue_column_is_a_count_of_what_blocks_us():
     assert "b.asks" not in row
     header = source.split("полоса</th>")[1].split("</thead>")[0]
     assert "дешевле медианы" in header, "the header says what it counts"
+
+
+def test_a_truncated_band_is_marked_in_the_count_and_explained():
+    """Fifty is the endpoint's maximum, so the count is a floor. Printing it
+    as a plain number claims a completeness nobody measured."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert 'b.queue_capped ? "+" : ""' in row
+    assert "Полоса обрезана" in row, "and the row says what the plus means"

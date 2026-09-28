@@ -40,6 +40,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from .depth import DEPTH_PAGE
+
 # CSFloat holds a bought item for seven days before it can be listed. That is
 # not a setting: it is the platform's rule, and it doubles as the natural
 # patience for the sell queue, since the wait is already being paid.
@@ -78,6 +80,10 @@ class Rung:
     margin: float | None = None
     rival: float = 0.0               # best competing bid over our range
     lots: int = 0                    # lots listed in the band
+    # The band was read to the endpoint's page limit AND the median is above
+    # the dearest lot stored, so cheaper-than-median lots may exist that were
+    # never seen. The count is then a floor, not a figure.
+    lots_capped: bool = False
     # Their prices, cheapest first - the ones we would actually queue behind,
     # after the lots worse than our top are dropped. Carried because a count
     # alone cannot be checked against anything: "21 lots" is a claim, and the
@@ -97,6 +103,7 @@ class Rung:
             "priced_from": self.priced_from, "exit_net": self.exit_net,
             "ceiling": self.ceiling, "bid": self.bid, "margin": self.margin, "rival": self.rival,
             "lots": self.lots, "lots_cleared": round(self.lots_cleared, 1),
+            "lots_capped": self.lots_capped,
             "asks": list(self.asks),
             "fills": self.fills, "lam": self.lam, "rank": self.rank,
             "take": self.take, "reason": self.reason,
@@ -390,6 +397,16 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         ours = [p for p, _ in pairs]
         rung.lots = lots
     rung.asks = sorted(ours)
+    # A band read to the endpoint's page limit holds only its cheapest fifty,
+    # and there may be more behind them. That is harmless while the median
+    # sits under the dearest lot we did store - everything unseen is dearer
+    # still, so none of it would have joined the queue. It stops being
+    # harmless the moment the median clears that price: then the lots we never
+    # saw could be under it, and the count is a floor rather than a figure.
+    dearest = max((p for p, _ in pairs), default=None)
+    rung.lots_capped = bool(
+        len(pairs) >= DEPTH_PAGE and dearest is not None
+        and rung.market is not None and rung.market > dearest)
     rung.queue_price = queue_price(ours, rung.lots, rung.lots_cleared, step)
 
     if rung.queue_price is not None and rung.queue_price < rung.market:

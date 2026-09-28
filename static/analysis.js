@@ -285,14 +285,20 @@
     // compare against, the queue emptying during the lock, is exactly the one
     // that needs saying. It rendered as a blank.
     const noQueue = b.queue_price === null || b.queue_price === undefined;
+    // The "+" on the count is not decoration: the band came back full at the
+    // endpoint's page limit and the median is above the dearest lot in it, so
+    // lots cheaper than the median may exist that were never returned.
+    const capped = b.queue_capped
+      ? ". Полоса обрезана на пределе выдачи — дешёвых лотов может быть больше"
+      : "";
     const exitSecond = noQueue
       ? (b.queue
         ? `очередь не ограничивает: ${b.queue} лот(ов), за блокировку `
-          + `уходит ${b.lots_cleared}`
+          + `уходит ${b.lots_cleared}${capped}`
         : "лоты не собраны — очередь не учтена")
       : `против ${money(other)} `
         + (exit_from === "очередь" ? "по истории" : "по очереди")
-        + ` (${b.queue} лот(ов), уходит ${b.lots_cleared})`;
+        + ` (${b.queue} лот(ов), уходит ${b.lots_cleared})${capped}`;
     const exitWhy = noQueue
       ? `медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам`
       : `медиана по ${b.sample} сделкам против цены очереди лотов`;
@@ -309,7 +315,7 @@
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
-      <td class="muted">${b.queue || 0}</td>`;
+      <td class="muted">${b.queue || 0}${b.queue_capped ? "+" : ""}</td>`;
     return tr;
   }
 

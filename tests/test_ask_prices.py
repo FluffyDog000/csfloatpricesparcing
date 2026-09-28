@@ -141,3 +141,64 @@ def test_a_partial_record_never_reads_as_an_empty_queue():
                  asks=[[95.0, 0.165]], params=Params(window_days=16.0))
     assert r.lots == 40, "the recorded count stands"
     assert r.queue_price is not None
+
+
+# -- a band read to the endpoint's limit ------------------------------------
+
+def price_band(prices, lo=0.15, hi=0.17, f=0.165):
+    return {"float_min": lo, "float_max": hi, "listings": len(prices),
+            "cheapest": min(prices), "asks": [[p, f] for p in prices]}
+
+
+def test_a_full_page_with_the_median_above_it_is_marked_as_a_floor():
+    """Fifty is the endpoint's maximum, so a band that returns fifty was cut.
+    While the median sits under the dearest lot stored, everything unseen is
+    dearer still and would never have joined the queue. Once the median clears
+    that price, the lots never returned could be under it."""
+    from src.ladder import Params, evaluate
+
+    # Sales rich enough to put the median above every stored lot.
+    sales = [{"price": 200.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+             for i in range(20)]
+    asks = [[90.0 + i, 0.165] for i in range(50)]        # dearest is $139
+    rung = evaluate(0.17, sales, [], (0.15, 0.38), lots=50, asks=asks,
+                    params=Params(window_days=16.0))
+    assert rung.market == 200.0
+    assert rung.lots_capped, "the median is above every lot the page returned"
+
+
+def test_a_full_page_whose_dearest_lot_beats_the_median_is_not_marked():
+    """The cut is real but harmless: no unseen lot can be cheaper than the
+    ones we have, so none of them would have joined the queue."""
+    from src.ladder import Params, evaluate
+
+    sales = [{"price": 100.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+             for i in range(20)]
+    asks = [[90.0 + i, 0.165] for i in range(50)]        # dearest is $139
+    rung = evaluate(0.17, sales, [], (0.15, 0.38), lots=50, asks=asks,
+                    params=Params(window_days=16.0))
+    assert not rung.lots_capped
+
+
+def test_a_band_short_of_the_page_limit_was_not_cut_at_all():
+    from src.ladder import Params, evaluate
+
+    sales = [{"price": 200.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+             for i in range(20)]
+    asks = [[90.0 + i, 0.165] for i in range(12)]
+    rung = evaluate(0.17, sales, [], (0.15, 0.38), lots=12, asks=asks,
+                    params=Params(window_days=16.0))
+    assert not rung.lots_capped, "twelve of fifty is the whole band"
+
+
+def test_the_page_carries_the_mark_through_to_the_band():
+    from src.pricing import Params as PricingParams
+    from src.pricing import plan
+
+    sales = [{"price": 200.0, "float_value": 0.155, "age_days": i % 14 + 0.5}
+             for i in range(20)]
+    depth = [price_band([90.0 + i for i in range(50)], f=0.155)]
+    band = next(b for b in plan(sales, [], (0.15, 0.38), depth,
+                                PricingParams(window_days=16.0))
+                if abs(b.float_max - 0.16) < 1e-9)
+    assert band.queue_capped is True
