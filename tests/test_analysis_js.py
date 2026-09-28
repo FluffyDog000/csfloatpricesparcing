@@ -599,12 +599,13 @@ def test_a_queue_that_cannot_bind_says_so_in_the_row_not_on_hover():
     assert "other !== null ?" not in row
 
 
-def test_the_queue_column_shows_the_lot_prices_not_only_their_count():
-    """A count cannot be checked against anything. "21 лот(ов)" is a claim;
-    the prices behind it are the evidence, and they were collected, stored,
-    used in the pricing and shown nowhere."""
+def test_the_queue_column_is_a_count_of_what_blocks_us():
+    """The prices were shown for one commit and taken out again: once the
+    count means "lots cheaper than the median", it answers the question the
+    prices were added for, and eight numbers per row on a phone did not."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
-    assert "b.asks" in row
-    assert "b.queue > b.asks.length" in row, \
-        "a truncated list says it is truncated"
+    assert "b.queue" in row
+    assert "b.asks" not in row
+    header = source.split("полоса</th>")[1].split("</thead>")[0]
+    assert "дешевле медианы" in header, "the header says what it counts"

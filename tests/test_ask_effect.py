@@ -117,12 +117,29 @@ def test_a_null_result_says_which_of_the_two_reasons_it_was():
     assert found["lots_cleared"] > found["lots"]
 
 
-def test_a_standing_queue_priced_above_the_median_is_counted_apart():
-    """It did not move, but for the other reason - and that one is one cold
-    week away from mattering."""
+def test_a_queue_priced_above_the_median_is_not_a_queue_at_all():
+    """It does not stand in our way: we list under it and the buyer reaches us
+    first. It used to be counted as competition that the median then outbid,
+    which is two ways of saying the same thing - and it inflated the count the
+    page shows past the lots actually ahead of us."""
     history = sales({0.165: [60.0] * 12})
     depth = [band(0.15, 0.17, [(200.0, 0.165)] * 40)]
     found = summarise(compare(history, [], (0.15, 0.38), depth,
                               Params(window_days=16.0)))
-    assert found["median_binds"] > 0
-    assert found["queue_gone"] < found["rungs"]
+    assert found["median_binds"] == 0
+    assert found["queue_gone"] == found["rungs"], \
+        "nothing is ahead of us, so there is no queue to clear"
+
+
+def test_only_the_lots_under_the_median_are_counted_as_ahead_of_us():
+    """Half the band dearer than the item is worth, half under it."""
+    from src.ladder import Params as LadderParams
+    from src.ladder import evaluate
+
+    history = [{"price": 100.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+               for i in range(20)]
+    asks = [[80.0, 0.165]] * 6 + [[150.0, 0.165]] * 14
+    rung = evaluate(0.17, history, [], (0.15, 0.38), lots=20, asks=asks,
+                    params=LadderParams(window_days=16.0))
+    assert rung.lots == 6, "the fourteen dearer lots are not ahead of us"
+    assert all(p <= rung.market for p in rung.asks)

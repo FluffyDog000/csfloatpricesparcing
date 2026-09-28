@@ -309,10 +309,7 @@
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
-      <td class="muted">${b.queue || 0}${
-        b.asks && b.asks.length
-          ? `<br><small>${b.asks.map(money).join(" ")}${
-              b.queue > b.asks.length ? " …" : ""}</small>` : ""}</td>`;
+      <td class="muted">${b.queue || 0}</td>`;
     return tr;
   }
 
@@ -489,8 +486,8 @@
 а наша доля в нём">λ/сут</th>
         <th title="λ × маржа — отдача на доллар в сутки. По нему план
 расставляет, что ставить первым, когда лимита на всех не хватает">ранг</th>
-        <th title="лотов в полосе стакана продаж — за ними мы встанем
-в очередь, когда пойдём продавать">очередь</th>
+        <th title="лотов дешевле медианы, которые стоят перед нами при
+продаже. Дороже медианы не в счёт: такие мы подрезаем">очередь</th>
       </tr></thead>`;
       const tb = document.createElement("tbody");
       it.bands.forEach((b) => tb.appendChild(bandRow(b)));

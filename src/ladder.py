@@ -364,8 +364,23 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     pairs = _pairs(asks)
     if len(pairs) >= lots > 0:
         # The whole band is on hand, so the ones we would not queue behind can
-        # be dropped and the count reduced with them.
-        ours = [p for p, f in pairs if f is None or f <= top]
+        # be dropped and the count reduced with them. Two tests, not one:
+        #
+        #   float - a lot worse than our top is a worse item, and the buyer
+        #           who wants ours cannot use it;
+        #   price - a lot dearer than what ours is worth does not block us at
+        #           all. We list under it and the buyer reaches us first.
+        #
+        # Only the second was missing, and it counted the whole band as if it
+        # stood in our way - on a liquid item that is fifty lots where a dozen
+        # are actually ahead of us.
+        #
+        # The median is the reference rather than the exit price, which is not
+        # known yet and is derived from this count. It is also the safe end of
+        # the two: pricing under it only shortens the queue further.
+        ours = [p for p, f in pairs
+                if (f is None or f <= top)
+                and (rung.market is None or p <= rung.market)]
         rung.lots = len(ours)
     else:
         # Partial: older rows kept only the cheapest ask. Dropping the count
