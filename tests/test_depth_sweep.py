@@ -437,3 +437,55 @@ def test_the_sweep_path_keeps_what_the_refusal_said():
         client._read(Resp(), route, "https://csfloat.com/api/v1/listings")
     assert client.last_429_body == "rate limited by CSFloat"
     assert client.last_429_headers.get("Retry-After") == "30"
+
+
+# -- the account, not the budget -------------------------------------------
+
+def test_an_account_flagged_for_too_many_ips_is_not_waited_out():
+    """«too many requests from too many IPs» is not a quota. It is refused
+    from every address, including the direct one, so sitting still changes
+    nothing - and each retry is more of exactly what drew the complaint."""
+    col = FakeCollector({"A": {"bands": 0, "listings": 0, "requests": 0,
+                               "rate_limited": True}})
+
+    calls = []
+
+    def flag(name, item_id, start=None):
+        calls.append(name)
+        col.client.account_ip_block_at = f"2026-09-28T12:0{len(calls)}:00Z"
+        return {"bands": 0, "listings": 0, "requests": 0, "rate_limited": True}
+
+    col.sweep_listing_depth = flag
+    slept = []
+    out = sweep(col, [("A", 1), ("B", 2)], patience=3600.0, sleep=slept.append)
+
+    assert slept == [], "no amount of patience applies to this one"
+    assert calls == ["A"], "and it did not keep asking"
+    assert "слишком много запросов" in out["stopped"]
+    assert "закреплённые сессии" in out["stopped"], "say what actually fixes it"
+
+
+def test_an_ordinary_quota_refusal_is_still_waited_out():
+    """The flag must not swallow the case it looks like: a spent budget stamps
+    nothing, and waiting is exactly right for it."""
+    col = FakeCollector({"A": [
+        {"bands": 0, "listings": 0, "requests": 0, "rate_limited": True,
+         "stopped_at": 0.15},
+        {"bands": 4, "listings": 12, "requests": 4},
+    ]}, pause=30.0)
+    slept = []
+    out = sweep(col, [("A", 1)], patience=600.0, sleep=slept.append)
+    assert slept == [30.0] and out["stopped"] == ""
+
+
+def test_a_flag_left_over_from_an_earlier_run_does_not_stop_this_one():
+    """The stamp persists on the client. Reading its mere presence as a fresh
+    complaint would refuse to sweep for as long as the process lives."""
+    col = FakeCollector({"A": [
+        {"bands": 0, "listings": 0, "requests": 0, "rate_limited": True,
+         "stopped_at": 0.15},
+        {"bands": 4, "listings": 12, "requests": 4},
+    ]}, pause=30.0)
+    col.client.account_ip_block_at = "2026-09-28T09:00:00Z"   # hours ago
+    out = sweep(col, [("A", 1)], patience=600.0, sleep=lambda s: None)
+    assert out["stopped"] == "", "the stamp did not change, so nothing new"

@@ -177,6 +177,11 @@ def sweep(collector, targets: Sequence[tuple[str, int]],
     start: float | None = None
     while queue:
         name, item_id = queue[0]
+        client = getattr(collector, "client", None)
+        # The account-level complaint stamps this when it fires. Comparing it
+        # across the call is how a flagged account is told apart from a spent
+        # budget: the two arrive as the same 429, and only one is waitable.
+        was_flagged = getattr(client, "account_ip_block_at", None)
         try:
             result = collector.sweep_listing_depth(name, item_id, start=start)
         except Exception as exc:  # noqa: BLE001 - one item must not lose the rest
@@ -195,6 +200,18 @@ def sweep(collector, targets: Sequence[tuple[str, int]],
             queue.pop(0)
             start = None
             continue
+
+        now_flagged = getattr(client, "account_ip_block_at", None)
+        flagged = bool(now_flagged) and now_flagged != was_flagged
+
+        if flagged:
+            out["stopped"] = (
+                "CSFloat пометил аккаунт: «слишком много запросов со слишком "
+                "многих IP». Это не квота — ожидание не помогает, отказ придёт "
+                "с любого адреса, включая прямой. Нужно сократить число "
+                "исходящих адресов на аккаунт (закреплённые сессии вместо "
+                "вращающихся) и подождать, пока метка снимется.")
+            break
 
         pause = cooldown(collector)
         left = patience - out["waited"]
