@@ -78,6 +78,11 @@ class Rung:
     margin: float | None = None
     rival: float = 0.0               # best competing bid over our range
     lots: int = 0                    # lots listed in the band
+    # Their prices, cheapest first - the ones we would actually queue behind,
+    # after the lots worse than our top are dropped. Carried because a count
+    # alone cannot be checked against anything: "21 lots" is a claim, and the
+    # prices are the evidence for it.
+    asks: list[float] = field(default_factory=list)
     lots_cleared: float = 0.0        # ...of which the lock disposes
     fills: int = 0                   # past sales our bid would have taken
     lam: float = 0.0                 # fills per day
@@ -92,6 +97,7 @@ class Rung:
             "priced_from": self.priced_from, "exit_net": self.exit_net,
             "ceiling": self.ceiling, "bid": self.bid, "margin": self.margin, "rival": self.rival,
             "lots": self.lots, "lots_cleared": round(self.lots_cleared, 1),
+            "asks": list(self.asks),
             "fills": self.fills, "lam": self.lam, "rank": self.rank,
             "take": self.take, "reason": self.reason,
         }
@@ -368,6 +374,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         # prices we do have are used as they were before.
         ours = [p for p, _ in pairs]
         rung.lots = lots
+    rung.asks = sorted(ours)
     rung.queue_price = queue_price(ours, rung.lots, rung.lots_cleared, step)
 
     if rung.queue_price is not None and rung.queue_price < rung.market:

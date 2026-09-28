@@ -597,3 +597,14 @@ def test_a_queue_that_cannot_bind_says_so_in_the_row_not_on_hover():
     assert "лоты не собраны" in row, "and an item never swept is its own case"
     # The second line is unconditional: every branch of exitSecond produces text.
     assert "other !== null ?" not in row
+
+
+def test_the_queue_column_shows_the_lot_prices_not_only_their_count():
+    """A count cannot be checked against anything. "21 лот(ов)" is a claim;
+    the prices behind it are the evidence, and they were collected, stored,
+    used in the pricing and shown nowhere."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    row = source.split("function bandRow")[1].split("\n  }")[0]
+    assert "b.asks" in row
+    assert "b.queue > b.asks.length" in row, \
+        "a truncated list says it is truncated"

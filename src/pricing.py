@@ -112,6 +112,10 @@ class Band:
     # lot prices were collected to answer.
     queue_price: float | None = None
     lots_cleared: float = 0.0
+    # The cheapest lots we would queue behind, for the page to show. Truncated
+    # because the whole band can be fifty prices on every rung of every item,
+    # and the first handful is what anyone reads.
+    asks: list[float] = field(default_factory=list)
     priced_from: str = "история"
     top: float = 0.0                   # best competing bid in the band
     entry: float | None = None         # cheapest price that puts us first
@@ -243,6 +247,7 @@ def _as_band(rung) -> Band:
         market=rung.market,
         queue_price=rung.queue_price,
         lots_cleared=round(rung.lots_cleared, 1),
+        asks=[round(a, 2) for a in rung.asks[:8]],
         priced_from=rung.priced_from or "история",
         top=rung.rival,
         ceiling=rung.ceiling,

@@ -309,7 +309,10 @@
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
-      <td class="muted">${b.queue || 0}</td>`;
+      <td class="muted">${b.queue || 0}${
+        b.asks && b.asks.length
+          ? `<br><small>${b.asks.map(money).join(" ")}${
+              b.queue > b.asks.length ? " …" : ""}</small>` : ""}</td>`;
     return tr;
   }
 

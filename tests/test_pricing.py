@@ -168,3 +168,34 @@ def test_a_band_carries_both_exit_candidates_not_only_the_winner():
     assert any(b.queue_price is not None for b in priced), \
         "what the queue allowed is reported, win or lose"
     assert all(b.lots_cleared >= 0 for b in priced)
+
+
+def test_a_band_carries_the_lot_prices_it_would_queue_behind():
+    """Only lots our own item could displace: a lot with a worse float is not
+    competition for the buyer who wants ours."""
+    from src.pricing import Params, plan
+
+    sales = [{"price": 110.0, "float_value": 0.155, "age_days": i % 14 + 0.5}
+             for i in range(40)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "listings": 3,
+              "cheapest": 95.0,
+              "asks": [[95.0, 0.155], [99.0, 0.159], [101.0, 0.168]]}]
+    band = next(b for b in plan(sales, [], (0.15, 0.38), depth,
+                                Params(window_days=16.0))
+                if abs(b.float_max - 0.16) < 1e-9)
+    assert band.asks == [95.0, 99.0], "the 0.168 lot is a worse item than ours"
+
+
+def test_the_price_list_is_truncated_rather_than_shipped_whole():
+    """Fifty prices on every rung of every item is a payload nobody reads."""
+    from src.pricing import Params, plan
+
+    sales = [{"price": 110.0, "float_value": 0.155, "age_days": i % 14 + 0.5}
+             for i in range(40)]
+    depth = [{"float_min": 0.15, "float_max": 0.17, "listings": 50,
+              "cheapest": 90.0,
+              "asks": [[90.0 + i, 0.155] for i in range(50)]}]
+    band = next(b for b in plan(sales, [], (0.15, 0.38), depth,
+                                Params(window_days=16.0))
+                if abs(b.float_max - 0.16) < 1e-9)
+    assert len(band.asks) == 8 and band.asks[0] == 90.0
