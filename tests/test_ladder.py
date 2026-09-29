@@ -331,25 +331,37 @@ def test_nothing_in_the_scoring_reads_an_annualised_return():
         assert not any(banned in n for n in names), banned
 
 
-def test_a_rival_parked_far_under_the_market_does_not_set_our_price():
-    """Leading is necessary, not sufficient. One step over a bid nobody would
-    sell to is a bid nobody will sell to either, and the order stands dead."""
-    sales = [sale(54.0, 0.165) for _ in range(40)]
-    sales += [sale(49.0, 0.165) for _ in range(6)]
-    book = [order(30.0, 0.15, 0.17)]        # far below anything that sold
-    r = evaluate(0.17, sales, book, (0.15, 0.38), 0, [], Params())
-    assert r.take
-    assert r.bid > 31.0, "a step over $30 would catch nothing"
-    assert r.fills > 0, "the bid has to reach prices people sold at"
+def test_the_bid_is_one_step_over_the_rival_and_no_further():
+    """Paying more than it takes to lead buys nothing from a seller who is
+    coming to us anyway. CSFloat's own grid says what a step is: a dollar
+    between $100 and $500, so leading a $219 rival costs $220 and not $223.
+    """
+    sales = [sale(250.0, 0.165) for _ in range(20)]
+    sales += [sale(223.0, 0.165) for _ in range(6)]
+    r = evaluate(0.17, sales, [order(219.0, 0.15, 0.17)], (0.15, 0.38), 0, [],
+                 Params())
+    assert r.rival == pytest.approx(219.0)
+    assert r.bid == pytest.approx(220.0)
 
 
-def test_and_it_stops_at_the_first_price_that_fills():
-    """Walking up past that would be paying for reach nobody forced."""
+def test_a_rival_parked_far_under_the_market_refuses_the_rung():
+    """Leading is necessary and not sufficient: one step over a bid nobody
+    would sell to is a bid nobody will sell to either.
+
+    This used to walk the bid up to the first price the history said somebody
+    had sold at. The reasoning was sound and the remedy was wrong - it quietly
+    paid four dollars over a rival who could be led for one. The case is still
+    caught, by refusing the rung rather than by bidding up until the history
+    agrees.
+    """
     sales = [sale(54.0, 0.165) for _ in range(40)]
     sales += [sale(49.0, 0.165) for _ in range(6)]
     r = evaluate(0.17, sales, [order(30.0, 0.15, 0.17)], (0.15, 0.38), 0, [],
                  Params())
-    assert r.bid == pytest.approx(49.0, abs=0.11), r.bid
+    assert r.bid == pytest.approx(30.1), "a step over $30, on the $0.10 grid"
+    assert not r.take
+    assert "никто не продавал" in r.reason
+    assert r.fills == 0
 
 
 # -- the window the rates divide by ----------------------------------------

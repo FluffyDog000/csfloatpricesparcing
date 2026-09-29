@@ -686,9 +686,11 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
     # (name, rival bid). Same sales for all three, so what separates them is
     # the competition alone - and the allowance is spread per dollar, which
     # a price gradient would drown out.
-    market = [("A Weak | Rivals (Field-Tested)", 96.0),
-              ("B Some | Rivals (Field-Tested)", 104.0),
-              ("C Heavy | Rivals (Field-Tested)", 112.0)]
+    # Rivals all sit under the margin ceiling, so what separates the items is
+    # how much of the cheap tail each bid reaches - not who gets refused.
+    market = [("A Weak | Rivals (Field-Tested)", 88.0),
+              ("B Some | Rivals (Field-Tested)", 91.0),
+              ("C Heavy | Rivals (Field-Tested)", 94.0)]
     rivals = dict(market)
     names = [n for n, _ in market]
 
@@ -700,8 +702,8 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
         now = dt.datetime.now(dt.timezone.utc)
         for name in order:
             item_id = db.get_item_id(name)
-            rows = [(f"{name}-{i}", item_id, name, int((100.0 + i % 20) * 100),
-                     100.0 + i % 20, 0.365 + (i % 5) * 0.001,
+            rows = [(f"{name}-{i}", item_id, name, int((88.0 + i % 32) * 100),
+                     88.0 + i % 32, 0.365 + (i % 5) * 0.001,
                      (now - dt.timedelta(days=i % 14)).isoformat())
                     for i in range(60)]
             db.conn.executemany(

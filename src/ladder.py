@@ -452,20 +452,18 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
             rung.reason = (f"перебить стоит ${lead:.2f}, а маржа позволяет "
                            f"лишь ${rung.ceiling:.2f}")
             return rung
-        # Leading is necessary, not sufficient. A rival parked far under the
-        # market makes leading cheap and worthless: a bid a step over him can
-        # sit below every price anyone has sold at, and then it leads a queue
-        # nobody joins. So walk up from there to the first price the history
-        # says somebody would actually have taken, and no further.
+        # One step over the rival, and no further. Paying more than it takes
+        # to lead buys nothing from a seller who is coming to us anyway.
+        #
+        # This used to walk up from the lead to the first price the history
+        # said somebody had actually sold at, on the grounds that leading a
+        # queue nobody joins fills nothing. That reasoning is sound and the
+        # remedy was wrong: it quietly paid four dollars over a rival who
+        # could be led for one. The case it guarded against is still caught,
+        # one line down - a bid no past sale would have met takes nothing,
+        # `fills` comes out zero, and the rung is refused by name rather than
+        # bid up to a price that makes the history agree.
         rung.bid = lead
-        price = lead
-        while price <= rung.ceiling + 1e-9:
-            if fills_at(sales, orders, low, top, price):
-                rung.bid = price
-                break
-            price = round(price + price_step(price), 4)
-        else:
-            rung.bid = rung.ceiling
     else:
         rung.bid = rung.ceiling
     rung.margin = (rung.exit_net - rung.bid) / rung.bid
