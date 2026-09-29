@@ -17,6 +17,7 @@ also caps how many distinct IPs CSFloat sees for one account.
 from __future__ import annotations
 
 import hashlib
+import threading
 import json
 import logging
 import time
@@ -157,8 +158,22 @@ class ProxyPool:
                  rotating_limit: int = ROTATING_DEFAULT_LIMIT):
         self.reserve = reserve
         self.rotating_limit = rotating_limit
-        self._pinned: RouteState | None = None
-        self._orders_mode = False
+        # A pin holds one route for a burst of requests, and a burst belongs
+        # to the thread making it. Kept in one slot, two sweeps running at
+        # once overwrite each other's pin and both leave from whichever route
+        # was pinned last - which is the opposite of what the pin is for, and
+        # the failure would look exactly like the complaint it prevents.
+        self._local = threading.local()
+        # Bumped when the route list is rebuilt, so a pin taken before that
+        # stops being honoured without having to reach into other threads.
+        self._generation = 0
+        # Which route each thread currently holds. A pin has to be exclusive,
+        # not merely private: `_choose` is deterministic, so two sweeps asking
+        # at the same moment are handed the same address and the per-thread
+        # slot has nothing to overwrite. Skipping what another thread holds is
+        # what actually spreads parallel sweeps across the pool.
+        self._pins: dict[int, str] = {}
+        self._pins_lock = threading.Lock()
         self.last_picked: RouteState | None = None
         self.routes: dict[str, RouteState] = {}
         if use_direct:
@@ -200,14 +215,48 @@ class ProxyPool:
             route.window_limit = self.rotating_limit
         self.routes = kept
         # A pin points at a route object; after a rebuild it may no longer be
-        # in the pool at all.
-        self._pinned = None
+        # in the pool at all. Clearing the caller's slot is not enough now
+        # that pins are per thread: a sweep running on another thread would
+        # keep leaving from an address the pool has forgotten. Bumping the
+        # generation drops every thread's pin at once, wherever it is parked.
+        self._generation += 1
         if changed:
             log.info("Proxy pool updated: %d route(s) — %s",
                      len(self.routes), ", ".join(sorted(self.routes)))
         return changed
 
     # -- selection -----------------------------------------------------------
+
+    @property
+    def _pinned(self) -> RouteState | None:
+        if getattr(self._local, "generation", -1) != self._generation:
+            return None
+        return getattr(self._local, "pinned", None)
+
+    @_pinned.setter
+    def _pinned(self, route: RouteState | None) -> None:
+        self._local.pinned = route
+        self._local.generation = self._generation
+        me = threading.get_ident()
+        with self._pins_lock:
+            if route is None:
+                self._pins.pop(me, None)
+            else:
+                self._pins[me] = route.key
+
+    def _held_elsewhere(self) -> set[str]:
+        """Routes other threads are mid-burst on."""
+        me = threading.get_ident()
+        with self._pins_lock:
+            return {key for ident, key in self._pins.items() if ident != me}
+
+    @property
+    def _orders_mode(self) -> bool:
+        return getattr(self._local, "orders_mode", False)
+
+    @_orders_mode.setter
+    def _orders_mode(self, value: bool) -> None:
+        self._local.orders_mode = value
 
     def pick(self) -> RouteState | None:
         """Best available route, or None when everything is spent/parked.
@@ -250,6 +299,13 @@ class ProxyPool:
             usable = deep or usable
         if not usable:
             return None
+        # Leave another thread's burst its address - but only while there is
+        # somewhere else to go. With one proxy configured, sharing it is the
+        # whole of the pool, and refusing would stop the second sweep dead.
+        held = self._held_elsewhere()
+        if held:
+            free = [r for r in usable if r.key not in held]
+            usable = free or usable
         fixed = [r for r in usable if not r.rotating]
         usable = fixed or usable
         # Drain, don't alternate — see RouteState.drain_key.
