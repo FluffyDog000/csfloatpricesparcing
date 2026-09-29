@@ -30,6 +30,7 @@ from src.settings import defend_minutes, defending
 from src.config import load_config
 from src.csfloat_client import CSFloatClient
 from src.db import Database
+from src.parallel import sweep_items
 from src.logging_setup import setup_logging
 
 log = logging.getLogger("csfloat.main")
@@ -204,16 +205,26 @@ def run_forever(collector: Collector) -> None:
                         log.warning("Defence pass failed: %s", exc)
 
             # Buy-order requests, same gating: on demand, never on a schedule.
-            for row in collector.db.pending_order_requests():
-                collector.db.clear_order_request(int(row["id"]))
-                log.info("Buy orders requested for '%s'", row["market_hash_name"])
+            pending = collector.db.pending_order_requests()
+            if pending:
+                for row in pending:
+                    collector.db.clear_order_request(int(row["id"]))
+                names = [row["market_hash_name"] for row in pending]
+                log.info("Buy orders requested for %d item(s)", len(names))
                 # Both halves: the book says who is bidding, the listings say
                 # what it is going for. Scoring needs both, and with only the
                 # book the exit price falls back to the sales median - which
                 # is almost always higher than the cheapest ask, so every
                 # ceiling comes out too high.
-                collector.sweep_both_sides(row["market_hash_name"],
-                                           int(row["id"]))
+                #
+                # Several at a time when there are keys to do it with; with
+                # one key this is the same loop it replaces, one item after
+                # another.
+                done = sweep_items(collector, names)
+                if done["workers"] > 1:
+                    log.info("Swept %d item(s) on %d worker(s), %d failed",
+                             len(done["swept"]), done["workers"],
+                             len(done["failed"]))
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()
@@ -234,6 +245,25 @@ def run_forever(collector: Collector) -> None:
         log.info("Next poll for '%s' in %.1f min", name, next_delay / 60.0)
 
 
+def _attach_keyring(collector) -> None:
+    """Give the client a key ring when a key file is configured.
+
+    Silent when there is none, which is the single-key setup the collector has
+    always run: one clock, one address at a time, everything as before.
+    """
+    from src.keyring import KeyRing, read_keys
+
+    keys = read_keys(collector.config.http.keys_file)
+    if len(keys) < 2:
+        return
+    collector.sync_proxies()
+    ring = KeyRing(keys, collector.client.pool,
+                   spacing=collector.config.polling.min_seconds_between_requests)
+    collector.client.keyring = ring
+    log.info("Key ring: %d key(s), %d route(s) each, %d sweep(s) at once",
+             len(ring.live()), ring.routes_per_key, ring.concurrency())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="CSFloat sales collector")
     parser.add_argument(
@@ -248,6 +278,7 @@ def main() -> int:
     db = Database(config.db_path)
     client = CSFloatClient(config.http, config.polling)
     collector = Collector(config, db, client)
+    _attach_keyring(collector)
 
     if not client.has_credentials():
         log.warning(

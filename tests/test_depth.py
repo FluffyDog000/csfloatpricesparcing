@@ -204,13 +204,20 @@ def test_one_half_failing_does_not_cost_the_other():
 
 
 def test_the_collector_loop_asks_for_both():
-    """The regression that started this: the call site, not the method."""
+    """The regression that started this: the call site, not the method.
+
+    The loop now hands its items to the parallel sweeper, so the guard
+    follows: whichever of the two runs them, neither may sweep the book alone.
+    """
     import pathlib
 
     loop = pathlib.Path("run_collector.py").read_text(encoding="utf-8")
-    assert "sweep_both_sides" in loop
-    assert "collector.sweep_buy_orders(" not in loop, \
-        "sweeping one side alone is what left every ceiling too high"
+    runner = pathlib.Path("src/parallel.py").read_text(encoding="utf-8")
+    assert "sweep_items(" in loop
+    assert "sweep_both_sides" in runner
+    for source in (loop, runner):
+        assert "sweep_buy_orders(" not in source, \
+            "sweeping one side alone is what left every ceiling too high"
 
 
 def _held(db, item_id, ranges):

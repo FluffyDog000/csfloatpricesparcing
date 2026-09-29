@@ -22,6 +22,7 @@ keeps its own, which is what lets a sweep run several books at once.
 """
 from __future__ import annotations
 
+import logging
 import hashlib
 import threading
 import time
@@ -34,6 +35,8 @@ from .proxies import ProxyPool, RouteState
 MIN_ROUTES_PER_KEY = 2
 MAX_ROUTES_PER_KEY = 4
 DEFAULT_ROUTES_PER_KEY = 3
+
+log = logging.getLogger("csfloat.keyring")
 
 
 def fingerprint(key: str) -> str:
@@ -253,3 +256,33 @@ class KeyRing:
                      "failures": s.failures,
                      "disabled": s.disabled_reason}
                     for s in self.keys]
+
+
+def read_keys(path: str | None) -> list[str]:
+    """API keys from a file, one per line; blanks and # comments ignored.
+
+    A file rather than the database or the dashboard: the database is exported
+    to Telegram for backup and the dashboard is a web page, and a hundred keys
+    are a hundred credentials. Nothing here logs a key - callers that report
+    progress use `fingerprint`.
+
+    A missing or unreadable file yields nothing rather than raising: running
+    on one key is the normal state until the rest arrive, and a typo in a path
+    should not stop the collector.
+    """
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError as exc:
+        log.warning("Could not read the key file %s: %s", path, exc)
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        key = line.split("#", 1)[0].strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out

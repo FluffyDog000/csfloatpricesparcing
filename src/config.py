@@ -47,6 +47,12 @@ class HttpConfig:
     # its own budget; the pool tracks them separately.
     proxies: list[str] = field(default_factory=list)
     use_direct: bool = True
+    # A file of API keys, one per line, for running several sweeps at once.
+    # A file rather than a setting in the database or the dashboard: a hundred
+    # keys are a hundred credentials, and the database is exported to Telegram
+    # for backup while the dashboard is a web page. A path here keeps them on
+    # disk with whatever mode the operator gave the file.
+    keys_file: str | None = None
 
 
 @dataclass
@@ -167,6 +173,7 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             api_key=_env("CSFLOAT_API_KEY"),
             proxies=parse_proxy_list(_env("CSFLOAT_PROXIES")),
             use_direct=(_env("CSFLOAT_USE_DIRECT", "1") or "1") != "0",
+            keys_file=_env("CSFLOAT_KEYS_FILE"),
         ),
         polling=PollingConfig(
             interval_min_minutes=imin,
