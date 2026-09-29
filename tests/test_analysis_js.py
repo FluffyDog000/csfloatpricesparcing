@@ -667,3 +667,14 @@ def test_a_band_read_empty_is_not_called_uncollected():
     assert "стакан продаж не читался" in row
     assert "в этой полосе лотов не было при обходе" in row
     assert "function bandRow(b, depthAt, depthBands)" in source
+
+
+def test_nothing_queued_says_which_filter_took_the_items():
+    """"Список пуст" was said whenever nothing was queued - which, since the
+    sweep began skipping fresh and screened-out items, is nearly never what
+    happened. The list had one item, it was filtered, and the reason was in
+    the reply and thrown away."""
+    source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
+    block = source.split('$("an-sweep")')[1].split("const before")[0]
+    assert "r.skipped" in block
+    assert "все предметы отсеяны" in block

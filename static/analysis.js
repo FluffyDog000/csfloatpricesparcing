@@ -910,7 +910,15 @@
     $("an-sweep").onclick = () => action("Ставлю обход в очередь", async () => {
       const r = await postJSON("/api/analysis/sweep", {}, token());
       if (!r.queued.length) {
-        say("Нечего обходить — список пуст.", "err");
+        // "Список пуст" was said whenever nothing was queued, which since the
+        // sweep started skipping fresh and screened-out items is nearly never
+        // what happened: the list had items and every one was filtered. The
+        // reason is right there in the reply and was being thrown away.
+        const why = (r.skipped || []).map(
+          (s) => `${s.item}: ${s.reason}`).join("; ");
+        say(why
+          ? `Обходить нечего — все предметы отсеяны. ${why}`
+          : "Нечего обходить — список пуст.", "err");
         return;
       }
       if (r.waiting && r.waiting.length) {
