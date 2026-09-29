@@ -25,6 +25,11 @@ from .orders import (DEFAULT_LIMIT, LISTINGS_PAGE, LISTINGS_PATH, MAX_BANDS,
                      extract_listing_id, extract_listings, merge_listings,
                      merge_orders, parse_orders, plan_bands, wear_range)
 from .depth import DEPTH_STEP, depth_profile, depth_url, extract_depth
+
+# How long a band just read counts as still read, for a sweep pressed again
+# after one was cut short. Not a freshness policy: a deliberate refresh past
+# this window re-reads everything.
+BAND_REUSE_SECONDS = 900.0
 from .executor import CANCEL, Action
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
@@ -1096,6 +1101,33 @@ class Collector:
                 name, f"стакан покупки прочитан, листинги — нет: {trouble}"[:160])
         return out
 
+    def _recent_bands(self, item_id: int) -> set[tuple[float, float]]:
+        """Bands read so recently that reading them again buys nothing.
+
+        Scoped to one retry's worth of time, not to freshness in general: the
+        case this serves is a sweep stopped by a limit and started again, and
+        anything older than that the operator meant to refresh.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        try:
+            rows = self.db.listing_depth(item_id)
+        except Exception:  # noqa: BLE001 - an older DB has no such table
+            return set()
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=BAND_REUSE_SECONDS)
+        out: set[tuple[float, float]] = set()
+        for row in rows:
+            try:
+                when = datetime.fromisoformat(str(row["fetched_at"]))
+            except (TypeError, ValueError):
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if when >= cutoff:
+                out.add((round(float(row["float_min"]), 4),
+                         round(float(row["float_max"]), 4)))
+        return out
+
     def _sell_side_is_staler(self, item_id: int) -> bool:
         """Whether the listings were read longer ago than the book.
 
@@ -1168,11 +1200,21 @@ class Collector:
         # that stopped halfway writes "no lots" over every band still to come -
         # newer than the real reading, and read in its place.
         read: list[tuple[float, float]] = []
+        # Bands the previous attempt got through minutes ago. A sweep that was
+        # cut short is pressed again, and re-reading what it had just finished
+        # spends the quota that ran out in the first place. Only the very
+        # recent count: past that, "обойти" has to mean it.
+        done = self._recent_bands(item_id)
+        result["reused"] = 0
         failed = 0
         a = lo if start is None else max(lo, round(start, 4))
         result["started_at"] = a
         while a < hi - 1e-9 and result["bands"] < MAX_BANDS:
             b = round(min(a + DEPTH_STEP, hi), 4)
+            if (round(a, 4), b) in done:
+                result["reused"] += 1
+                a = b
+                continue
             try:
                 payload = self._fetch_band(
                     depth_url(self.config.http.base_url, name, round(a, 4), b),

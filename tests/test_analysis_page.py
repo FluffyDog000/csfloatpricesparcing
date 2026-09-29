@@ -1035,3 +1035,74 @@ def test_a_book_read_and_found_empty_is_a_reading_like_any_other():
     db.replace_buy_orders(item_id, [])
     assert db.book_swept_at(item_id), "an empty sweep still counts as read"
     db.close()
+
+
+def test_adding_an_item_does_not_re_sweep_the_ones_already_done():
+    """The button queued the whole list, so a tenth item re-bought the nine
+    already read - thirty-odd requests a head, against a budget of two hundred
+    an hour per address."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _many_items([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    from src.depth import depth_profile
+
+    db.replace_buy_orders(item_id, [
+        {"price": 50.0, "qty": 1, "float_min": 0.15, "float_max": 0.19}])
+    db.record_listing_depth(item_id, depth_profile(
+        [{"id": "L1", "price": 52.0, "float": 0.16, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None}],
+        (0.15, 0.38)))
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+
+    body = c.post("/api/analysis/sweep", json={}).get_json()
+    assert body["queued"] == []
+    assert any("обойдён" in s["reason"] for s in body["skipped"])
+    assert "запросов" in body["note"], "and says what that saved"
+
+
+def test_a_forced_sweep_reads_it_anyway():
+    """"Обойти" has to mean it when the operator says so."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _many_items([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    from src.depth import depth_profile
+
+    db.replace_buy_orders(item_id, [
+        {"price": 50.0, "qty": 1, "float_min": 0.15, "float_max": 0.19}])
+    db.record_listing_depth(item_id, depth_profile(
+        [{"id": "L1", "price": 52.0, "float": 0.16, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None}],
+        (0.15, 0.38)))
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+
+    assert c.post("/api/analysis/sweep",
+                  json={"force": True}).get_json()["queued"] == [name]
+
+
+def test_an_item_short_of_bands_is_swept_even_when_recent():
+    """A sweep cut short leaves fewer bands than the wear range implies, and
+    that is precisely the item that needs the requests."""
+    name = "★ Specialist Gloves | Big Swell (Field-Tested)"
+    c = _many_items([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    from src.depth import depth_profile
+
+    db.replace_buy_orders(item_id, [
+        {"price": 50.0, "qty": 1, "float_min": 0.15, "float_max": 0.19}])
+    # Two bands of the twelve a Field-Tested range holds.
+    db.record_listing_depth(item_id, depth_profile(
+        [{"id": "L1", "price": 52.0, "float": 0.16, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None}],
+        (0.15, 0.19)))
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+
+    assert c.post("/api/analysis/sweep", json={}).get_json()["queued"] == [name]

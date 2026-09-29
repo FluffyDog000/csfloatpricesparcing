@@ -173,6 +173,31 @@ def extract_listings(payload: Any) -> list[dict]:
     return out
 
 
+def sweep_cost(name: str) -> int:
+    """Requests one full sweep of an item costs, both sides.
+
+    Buy side: a page of lots to plan from, up to two more when that page
+    misses an end of the wear range, then one request per 0.01 band holding a
+    lot - capped, since a fixed grid on a wide range is what the cap exists to
+    stop. Sell side: one per 0.02 band, every band asked.
+
+    An upper bound, not an average: bands with no lots are never requested, so
+    a thin item costs a fraction of this. It replaces a flat "about six",
+    which was roughly right for a Minimal Wear range and six times short for a
+    Field-Tested one - and that number was what the screen used to tell the
+    reader how many requests the screen had saved them.
+    """
+    from .depth import DEPTH_STEP
+
+    span = wear_range(name)
+    if not span:
+        return 0
+    width = max(0.0, span[1] - span[0])
+    buy = min(math.ceil(round(width / BAND_STEP, 6)), MAX_BANDS) + 3
+    sell = min(math.ceil(round(width / DEPTH_STEP, 6)), MAX_BANDS)
+    return buy + sell
+
+
 def plan_bands(listings: list[dict], step: float = BAND_STEP,
                max_bands: int = MAX_BANDS) -> list[dict]:
     """Pick one listing per float band — the sweep's request plan.

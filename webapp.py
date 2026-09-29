@@ -842,6 +842,7 @@ def api_analysis_sweep():
 
     The web process never talks to CSFloat: the collector owns the routes and
     the rate limits, so it does the fetching and this only asks."""
+    from src.orders import sweep_cost
     from src.screen import look
 
     _require_admin()
@@ -855,6 +856,11 @@ def api_analysis_sweep():
     # over an hour of asking on the path that once drew "too many requests
     # from too many IPs". An item the history already rules out must not be
     # bought a place in that queue.
+    # Adding a tenth item used to re-sweep the nine already done: the button
+    # queued the whole list. A book and a set of listings read an hour ago are
+    # what the analysis is about to read again, at thirty-odd requests a head.
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+
     wanted, skipped = [], []
     for name in names:
         item_id = db.get_item_id(name)
@@ -862,7 +868,11 @@ def api_analysis_sweep():
             continue
         verdict = look(_sales_for(db, item_id, params), screen,
                        params.window_days, params.fee)
-        (wanted if verdict.passed else skipped).append((name, verdict.reason))
+        if not verdict.passed:
+            skipped.append((name, verdict.reason))
+            continue
+        fresh = "" if force else _sweep_not_needed(db, item_id, name)
+        (skipped if fresh else wanted).append((name, fresh or verdict.reason))
 
     queued = [n for n, _ in wanted if db.request_orders(n)]
     db.set_setting("orders_error", "")
@@ -878,8 +888,9 @@ def api_analysis_sweep():
                  if waiting else
                  f"Обхожу обе стороны по {len(queued)} предмет(ам) — стакан и "
                  f"листинги, до минуты на каждый."
-                 + (f" Отсев по истории снял {saved} — это примерно "
-                    f"{saved * 6} запросов, которые не придётся тратить."
+                 + (f" Пропущено {saved} — отсев по истории и уже свежие: "
+                    f"до {sum(sweep_cost(n) for n, _ in skipped)} запросов, "
+                    f"которые не придётся тратить."
                     if saved else "")),
     })
 
@@ -892,6 +903,50 @@ def _json_setting(db, key: str):
 
 
 BOOK_UNREAD = "стакан покупки не читался — сначала обход"
+
+# How long a completed reading of both sides counts as current for the sweep
+# button. Long enough that adding an item to the list does not re-buy the ones
+# already done; short enough that "обойти" still means it when the market has
+# had time to move.
+SWEEP_FRESH_MINUTES = 45.0
+
+
+def _sweep_not_needed(db, item_id: int, name: str) -> str:
+    """Why this item does not need the requests, or "" when it does.
+
+    Three ways to need them: the book was never read, the listings are short
+    of the bands the wear range implies - a sweep cut short leaves exactly
+    that - or what we have has aged out.
+    """
+    from datetime import datetime, timezone
+
+    from src.depth import depth_profile
+    from src.depth_sweep import needs_prices
+    from src.orders import wear_range
+
+    swept = db.book_swept_at(item_id)
+    if not swept:
+        return ""
+    try:
+        depth = db.listing_depth(item_id)
+    except Exception:  # noqa: BLE001 - an older DB has no such table
+        return ""
+    span = wear_range(name)
+    if needs_prices(depth, span):
+        return ""
+    if span and len(depth) < len(depth_profile([], span)):
+        return ""
+    newest = max([swept] + [str(b["fetched_at"]) for b in depth])
+    try:
+        when = datetime.fromisoformat(newest)
+    except (TypeError, ValueError):
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - when).total_seconds() / 60.0
+    if age >= SWEEP_FRESH_MINUTES:
+        return ""
+    return f"обойдён {age:.0f} мин назад — обе стороны на месте"
 
 
 def _refuse_unread_book(db, item_id: int, bands: list) -> list:

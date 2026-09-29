@@ -602,3 +602,75 @@ def test_a_refusal_is_not_retried():
         col._fetch_band("https://csfloat.com/x")
     assert len(calls) == 1
     db.close()
+
+
+def test_a_retry_does_not_re_read_the_bands_it_just_finished():
+    """A sweep stopped by a limit gets pressed again, and re-reading what it
+    had just got through spends the quota that ran out in the first place."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+    from src.depth import depth_profile
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    # The first attempt got through the two lowest bands a moment ago.
+    db.record_listing_depth(item_id, depth_profile(
+        [{"id": "L1", "price": 52.0, "float": 0.16, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None},
+         {"id": "L2", "price": 53.0, "float": 0.18, "type": "buy_now",
+          "created_at": "2026-09-28T00:00:00+00:00", "min_offer_price": None}],
+        (0.15, 0.19)))
+
+    asked = []
+    col.client.fetch_json = lambda url, headers=None: (
+        asked.append(url), {"data": []})[1]
+    result = col.sweep_listing_depth(name, item_id)
+
+    assert result["reused"] == 2, "the two stored bands were not asked for again"
+    assert not any("min_float=0.15" in u for u in asked)
+    assert not any("min_float=0.17" in u for u in asked)
+    assert any("min_float=0.19" in u for u in asked), "the rest was read"
+    db.close()
+
+
+def test_a_band_read_long_ago_is_read_again():
+    """Not a freshness policy: a deliberate refresh past the window has to
+    mean it, or "обойти" stops refreshing anything."""
+    import logging
+    import os
+    import tempfile
+
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    name = "★ Specialist Gloves | Fade (Field-Tested)"
+    item_id = db.add_item(name)
+    db.conn.execute(
+        "INSERT INTO listing_depth (item_id, fetched_at, float_min, float_max,"
+        " listings, cheapest, asks) VALUES (?,?,?,?,?,?,?)",
+        (item_id, "2026-09-01T00:00:00+00:00", 0.15, 0.17, 2, 52.0,
+         '[[52.0, 0.16]]'))
+    db.conn.commit()
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    assert col._recent_bands(item_id) == set()
+    db.close()
