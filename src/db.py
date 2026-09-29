@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -178,14 +179,50 @@ _UNSET = object()
 
 
 class Database:
+    """One database, one connection per thread that asks for it.
+
+    A sqlite connection belongs to the thread that opened it, and the sweeps
+    are about to run several at once - one per API key, each reading items and
+    writing what it found. Sharing one connection across them raises
+    ProgrammingError on the first crossing thread, and passing the database
+    between threads by hand would mean threading it through every call site.
+
+    So `conn` is per thread, opened on first use and configured the same way
+    each time. The schema is created once, by whichever thread built the
+    object; the rest only connect. WAL is what makes this safe to do: readers
+    do not block the writer and the writer does not block readers, and the
+    busy timeout covers the one case left, two writers meeting on the same
+    page.
+    """
+
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path))
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.execute("PRAGMA foreign_keys=ON;")
+        self._local = threading.local()
+        self._all: list[sqlite3.Connection] = []
+        self._all_lock = threading.Lock()
         self._init_schema()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        # Two writers meeting is the one contention WAL does not remove. Wait
+        # rather than raise: a sweep losing a band to "database is locked"
+        # spends a request for nothing.
+        conn.execute("PRAGMA busy_timeout=10000;")
+        with self._all_lock:
+            self._all.append(conn)
+        return conn
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._connect()
+            self._local.conn = conn
+        return conn
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA)
@@ -267,7 +304,21 @@ class Database:
             self.conn.execute("ALTER TABLE listing_depth ADD COLUMN asks TEXT")
 
     def close(self) -> None:
-        self.conn.close()
+        """Close every connection this database handed out.
+
+        A worker thread that has finished leaves its connection behind, and on
+        a long-lived collector those accumulate one file handle at a time. The
+        caller closing the database means all of it, not just the connection
+        belonging to whoever called.
+        """
+        with self._all_lock:
+            conns, self._all = self._all, []
+        for conn in conns:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass          # already closed, or closed from its own thread
+        self._local = threading.local()
 
     # -- settings (key/value) ------------------------------------------------
 
