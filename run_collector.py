@@ -221,10 +221,14 @@ def run_forever(collector: Collector) -> None:
                 # one key this is the same loop it replaces, one item after
                 # another.
                 done = sweep_items(collector, names)
-                if done["workers"] > 1:
-                    log.info("Swept %d item(s) on %d worker(s), %d failed",
-                             len(done["swept"]), done["workers"],
-                             len(done["failed"]))
+                # Logged whatever the count, including one worker. Written
+                # only when several ran, the line's absence meant either "the
+                # sweep never happened" or "it ran on one worker", and there
+                # was no way to tell which - the exact ambiguity that cost
+                # this project several evenings.
+                log.info("Swept %d of %d item(s) on %d worker(s), %d failed",
+                         len(done["swept"]), len(names), done["workers"],
+                         len(done["failed"]))
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()

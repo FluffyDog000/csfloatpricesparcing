@@ -146,3 +146,16 @@ def test_the_collector_only_rings_up_when_there_is_more_than_one_key():
     assert "_attach_keyring(collector)" in source
     assert "len(keys) < 2" in source, \
         "one key is the single-clock path, not a ring of one"
+
+
+def test_the_sweep_is_logged_whatever_the_worker_count():
+    """Written only when several ran, the line's absence meant either "the
+    sweep never happened" or "it ran on one worker" - and there was no way to
+    tell which."""
+    import pathlib
+
+    source = pathlib.Path("run_collector.py").read_text(encoding="utf-8")
+    block = source.split("done = sweep_items(")[1].split("\n\n")[0]
+    assert 'if done["workers"] > 1' not in block, \
+        "a conditional log makes silence ambiguous"
+    assert "Swept %d of %d item(s) on %d worker(s)" in block
