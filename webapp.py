@@ -891,6 +891,31 @@ def _json_setting(db, key: str):
         return None
 
 
+BOOK_UNREAD = "стакан покупки не читался — сначала обход"
+
+
+def _refuse_unread_book(db, item_id: int, bands: list) -> list:
+    """Refuse to price an item whose competition nobody has measured.
+
+    With no book the pricing finds no rival, bids the whole ceiling, leaves no
+    room to answer an outbid, and counts every cheap sale as a fill nobody
+    would have taken from us. All three are wrong in the same direction, and
+    together they make an unswept item outrank the ones we have looked at - so
+    the plan offered to spend $787 on one.
+
+    The bands are still returned, with the reason, because "why is this item
+    not here" is asked of the table. Held orders are left alone: an unpriceable
+    band reconciles to KEEP, and cancelling a live order for want of a sweep
+    would be acting on the same ignorance from the other side.
+    """
+    if db.book_swept_at(item_id):
+        return bands
+    for band in bands:
+        band.take = False
+        band.reason = BOOK_UNREAD
+    return bands
+
+
 def _sales_for(db, item_id: int, params) -> list[dict]:
     """An item's sales with each one's age, which is what the scoring reads.
 
@@ -956,8 +981,8 @@ def api_analysis():
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
-        bands = [b.as_dict() for b in
-                 plan(sales, orders, wear_range(name), depth, params)]
+        bands = [b.as_dict() for b in _refuse_unread_book(
+            db, item_id, plan(sales, orders, wear_range(name), depth, params))]
         take = [b for b in bands if b["take"]]
         out.append({
             "item": name,
@@ -1033,8 +1058,9 @@ def api_analysis_plan():
         held[name] = sum(float(r["price"]) for r in mine)
         holding += [(name, float(r["float_min"]), float(r["float_max"]))
                     for r in mine]
-        candidates += [(name, b) for b in
-                       plan_bands(sales, orders, wear_range(name), depth, params)]
+        candidates += [(name, b) for b in _refuse_unread_book(
+            db, item_id,
+            plan_bands(sales, orders, wear_range(name), depth, params))]
 
     wanted_by_item = select_portfolio(candidates, limits, holding)
 

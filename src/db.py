@@ -222,6 +222,13 @@ class Database:
         if "orders_requested_at" not in cols:
             # Set by the dashboard's order button; cleared once fetched.
             self.conn.execute("ALTER TABLE items ADD COLUMN orders_requested_at TEXT")
+        if "orders_swept_at" not in cols:
+            # When the buy-order book was last read to completion - which an
+            # empty `buy_orders` table cannot tell you, because "nobody is
+            # bidding" and "nobody has looked" store identically. The pricing
+            # treats an empty book as no competition and bids the whole
+            # ceiling, so the difference is worth a column.
+            self.conn.execute("ALTER TABLE items ADD COLUMN orders_swept_at TEXT")
         if "listing_id" not in cols:
             # Cached id of one of the item's listings: buy orders are keyed by
             # listing, so a fetch needs one and re-resolving costs a request.
@@ -454,7 +461,13 @@ class Database:
         self.conn.commit()
 
     def replace_buy_orders(self, item_id: int, orders: list[dict[str, Any]]) -> int:
-        """Store the current book, dropping the previous snapshot."""
+        """Store the current book, dropping the previous snapshot.
+
+        Storing one is what "the book has been read" means, so the timestamp
+        is written here rather than left to each caller to remember. An empty
+        list is a reading too - it says nobody is bidding, which is a fact,
+        and quite different from nobody having looked.
+        """
         now = utcnow_iso()
         self.conn.execute("DELETE FROM buy_orders WHERE item_id = ?", (item_id,))
         self.conn.executemany(
@@ -466,8 +479,23 @@ class Database:
               i, now)
              for i, o in enumerate(orders)],
         )
+        self.conn.execute(
+            "UPDATE items SET orders_swept_at = ? WHERE id = ?", (now, item_id))
         self.conn.commit()
         return len(orders)
+
+    def mark_book_swept(self, item_id: int) -> None:
+        """Note that the book was read through, whatever it held."""
+        self.conn.execute(
+            "UPDATE items SET orders_swept_at = ? WHERE id = ?",
+            (utcnow_iso(), item_id))
+        self.conn.commit()
+
+    def book_swept_at(self, item_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT orders_swept_at FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        return (row["orders_swept_at"] if row else None) or None
 
     def record_book_profile(self, item_id: int,
                             profile: list[dict[str, Any]]) -> int:

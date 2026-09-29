@@ -981,3 +981,57 @@ def test_the_header_still_shows_the_short_build_of_all_assets():
     import re
     header = re.search(r'сб\. (\S+)</span>', page)
     assert header and len(header.group(1)) <= 6
+
+
+def test_an_item_whose_book_was_never_read_is_not_placed_on():
+    """With no book the pricing finds no rival, bids the whole ceiling, leaves
+    no room to answer an outbid, and counts every cheap sale as a fill nobody
+    would have taken from us. All three err the same way, so an unswept item
+    outranks the ones we have looked at - and the plan offered $787.50 on one.
+    """
+    import datetime as dt
+
+    name = "★ Broken Fang Gloves | Unhinged (Field-Tested)"
+    c = _app([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    now = dt.datetime.now(dt.timezone.utc)
+    spread = (-8.0, -4.0, 0.0, 4.0, 8.0, 12.0)
+    rows = []
+    for k, f in enumerate((0.155, 0.165, 0.175)):
+        for i in range(16):
+            price = (50.0 - 2.0 * k) + spread[i % len(spread)]
+            rows.append((f"{name}{f}{i}", item_id, name, int(price * 100), price,
+                         f, (now - dt.timedelta(days=(i % 13) + 0.5)).isoformat()))
+    db.conn.executemany(
+        "INSERT INTO sales (sale_id, item_id, market_hash_name, price_cents, "
+        "price, float_value, sold_at, sold_at_estimated, scraped_at) "
+        "VALUES (?,?,?,?,?,?,?,0,?)", [r + (r[-1],) for r in rows])
+    db.conn.commit()
+    assert db.book_swept_at(item_id) is None
+    db.close()
+    c.post("/api/analysis/items", json={"market_hash_name": name})
+    c.post("/api/analysis/params", json={"an_total_capital": "5000"})
+
+    body = c.get("/api/analysis").get_json()["items"][0]
+    assert body["bands"], "the bands are still shown"
+    assert not any(b["take"] for b in body["bands"])
+    assert all("стакан покупки не читался" in b["reason"]
+               for b in body["bands"])
+
+    plan = c.get("/api/analysis/plan").get_json()
+    assert not [a for a in plan["actions"] if a["kind"] == "place"]
+
+
+def test_a_book_read_and_found_empty_is_a_reading_like_any_other():
+    """"Nobody is bidding" is a fact about the market; "nobody has looked" is
+    a fact about us. They used to store identically."""
+    name = "★ Broken Fang Gloves | Unhinged (Field-Tested)"
+    c = _app([name])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.replace_buy_orders(item_id, [])
+    assert db.book_swept_at(item_id), "an empty sweep still counts as read"
+    db.close()
