@@ -29,6 +29,11 @@ ACCOUNT_BLOCK_SECONDS = 6 * 3600.0
 COOLDOWN_BASE_SECONDS = 60.0
 COOLDOWN_MAX_SECONDS = 900.0
 
+# How long a caller waits for some key to come round before giving up. Long
+# enough to ride out one key's spacing, short enough that a sweep reports a
+# jam rather than hanging in it.
+LEASE_WAIT_SECONDS = 120.0
+
 
 class AuthError(Exception):
     """Raised on 401/403 — the session cookie/token needs manual refresh.
@@ -79,9 +84,15 @@ class EdgeBlocked(Exception):
 
 
 class CSFloatClient:
-    def __init__(self, http: HttpConfig, polling: PollingConfig):
+    def __init__(self, http: HttpConfig, polling: PollingConfig,
+                 keyring=None):
         self.http = http
         self.polling = polling
+        # With a key ring, every key has its own clock and its own cooldown,
+        # and a request leases one of its own addresses. Without one - the
+        # single-key setup this has always been - the pool and the shared
+        # clock below behave exactly as before.
+        self.keyring = keyring
         self._last_request_ts = 0.0
         self._lock = threading.Lock()
         # Global 429 cooldown shared by every item: when CSFloat rate-limits us
@@ -249,7 +260,8 @@ class CSFloatClient:
         seen = float(state.get("seen_at") or now)
         return max(0.0, reset - (now - seen))
 
-    def _enter_cooldown(self, retry_after: float | None = None) -> float:
+    def _enter_cooldown(self, retry_after: float | None = None,
+                        key=None) -> float:
         """Escalating global pause after a 429: 1, 2, 4 ... minutes (capped).
 
         Never shorter than what CSFloat says is left on the clock. Waiting a
@@ -268,6 +280,15 @@ class CSFloatClient:
             wait = max(wait, retry_after)
         # The header is a fact about the account; the backoff above is a guess.
         wait = max(wait, min(self.reset_in(), ACCOUNT_BLOCK_SECONDS))
+        # A refusal belongs to whoever drew it. Held globally, one 429 stopped
+        # every key at once, which is the whole of the throughput a hundred
+        # keys were meant to buy - so with a ring the key waits and the others
+        # carry on. The escalating counter stays shared on purpose: repeated
+        # refusals across different keys are an account-level signal, and
+        # resetting it per key would hide exactly that.
+        if key is not None and self.keyring is not None:
+            self.keyring.note_rate_limit(key.key, wait)
+            return wait
         self._cooldown_until = time.monotonic() + wait
         return wait
 
@@ -315,6 +336,40 @@ class CSFloatClient:
             "seen_at": time.time(),
         }
 
+    def _lease(self):
+        """Who speaks, from where, and after what wait.
+
+        Returns (route, key, applied_headers). Without a ring this is the old
+        behaviour spelled out: the pool picks, the shared clock paces, and the
+        key is whatever `.env` configured.
+        """
+        if self.keyring is None:
+            route = self.pool.pick()
+            if route is None:
+                wait = self.pool.wait_seconds()
+                raise NoRouteAvailable(
+                    f"нет доступных маршрутов, ближайший освободится через "
+                    f"{wait / 60:.0f} мин" if wait > 0 else
+                    "нет доступных маршрутов")
+            self._respect_spacing()
+            return route, None
+
+        # A ring paces itself: `lease` hands back only a key whose own clock
+        # has come round, so there is no global gap to respect.
+        deadline = time.monotonic() + LEASE_WAIT_SECONDS
+        while True:
+            leased = self.keyring.lease()
+            if leased is not None:
+                state, route = leased
+                return route, state
+            wait = self.keyring.wait_seconds()
+            if wait <= 0 or time.monotonic() + wait > deadline:
+                raise NoRouteAvailable(
+                    f"все ключи заняты или на паузе, ближайший освободится "
+                    f"через {wait:.0f} с" if wait > 0 else
+                    "ни одного рабочего ключа с адресом")
+            time.sleep(min(wait, 1.0))
+
     def _respect_spacing(self) -> None:
         """Ensure at least `min_seconds_between_requests` between calls."""
         with self._lock:
@@ -331,13 +386,8 @@ class CSFloatClient:
         a 429 arms the same cooldown a sales poll would — the limit belongs to
         the account, not to the endpoint. It does not retry, though: nothing
         here is worth delaying the sales polling for."""
-        route = self.pool.pick()
-        if route is None:
-            wait = self.pool.wait_seconds()
-            raise NoRouteAvailable(
-                f"нет доступных маршрутов, ближайший освободится через "
-                f"{wait / 60:.0f} мин" if wait > 0 else "нет доступных маршрутов")
-        self._respect_spacing()
+        route, key = self._lease()
+        headers = self._with_key(headers, key)
         try:
             resp = self.session.get(url, timeout=self.http.timeout_seconds,
                                     proxies=route.proxies(), headers=headers)
@@ -345,8 +395,10 @@ class CSFloatClient:
             # Fault the route like a sales poll does, so a proxy that keeps
             # dropping connections leaves rotation instead of failing forever.
             self.pool.record_failure(route, exc)
+            if key is not None and self.keyring is not None:
+                self.keyring.note_failure(key.key)
             raise
-        return self._read(resp, route, url)
+        return self._read(resp, route, url, key)
 
     def send_json(self, method: str, url: str, body: object | None = None,
                   headers: dict[str, str] | None = None) -> object:
@@ -356,23 +408,33 @@ class CSFloatClient:
         counts them against the same account and the same address. Writes are
         never retried: a request that may already have placed an order is not
         one to send twice on a guess."""
-        route = self.pool.pick()
-        if route is None:
-            wait = self.pool.wait_seconds()
-            raise NoRouteAvailable(
-                f"нет доступных маршрутов, ближайший освободится через "
-                f"{wait / 60:.0f} мин" if wait > 0 else "нет доступных маршрутов")
-        self._respect_spacing()
+        route, key = self._lease()
+        headers = self._with_key(headers, key)
         try:
             resp = self.session.request(
                 method.upper(), url, json=body, headers=headers,
                 timeout=self.http.timeout_seconds, proxies=route.proxies())
         except requests.RequestException as exc:
             self.pool.record_failure(route, exc)
+            if key is not None and self.keyring is not None:
+                self.keyring.note_failure(key.key)
             raise
-        return self._read(resp, route, url)
+        return self._read(resp, route, url, key)
 
-    def _read(self, resp, route, url: str) -> object:
+    def _with_key(self, headers, key):
+        """Send the leased key rather than the one `.env` happens to hold.
+
+        A ring exists so a hundred keys can speak at once; sending one key's
+        Authorization on another key's address would make them one client
+        again, with the addresses spread over it.
+        """
+        if key is None:
+            return headers
+        out = dict(headers or {})
+        out["Authorization"] = key.key
+        return out
+
+    def _read(self, resp, route, url: str, key=None) -> object:
         """Shared handling: the limits and refusals are the same either way."""
         self._capture_rate_headers(resp)
         self._feed_pool(route, resp)
@@ -394,7 +456,7 @@ class CSFloatClient:
             # left nothing behind - and a refusal with no headers and no body
             # cannot be told apart from a quota that simply ran out.
             self._remember_429(resp)
-            wait = self._enter_cooldown(retry_after)
+            wait = self._enter_cooldown(retry_after, key)
             self.pool.record_429(route, wait)
             raise RateLimited(
                 f"429 on a side request; polling paused for {wait / 60:.1f} min")

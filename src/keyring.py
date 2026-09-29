@@ -62,6 +62,11 @@ class KeyState:
     failures: int = 0
     # Set when CSFloat refuses this key outright (revoked, or not entitled).
     disabled_reason: str | None = None
+    # A 429 belongs to whoever drew it. Held globally, one refusal stopped
+    # every key at once - which is the whole of the throughput a hundred keys
+    # were meant to buy.
+    cooldown_until: float = 0.0   # monotonic
+    rate_limits: int = 0
 
     @property
     def name(self) -> str:
@@ -69,7 +74,13 @@ class KeyState:
 
     def ready_at(self, spacing: float) -> float:
         """Monotonic time this key may speak again."""
-        return self.last_request + spacing
+        return max(self.last_request + spacing, self.cooldown_until)
+
+    def enter_cooldown(self, seconds: float, now: float) -> float:
+        """Hold this key back, without touching any other."""
+        self.rate_limits += 1
+        self.cooldown_until = max(self.cooldown_until, now + max(0.0, seconds))
+        return self.cooldown_until - now
 
     def note_request(self, now: float) -> None:
         self.last_request = now
@@ -190,6 +201,21 @@ class KeyRing:
         return min(waits)
 
     # -- health --------------------------------------------------------------
+
+    def note_rate_limit(self, key: str, seconds: float) -> float:
+        """One key drew a 429; the rest keep working."""
+        now = time.monotonic()
+        with self._lock:
+            for state in self.keys:
+                if state.key == key:
+                    return state.enter_cooldown(seconds, now)
+        return 0.0
+
+    def cooling(self) -> list[KeyState]:
+        """Keys currently held back by a refusal of their own."""
+        now = time.monotonic()
+        with self._lock:
+            return [s for s in self.keys if s.cooldown_until > now]
 
     def disable(self, key: str, reason: str) -> None:
         """Take a key out of rotation: revoked, or refused by CSFloat."""
