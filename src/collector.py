@@ -40,6 +40,7 @@ from .pacing import (
     adaptive_minutes,
     window_start,
 )
+from .catalog import meta_from
 from .parser import extract_icon_hash, extract_records, parse_sales
 
 log = logging.getLogger("csfloat.collector")
@@ -1800,3 +1801,13 @@ class Collector:
                     self.db.set_icon(name, url)
         except Exception as exc:  # noqa: BLE001
             log.debug("icon extract skipped for '%s': %s", name, exc)
+
+        # Rarity and collection ride on the same records, and the item list
+        # is filtered by both. Same terms as the icon: free, and never allowed
+        # to cost the poll anything.
+        try:
+            meta = meta_from(extract_records(payload))
+            if meta["rarity"] is not None or meta["collection"]:
+                self.db.set_meta(name, meta["rarity"], meta["collection"])
+        except Exception as exc:  # noqa: BLE001
+            log.debug("meta extract skipped for '%s': %s", name, exc)

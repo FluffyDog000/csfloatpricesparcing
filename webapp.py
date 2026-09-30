@@ -451,6 +451,8 @@ def item_page(name: str):
 
 @app.route("/api/items")
 def api_items():
+    from src.catalog import CATEGORIES, WEARS, describe, rarity_label
+
     db = get_db()
     rows = db.items_summary()
     out = []
@@ -470,7 +472,22 @@ def api_items():
                 "folder": folder,
                 "icon_url": icon,
                 "total_sales": r["total_sales"],
+                # Recent windows. The page sorted on sales_7d and sales_30d
+                # while this reply never carried them, so both sorts were a
+                # no-op on zeros.
+                "sales_1d": r["sales_1d"] or 0,
+                "sales_7d": r["sales_7d"] or 0,
+                "sales_30d": r["sales_30d"] or 0,
+                "sales_90d": r["sales_90d"] or 0,
                 "avg_price": r["avg_price"],
+                # What it goes for now; the all-time average drifts with the
+                # history's age.
+                "price": r["avg_price_30d"] if r["avg_price_30d"] is not None
+                else r["avg_price"],
+                "rarity": r["rarity"],
+                "rarity_name": rarity_label(r["rarity"]),
+                "collection": r["collection"],
+                **describe(name),
                 "min_price": round(r["min_price"], 2) if r["min_price"] is not None else None,
                 "max_price": round(r["max_price"], 2) if r["max_price"] is not None else None,
                 "last_polled_at": r["last_polled_at"],
@@ -482,6 +499,11 @@ def api_items():
             "items": out,
             "folders": sorted(folders),
             "last_update": db.last_successful_poll(),
+            # Labels, so the page does not keep its own copy of them. Pairs,
+            # not an object: the JSON encoder sorts keys, and the order here is
+            # the order the chips are meant to read in.
+            "categories": [[k, v] for k, v in CATEGORIES.items()],
+            "wears": [[code, ru] for code, _, ru in WEARS],
         }
     )
 

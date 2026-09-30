@@ -11,6 +11,8 @@
 </div>
 
 <div class="filters">
+  <button class="btn" id="filters-toggle">Фильтры <span id="filters-count"></span></button>
+  <button class="btn" id="filters-reset" hidden>сбросить</button>
   <label>цена от <input type="number" id="price-min" class="input num-input" placeholder="0" min="0" step="1"></label>
   <label>до <input type="number" id="price-max" class="input num-input" placeholder="∞" min="0" step="1"></label>
   <label>сортировка
@@ -18,16 +20,58 @@
       <option value="name">по названию</option>
       <option value="price-desc">цена ↓</option>
       <option value="price-asc">цена ↑</option>
+      <option value="period-desc">продаж за период ↓</option>
+      <option value="period-asc">продаж за период ↑</option>
+      <option value="sales1-desc">продаж за 24 часа ↓</option>
       <option value="sales7-desc">продаж за 7 дней ↓</option>
       <option value="sales7-asc">продаж за 7 дней ↑</option>
       <option value="sales30-desc">продаж за 30 дней ↓</option>
       <option value="sales30-asc">продаж за 30 дней ↑</option>
+      <option value="sales90-desc">продаж за 90 дней ↓</option>
       <option value="sales-desc">всего продаж ↓</option>
       <option value="sales-asc">всего продаж ↑</option>
+      <option value="last-desc">последняя продажа: свежие</option>
+      <option value="last-asc">последняя продажа: давние</option>
+      <option value="rarity-desc">редкость ↓</option>
+      <option value="rarity-asc">редкость ↑</option>
     </select>
   </label>
   <label class="chk"><input type="checkbox" id="show-hidden"> показать скрытые</label>
   <span class="muted" id="filter-info"></span>
+</div>
+
+<div class="filter-panel" id="filter-panel" hidden>
+  <p class="muted fp-hint">Внутри группы отмеченное складывается («или»), группы
+    между собой сужают («и»). Число рядом — сколько предметов подойдёт, если
+    отметить. Цена — средняя за 30 дней.</p>
+  <div class="fgroup">
+    <div class="fgroup-title">Продажи</div>
+    <div class="fgroup-body">
+      от <input type="number" id="sales-min" class="input num-input" min="0" step="1" placeholder="0">
+      до <input type="number" id="sales-max" class="input num-input" min="0" step="1" placeholder="∞">
+      за <select id="sales-period" class="select">
+        <option value="sales_1d">24 часа</option>
+        <option value="sales_7d" selected>7 дней</option>
+        <option value="sales_30d">30 дней</option>
+        <option value="sales_90d">90 дней</option>
+        <option value="total_sales">всё время</option>
+      </select>
+      <span class="fgap"></span>
+      последняя продажа не старше
+      <input type="number" id="last-days" class="input num-input" min="0" step="1" placeholder="—"> дн.
+    </div>
+  </div>
+  <div class="fgroup" data-group="category"><div class="fgroup-title">Тип</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="wear"><div class="fgroup-title">Износ</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="rarity"><div class="fgroup-title">Редкость</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="special"><div class="fgroup-title">StatTrak™ / Souvenir</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="status"><div class="fgroup-title">Сбор</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="folder"><div class="fgroup-title">Папка</div><div class="fgroup-body chips"></div></div>
+  <div class="fgroup" data-group="collection">
+    <div class="fgroup-title">Коллекция
+      <input type="search" id="collection-search" class="input coll-search" placeholder="найти коллекцию…" autocomplete="off"></div>
+    <div class="fgroup-body chips chips-scroll"></div>
+  </div>
 </div>
 
 <div class="bulk-bar" id="bulk-bar" hidden>

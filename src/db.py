@@ -275,6 +275,12 @@ class Database:
             # Set by the dashboard's "poll now" button; the collector clears it
             # once the item has actually been polled.
             self.conn.execute("ALTER TABLE items ADD COLUMN poll_requested_at TEXT")
+        if "rarity" not in cols:
+            # Copied off the sales records on each poll (see catalog.meta_from):
+            # not in the name, and the list is filtered by it.
+            self.conn.execute("ALTER TABLE items ADD COLUMN rarity INTEGER")
+        if "collection" not in cols:
+            self.conn.execute("ALTER TABLE items ADD COLUMN collection TEXT")
 
         log_cols = {
             r["name"]
@@ -945,8 +951,8 @@ class Database:
         about when it was added than about how liquid it is."""
         where = "WHERE i.active = 1" if active_only else ""
         now = datetime.now(timezone.utc)
-        cut7 = (now - timedelta(days=7)).replace(microsecond=0).isoformat()
-        cut30 = (now - timedelta(days=30)).replace(microsecond=0).isoformat()
+        cut = {d: (now - timedelta(days=d)).replace(microsecond=0).isoformat()
+               for d in (1, 7, 30, 90)}
         q = f"""
             SELECT
                 i.id                       AS item_id,
@@ -957,9 +963,14 @@ class Database:
                 i.folder                   AS folder,
                 i.icon_url                 AS icon_url,
                 i.last_polled_at           AS last_polled_at,
+                i.rarity                   AS rarity,
+                i.collection               AS collection,
                 COUNT(s.sale_id)           AS total_sales,
+                SUM(CASE WHEN s.sold_at >= :cut1 THEN 1 ELSE 0 END)  AS sales_1d,
                 SUM(CASE WHEN s.sold_at >= :cut7 THEN 1 ELSE 0 END)  AS sales_7d,
                 SUM(CASE WHEN s.sold_at >= :cut30 THEN 1 ELSE 0 END) AS sales_30d,
+                SUM(CASE WHEN s.sold_at >= :cut90 THEN 1 ELSE 0 END) AS sales_90d,
+                AVG(CASE WHEN s.sold_at >= :cut30 THEN s.price END)  AS avg_price_30d,
                 AVG(s.price)               AS avg_price,
                 MIN(s.price)               AS min_price,
                 MAX(s.price)               AS max_price,
@@ -971,9 +982,12 @@ class Database:
             ORDER BY i.market_hash_name
         """
         out = []
-        for r in self.conn.execute(q, {"cut7": cut7, "cut30": cut30}).fetchall():
+        args = {f"cut{d}": iso for d, iso in cut.items()}
+        for r in self.conn.execute(q, args).fetchall():
             d = dict(r)
-            d["avg_price"] = round(d["avg_price"], 2) if d["avg_price"] is not None else None
+            for key in ("avg_price", "avg_price_30d"):
+                if d[key] is not None:
+                    d[key] = round(d[key], 2)
             out.append(d)
         return out
 
@@ -1113,6 +1127,16 @@ class Database:
             (market_hash_name,),
         ).fetchone()
         return dict(row) if row else None
+
+    def set_meta(self, market_hash_name: str, rarity: int | None,
+                 collection: str | None) -> None:
+        """Rarity and collection, as the sales records give them. A value the
+        response did not carry leaves the stored one alone."""
+        self.conn.execute(
+            "UPDATE items SET rarity = COALESCE(?, rarity), "
+            "collection = COALESCE(?, collection) WHERE market_hash_name = ?",
+            (rarity, collection, market_hash_name))
+        self.conn.commit()
 
     def set_icon(self, market_hash_name: str, icon_url: str | None) -> None:
         self.conn.execute(

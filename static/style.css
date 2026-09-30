@@ -422,3 +422,37 @@ tr.act-keep td { opacity: .6; }
 .item-report > summary { cursor: pointer; font-weight: 600; }
 .item-report > summary.ok-summary { color: var(--good); }
 #an-detail > summary { font-size: 18px; font-weight: 700; cursor: pointer; }
+
+/* Item filters ----------------------------------------------------------- */
+.filter-panel { background: var(--panel); border: 1px solid var(--line);
+                border-radius: 10px; padding: 10px 14px; margin: 8px 0 10px;
+                font-size: 13px; }
+.fp-hint { margin: 0 0 6px; font-size: 12px; }
+.fgroup { display: flex; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line);
+          align-items: flex-start; }
+.fgroup:first-of-type { border-top: 0; }
+.fgroup-title { flex: 0 0 150px; color: var(--muted); padding-top: 4px; }
+.fgroup-body { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+               color: var(--muted); }
+.fgap { flex: 0 0 18px; }
+.chips-scroll { max-height: 150px; overflow-y: auto; }
+.coll-search { display: block; margin-top: 6px; width: 140px; font-size: 12px; padding: 4px 6px; }
+.chip { border: 1px solid var(--line); background: var(--panel2); color: var(--text);
+        border-radius: 14px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+        white-space: nowrap; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip.empty { opacity: .45; }
+.chip .n { font-family: var(--mono); font-size: 11px; opacity: .75; margin-left: 4px; }
+.chip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+             margin-right: 5px; vertical-align: 0; }
+#filters-count { font-family: var(--mono); color: var(--accent); }
+#filters-toggle.active #filters-count { color: #fff; }
+.more-btn { display: block; margin: 14px auto; }
+.rar { display: inline-block; border-radius: 4px; padding: 0 5px; font-size: 11px;
+       color: #fff; margin-right: 4px; }
+.card .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+@media (max-width: 640px) {
+  .fgroup { flex-direction: column; gap: 4px; }
+  .fgroup-title { flex: none; }
+}
