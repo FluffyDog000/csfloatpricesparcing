@@ -462,12 +462,18 @@ def test_usage_forecast_uses_measured_response_size_when_available():
     import webapp
 
     class FakeDB:
-        def __init__(self, samples, avg):
-            self._stats = {"avg_bytes": avg, "samples": samples,
+        def __init__(self, samples, avg, day_avg=None):
+            self._stats = {"avg_bytes": day_avg if day_avg is not None else avg,
+                           "samples": samples,
                            "total_bytes": int((avg or 0) * samples)}
+            self._recent = {"avg_bytes": avg, "samples": samples,
+                            "total_bytes": int((avg or 0) * samples)}
 
         def response_size_stats(self, since):
             return self._stats
+
+        def recent_response_size(self, limit=500):
+            return self._recent
 
     # 1 request/min = 1440/day.
     est = webapp._usage_forecast(FakeDB(0, None), 1.0, "2026-08-22T00:00:00+00:00")
@@ -487,6 +493,14 @@ def test_usage_forecast_uses_measured_response_size_when_available():
     # No polls scheduled at all costs nothing.
     idle = webapp._usage_forecast(FakeDB(5, 8964.0), 0.0, "2026-08-22T00:00:00+00:00")
     assert idle["requests_per_day"] == 0 and idle["traffic_day_mb"] == 0.0
+
+    # The forecast follows the latest responses, not the day's average. The two
+    # расходятся whenever the measurement itself changed: when the size moved from
+    # the decoded body to the wire, the day held 27 thousand inflated rows and
+    # went on outvoting the correct ones long after the fix was live.
+    moved = webapp._usage_forecast(FakeDB(40, 16_600.0, day_avg=120_000.0), 1.0,
+                                   "2026-08-22T00:00:00+00:00")
+    assert moved["avg_response_bytes"] == 16_600
 
 
 def test_response_size_is_recorded_and_averaged():
@@ -616,11 +630,18 @@ def test_usage_block_reports_actual_alongside_forecast():
         def response_size_stats(self, since):
             return {"avg_bytes": 60000.0, "samples": 100, "total_bytes": 6_000_000}
 
+        def recent_response_size(self, limit=500):
+            return {"avg_bytes": 16_600.0, "samples": 40, "total_bytes": 664_000}
+
     out = webapp._usage_forecast(FakeDB(), 2.0, "2026-08-22T00:00:00+00:00",
                                  {"total": 1200})
     assert out["requests_day_actual"] == 1200
     assert out["requests_per_day"] == 2880          # 2/min forecast
+    # Сумма за сутки — это факт, её ни на что не заменяют: столько байт
+    # действительно прошло, пусть даже часть замерена по-старому.
     assert out["traffic_day_actual_mb"] == round(6_000_000 / 1_048_576, 1)
+    # А прогноз строится на последних ответах, а не на среднем за сутки.
+    assert out["avg_response_bytes"] == 16_600
 
     # No stats passed (or nothing polled yet) must not blow up.
     empty = webapp._usage_forecast(FakeDB(), 2.0, "2026-08-22T00:00:00+00:00")

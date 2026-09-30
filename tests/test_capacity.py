@@ -119,3 +119,56 @@ def test_addresses_are_sized_below_the_quota():
     """Занимать квоту адреса целиком — значит ловить 429 на первом повторе."""
     tool = _tool()
     assert 0 < tool.SAFE_UTILISATION < 1
+
+
+def test_the_size_comes_from_the_latest_responses_not_a_time_window():
+    """Способ замера менялся: разжатое тело -> провод, разница в 7 раз.
+
+    Окно по времени отдаёт голос числу строк, а старых за неделю накопилось
+    27 тысяч — они задавливали правильные ещё сутки после правки, и прогноз
+    оставался неверным, пока измеряемое уже было верным. Счёт по последним
+    строкам переворачивается за часы.
+    """
+    import sqlite3
+    import tempfile
+    import pathlib
+
+    from src.db import Database
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = str(pathlib.Path(tmp) / "t.db")
+        db = Database(path)
+        try:
+            item = db.add_item("AK-47 | Redline (Field-Tested)")
+            for _ in range(300):                      # старые, завышенные
+                db.log_poll(item_id=item, market_hash_name="x", fetched_count=40,
+                            new_count=0, overlap_count=40, status="ok",
+                            response_bytes=120_000)
+            for _ in range(60):                       # свежие, по проводу
+                db.log_poll(item_id=item, market_hash_name="x", fetched_count=40,
+                            new_count=0, overlap_count=40, status="ok",
+                            response_bytes=17_000)
+
+            latest = db.recent_response_size(limit=50)
+            assert latest["samples"] == 50
+            assert latest["avg_bytes"] == 17_000, "только свежие"
+
+            mixed = db.recent_response_size(limit=360)
+            assert mixed["avg_bytes"] > 17_000, "хватит вглубь — вернутся старые"
+        finally:
+            db.close()
+
+
+def test_the_recent_sample_is_empty_rather_than_wrong_on_a_fresh_database():
+    import pathlib
+    import tempfile
+
+    from src.db import Database
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(str(pathlib.Path(tmp) / "t.db"))
+        try:
+            got = db.recent_response_size()
+            assert got["samples"] == 0 and got["avg_bytes"] is None
+        finally:
+            db.close()

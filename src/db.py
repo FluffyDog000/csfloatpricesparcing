@@ -1039,6 +1039,26 @@ class Database:
         return {"avg_bytes": row["avg_bytes"], "samples": row["n"] or 0,
                 "total_bytes": row["total"] or 0}
 
+    def recent_response_size(self, limit: int = 500) -> dict[str, Any]:
+        """Average size of the last `limit` measured responses.
+
+        A window over time cannot be trusted across a change in how the size
+        is taken. When the measurement moved from the decoded body to the
+        wire, a week's worth of inflated rows - 27 thousand of them - went on
+        outvoting the correct ones for days, and the forecast stayed wrong
+        while the thing it forecast was right. Counting rows instead of days
+        crosses that over in hours and needs no cutoff date to be remembered.
+        """
+        rows = self.conn.execute(
+            "SELECT response_bytes AS b FROM poll_log "
+            "WHERE response_bytes IS NOT NULL ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        sizes = [r["b"] for r in rows]
+        return {"avg_bytes": (sum(sizes) / len(sizes)) if sizes else None,
+                "samples": len(sizes),
+                "total_bytes": sum(sizes)}
+
     def recent_poll_log(self, limit: int = 30) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT market_hash_name, polled_at, fetched_count, new_count, "

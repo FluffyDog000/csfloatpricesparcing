@@ -80,14 +80,15 @@ def main() -> int:
     ap.add_argument("--ip-limit", type=int, default=200,
                     help="запросов в час на один адрес (по умолчанию 200 — "
                          "измеренное значение; в заголовках CSFloat пишет 500)")
+    ap.add_argument("--sample", type=int, default=500,
+                    help="по скольким последним ответам считать размер "
+                         "(по умолчанию 500)")
     ap.add_argument("--bytes", type=int,
                     help="средний размер ответа, если в базе ещё нет замеров")
     ap.add_argument("--db", help="путь к базе")
     args = ap.parse_args()
 
     try:
-        from datetime import datetime, timedelta, timezone
-
         from src.config import load_config
         from src.db import Database
         from src.pacing import ADAPTIVE_MAX_MINUTES
@@ -122,8 +123,9 @@ def main() -> int:
         ceiling = args.every * 60.0 if args.every else stored_ceiling
         plain = (floor + top) / 2.0
 
-        week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        sizes = db.response_size_stats(week)
+        # По последним ответам, а не за неделю: способ замера менялся, и
+        # окно по времени ещё сутками отдаёт голос старым, завышенным строкам.
+        sizes = db.recent_response_size(args.sample)
         per_item, seen, measured = polls_per_day(db, ceiling, floor, plain)
         items = args.items if args.items else len(db.get_active_items())
     finally:
@@ -138,17 +140,18 @@ def main() -> int:
         avg_bytes, source = float(args.bytes), "задан вручную"
     elif sizes["samples"]:
         avg_bytes = float(sizes["avg_bytes"])
-        source = f"измерено, {sizes['samples']} ответ(ов) за неделю"
+        source = f"измерено по {sizes['samples']} последним ответам"
     else:
         avg_bytes, source = 9000.0, "замеров нет, взято 9 КБ"
 
-    # До перехода на замер по проводу в poll_log писался размер РАЗЖАТОГО тела.
-    # Такие строки завышают трафик в несколько раз, и неделю они ещё в выборке.
+    # До перехода на замер по проводу в poll_log писался размер РАЗЖАТОГО тела:
+    # на этом эндпоинте он в 7 раз больше. Выборка по последним ответам
+    # переворачивается за часы, но пока сборщик не перезапущен — не вовсе.
     if not args.bytes and sizes["samples"] and avg_bytes > 30_000:
-        print("ВНИМАНИЕ: средний ответ больше 30 КБ — похоже, в выборку попали\n"
-              "  замеры, сделанные до перехода на подсчёт по проводу (там писался\n"
-              "  размер разжатого JSON). Трафик ниже завышен; пересчитай через\n"
-              "  сутки или задай размер вручную через --bytes.\n")
+        print("ВНИМАНИЕ: средний ответ больше 30 КБ. По проводу он около 17 КБ —\n"
+              "  значит в выборке ещё лежат замеры разжатого тела, сделанные до\n"
+              "  правки. Перезапусти сборщик, если не перезапускал; если да —\n"
+              "  подожди, пока накопится свежих, или задай размер через --bytes.\n")
 
     per_day = per_item * items
     per_hour = per_day / 24.0

@@ -1816,7 +1816,12 @@ def _usage_forecast(db, reqs_per_min: float, day_iso: str,
     proxy bills for exactly these bytes — and a sample-based estimate before
     the first poll has been logged."""
     sizes = db.response_size_stats(day_iso)
-    measured = sizes["avg_bytes"] if sizes["samples"] else None
+    # Средний размер — по последним ответам, а не за сутки. Способ замера
+    # менялся (разжатое тело -> провод, разница в 7 раз), и окно по времени
+    # ещё долго отдаёт голос старым строкам, показывая трафик, которого нет.
+    # Сумма за сутки ниже остаётся суммой за сутки: это факт, а не оценка.
+    recent = db.recent_response_size()
+    measured = recent["avg_bytes"] if recent["samples"] else None
     avg_bytes = measured if measured else ASSUMED_RESPONSE_BYTES
 
     per_day = reqs_per_min * 1440.0
@@ -1830,7 +1835,7 @@ def _usage_forecast(db, reqs_per_min: float, day_iso: str,
         "requests_per_day": round(per_day),
         "requests_per_month": round(per_day * 30),
         "avg_response_bytes": round(avg_bytes),
-        "response_samples": sizes["samples"],
+        "response_samples": recent["samples"],
         "response_measured": bool(measured),
         "traffic_day_mb": round(bytes_day / 1_048_576, 1),
         "traffic_month_mb": round(bytes_day * 30 / 1_048_576, 1),
