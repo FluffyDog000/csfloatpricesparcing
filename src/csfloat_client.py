@@ -83,6 +83,34 @@ class EdgeBlocked(Exception):
         self.response = response
 
 
+def wire_bytes(resp) -> int:
+    """Bytes actually pulled over the wire, not the size of the decoded body.
+
+    A metered proxy bills for what crossed the link. CSFloat gzips its JSON,
+    so `len(resp.content)` - the decompressed body - overstates that several
+    times over, and a traffic forecast built on it buys far more gigabytes
+    than the job needs.
+
+    urllib3 counts the compressed stream for us. Chunked responses carry no
+    Content-Length, and a mocked response may have neither, so the decoded
+    length stays as the last resort - wrong, but never absent.
+    """
+    raw = getattr(resp, "raw", None)
+    try:
+        counted = raw.tell() if raw is not None else 0
+    except Exception:  # noqa: BLE001 - a stand-in response need not implement it
+        counted = 0
+    if counted:
+        return int(counted)
+    declared = (resp.headers or {}).get("Content-Length")
+    if declared:
+        try:
+            return int(declared)
+        except (TypeError, ValueError):
+            pass
+    return len(resp.content)
+
+
 class CSFloatClient:
     def __init__(self, http: HttpConfig, polling: PollingConfig,
                  keyring=None):
@@ -107,7 +135,8 @@ class CSFloatClient:
         # One budget per outgoing IP: the direct connection plus any proxies.
         self.pool = ProxyPool(list(http.proxies), use_direct=http.use_direct)
         self.last_route: str | None = None
-        # Size of the last successful response, so traffic can be reported.
+        # Wire size of the last successful response, so the traffic report
+        # matches what a metered proxy bills for.
         self.last_response_bytes: int | None = None
         # Set when CSFloat complains about one account using too many IPs.
         self.account_ip_block_at: str | None = None
@@ -628,7 +657,7 @@ class CSFloatClient:
                 backoff = min(backoff * 2, rl.max_backoff_seconds)
                 continue
 
-            self.last_response_bytes = len(resp.content)
+            self.last_response_bytes = wire_bytes(resp)
             self.pool.record_success(route)
             self._consecutive_429 = 0  # healthy response clears the escalation
             return resp.json()

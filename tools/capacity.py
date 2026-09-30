@@ -25,8 +25,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Накладные расходы поверх тела ответа: заголовки, TLS-рукопожатие, TCP.
-# Прокси считает байты на проводе, а не длину JSON.
+# Накладные расходы поверх тела: заголовки ответа, TLS-рукопожатие, TCP.
+# Само тело уже меряется по проводу (csfloat_client.wire_bytes), так что
+# сжатие здесь второй раз не учитывается.
 WIRE_OVERHEAD = 1.15
 # Доля квоты адреса, которую разумно занимать. Сотня процентов означает, что
 # первый же повтор или всплеск упирается в 429.
@@ -70,10 +71,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--items", type=int, required=True,
-                    help="сколько предметов планируется держать в сборе")
-    ap.add_argument("--every", type=float, default=6.0,
-                    help="потолок интервала в часах (по умолчанию 6)")
+    ap.add_argument("--items", type=int,
+                    help="сколько предметов планируется держать в сборе "
+                         "(по умолчанию — сколько активно сейчас)")
+    ap.add_argument("--every", type=float,
+                    help="потолок интервала в часах (по умолчанию — тот, что "
+                         "стоит на дашборде)")
     ap.add_argument("--ip-limit", type=int, default=200,
                     help="запросов в час на один адрес (по умолчанию 200 — "
                          "измеренное значение; в заголовках CSFloat пишет 500)")
@@ -87,6 +90,7 @@ def main() -> int:
 
         from src.config import load_config
         from src.db import Database
+        from src.pacing import ADAPTIVE_MAX_MINUTES
     except ModuleNotFoundError as exc:
         print(f"не хватает модуля '{exc.name}' — запусти через .venv/bin/python",
               file=sys.stderr)
@@ -95,19 +99,40 @@ def main() -> int:
     config = load_config()
     if args.db:
         config.db_path = args.db
-    ceiling = args.every * 60.0
-    floor = config.polling.interval_min_minutes
-    plain = (config.polling.interval_min_minutes
-             + config.polling.interval_max_minutes) / 2.0
-    spacing = config.polling.min_seconds_between_requests
 
     db = Database(config.db_path)
     try:
+        # Настройки правит дашборд, а не config.yaml: читать файл значит
+        # считать по числам, по которым сборщик давно не работает.
+        def stored(key: str, default: float) -> float:
+            raw = db.get_setting(key)
+            if raw in (None, ""):
+                return default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        p = config.polling
+        floor = stored("poll_interval_min_minutes", p.interval_min_minutes)
+        top = stored("poll_interval_max_minutes", p.interval_max_minutes)
+        spacing = stored("min_seconds_between_requests",
+                         p.min_seconds_between_requests)
+        stored_ceiling = stored("adaptive_max_minutes", ADAPTIVE_MAX_MINUTES)
+        ceiling = args.every * 60.0 if args.every else stored_ceiling
+        plain = (floor + top) / 2.0
+
         week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         sizes = db.response_size_stats(week)
         per_item, seen, measured = polls_per_day(db, ceiling, floor, plain)
+        items = args.items if args.items else len(db.get_active_items())
     finally:
         db.close()
+
+    hours = ceiling / 60.0
+    if not items:
+        print("в базе нет активных предметов — задай --items", file=sys.stderr)
+        return 1
 
     if args.bytes:
         avg_bytes, source = float(args.bytes), "задан вручную"
@@ -117,19 +142,30 @@ def main() -> int:
     else:
         avg_bytes, source = 9000.0, "замеров нет, взято 9 КБ"
 
-    per_day = per_item * args.items
+    # До перехода на замер по проводу в poll_log писался размер РАЗЖАТОГО тела.
+    # Такие строки завышают трафик в несколько раз, и неделю они ещё в выборке.
+    if not args.bytes and sizes["samples"] and avg_bytes > 30_000:
+        print("ВНИМАНИЕ: средний ответ больше 30 КБ — похоже, в выборку попали\n"
+              "  замеры, сделанные до перехода на подсчёт по проводу (там писался\n"
+              "  размер разжатого JSON). Трафик ниже завышен; пересчитай через\n"
+              "  сутки или задай размер вручную через --bytes.\n")
+
+    per_day = per_item * items
     per_hour = per_day / 24.0
     wire = avg_bytes * WIRE_OVERHEAD
     mb_day = per_day * wire / 1_048_576
-    floor_day = args.items * 24.0 / args.every
+    floor_day = items * 24.0 / hours
 
-    print(f"Расчёт на {args.items} предмет(ов), потолок интервала {args.every:g} ч\n")
+    source_note = "" if args.items else " (столько активно сейчас)"
+    print(f"Расчёт на {items} предмет(ов){source_note}, "
+          f"потолок интервала {hours:g} ч"
+          + ("" if args.every else " — как задано на дашборде") + "\n")
     if seen:
         print(f"История: {seen} предмет(ов) в сборе, у {measured} хватило продаж, "
               "чтобы правило назвало свой интервал")
         print(f"  в среднем {per_item:.1f} опрос(ов) в сутки на предмет "
-              f"(при потолке было бы {24.0 / args.every:.1f})")
-        if per_item > 24.0 / args.every * 1.2:
+              f"(при потолке было бы {24.0 / hours:.1f})")
+        if per_item > 24.0 / hours * 1.2:
             print("  разница — ликвидные предметы: потолок их не касается, "
                   "они опрашиваются чаще")
     else:
