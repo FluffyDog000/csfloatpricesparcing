@@ -219,3 +219,24 @@ def test_the_analysis_list_is_a_filter_too():
              item("AWP | Asiimov (Field-Tested)", in_analysis=False)]
     got = run(items, f"""filters.sets.analysis.add("out"); render(); {NAMES}""")
     assert got == ["AWP | Asiimov (Field-Tested)"]
+
+
+def test_cards_are_picked_one_by_one_and_shift_takes_the_range():
+    """The 18px box was the only target, and a click that missed it opened
+    the item's page. A click on the card picks it; Shift picks the run
+    between the last card clicked and this one, in the order shown."""
+    many = [item(f"AK-47 | Skin {i:02d} (Field-Tested)") for i in range(10)]
+    got = run(many, """
+      manageMode = true;
+      filters.sets.category.add("rifle"); render();
+      const n = (i) => currentList[i].market_hash_name;
+      pickCard(n(1), false);
+      const one = Array.from(selected);
+      pickCard(n(1), false);
+      const none = selected.size;
+      pickCard(n(2), false); pickCard(n(6), true);
+      ({one, none, range: Array.from(selected).sort()})""")
+    assert got["one"] == ["AK-47 | Skin 01 (Field-Tested)"]
+    assert got["none"] == 0, "a second click takes it back"
+    assert got["range"] == [f"AK-47 | Skin {i:02d} (Field-Tested)"
+                            for i in range(2, 7)]

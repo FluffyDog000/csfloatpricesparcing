@@ -457,3 +457,12 @@ tr.act-keep td { opacity: .6; }
   .fgroup-title { flex: none; }
 }
 .card .tag.tag-an { color: var(--accent); border-color: var(--accent); }
+.card.pickable { cursor: pointer; }
+.card.pickable .card-main { pointer-events: none; }
+.card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset;
+               background: var(--panel2); }
+.card .pick { background: var(--panel); border-radius: 6px; padding: 3px; }
+.card .pick input { width: 22px; height: 22px; }
+.card.pickable .name { padding-right: 30px; }
+a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
+.cbtn.cbtn-an { border-color: var(--accent); color: var(--accent); }

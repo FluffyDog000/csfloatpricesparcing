@@ -413,6 +413,9 @@ function cardControls(it) {
   const n = escapeHtml(it.market_hash_name);
   return `
     <div class="card-ctrls">
+      <button class="cbtn${it.in_analysis ? "" : " cbtn-an"}" data-act="analysis" data-name="${n}">
+        ${it.in_analysis ? "убрать из анализа" : "🎯 в анализ"}</button>
+      <a class="cbtn" href="/item/${encodeURIComponent(it.market_hash_name)}">открыть ↗</a>
       <button class="cbtn" data-act="toggle-active" data-name="${n}">
         ${it.active ? "⏸ Пауза" : "▶ Возобновить"}</button>
       <button class="cbtn" data-act="toggle-pattern" data-name="${n}">
@@ -428,9 +431,11 @@ function cardControls(it) {
 function card(it) {
   const div = document.createElement("div");
   const name = it.market_hash_name;
-  div.className = "card" + (it.active ? "" : " paused") + (it.hidden ? " is-hidden" : "");
+  div.className = "card" + (it.active ? "" : " paused") + (it.hidden ? " is-hidden" : "")
+    + (manageMode ? " pickable" : "") + (manageMode && selected.has(name) ? " picked" : "");
+  div.dataset.name = name;
   const pick = manageMode
-    ? `<label class="pick"><input type="checkbox" class="pick-box" data-name="${escapeHtml(name)}"
+    ? `<label class="pick" title="выбрать; Shift — всё до этой карточки"><input type="checkbox" class="pick-box" data-name="${escapeHtml(name)}"
          ${selected.has(name) ? "checked" : ""}></label>`
     : "";
   div.innerHTML = pick + cardMain(it) + (manageMode ? cardControls(it) : "");
@@ -553,12 +558,57 @@ function updateBulkBar() {
   document.getElementById("bulk-count").textContent = `выбрано: ${selected.size}`;
 }
 
-document.getElementById("cards").addEventListener("change", (ev) => {
-  const box = ev.target.closest(".pick-box");
-  if (!box) return;
-  if (box.checked) selected.add(box.dataset.name);
-  else selected.delete(box.dataset.name);
+// In manage mode a card is picked by clicking anywhere on it: an 18px box in
+// the corner was the only target, and a click that missed it opened the
+// item's page instead. The page itself is one button away ("открыть").
+// Shift picks everything between the last card clicked and this one, in the
+// order the list is shown.
+let lastPicked = null;
+
+function setPicked(name, on) {
+  if (on) selected.add(name); else selected.delete(name);
+  document.querySelectorAll(".card.pickable").forEach((c) => {
+    if (c.dataset.name !== name) return;
+    c.classList.toggle("picked", on);
+    const box = c.querySelector(".pick-box");
+    if (box) box.checked = on;
+  });
+}
+
+function pickCard(name, shift) {
+  const order = currentList.map((it) => it.market_hash_name);
+  const on = !selected.has(name);
+  if (shift && lastPicked !== null && order.includes(lastPicked)) {
+    const a = order.indexOf(lastPicked);
+    const b = order.indexOf(name);
+    const range = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+    // A range takes the state of the card that ends it, the way file
+    // managers do it.
+    const want = selected.has(lastPicked);
+    range.forEach((n) => setPicked(n, want));
+  } else {
+    setPicked(name, on);
+  }
+  lastPicked = name;
   updateBulkBar();
+}
+
+document.getElementById("cards").addEventListener("click", (ev) => {
+  if (!manageMode) return;
+  const cardEl = ev.target.closest(".card.pickable");
+  if (!cardEl) return;
+  // Buttons and links on the card do their own thing.
+  if (ev.target.closest("button, .card-ctrls a")) return;
+  const inPick = ev.target.closest(".pick");
+  if (inPick) {
+    // The label passes its click on to the box as a second event; only the
+    // box's own is counted, and it is not cancelled - cancelling a checkbox
+    // click makes the browser put the old tick back afterwards.
+    if (ev.target.classList.contains("pick-box")) pickCard(cardEl.dataset.name, ev.shiftKey);
+    return;
+  }
+  ev.preventDefault();
+  pickCard(cardEl.dataset.name, ev.shiftKey);
 });
 
 async function bulk(action, extra) {
@@ -652,6 +702,13 @@ async function doAction(act, name) {
     } else if (act === "toggle-hidden") {
       await postJSON("/api/items/update", { market_hash_name: name, hidden: !it.hidden }, token());
       msg(`«${name}»: ${!it.hidden ? "скрыт (парсинг продолжается)" : "показан"}`);
+      await load();
+    } else if (act === "analysis") {
+      const on = !it.in_analysis;
+      await postJSON("/api/analysis/items",
+        { action: on ? "add" : "remove", market_hash_name: name }, token());
+      msg(on ? `«${name}» добавлен в анализ — обход стаканов на вкладке «Анализ ордеров»`
+             : `«${name}» убран из анализа`);
       await load();
     } else if (act === "poll") {
       const r = await postJSON("/api/items/poll", { market_hash_name: name }, token());
