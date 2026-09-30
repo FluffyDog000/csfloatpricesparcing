@@ -723,8 +723,8 @@ def test_the_budget_is_spread_by_return_not_by_the_order_items_were_added():
                             "an_max_per_item": "1"}).status_code == 200
 
         scored = c.get("/api/analysis").get_json()["items"]
-        best = {i["item"]: max([(b["lam"] or 0.0) * b["margin"]
-                                for b in i["bands"] if b["take"]] or [0.0])
+        best = {i["item"]: max([b["rank"] for b in i["bands"] if b["take"]]
+                               or [0.0])
                 for i in scored}
         assert len(set(best.values())) > 1, "the items must differ to rank them"
 
@@ -879,7 +879,7 @@ def test_the_plan_is_listed_best_first_across_every_item():
     places = [a for a in actions if a["kind"] == "place"]
     assert len(places) > 4, places
 
-    scored = {i["item"]: {round(b["float_max"], 4): (b["lam"] or 0.0) * b["margin"]
+    scored = {i["item"]: {round(b["float_max"], 4): b["rank"]
                           for b in i["bands"] if b["take"]}
               for i in c.get("/api/analysis").get_json()["items"]}
     ranks = [scored[a["item"]][round(a["float_max"], 4)] for a in places]

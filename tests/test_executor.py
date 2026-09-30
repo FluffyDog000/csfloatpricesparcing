@@ -26,8 +26,9 @@ def test_nothing_is_placed_without_a_budget():
 
 
 def test_one_item_cannot_crowd_out_the_rest():
+    # lam 0.1: under one fill per lock, so each band keeps one bid busy.
     bands = [band(round(0.15 + i / 100, 4), round(0.16 + i / 100, 4),
-                  100.0, 110.0, margin=1 - i / 10) for i in range(6)]
+                  100.0, 110.0, margin=1 - i / 10, lam=0.1) for i in range(6)]
     got = select(bands, Limits(total_capital=1000.0, max_orders_per_item=3))
     assert len(got) == 3, "the per-item cap binds before the money does"
     assert [b.float_min for b in got] == [0.15, 0.16, 0.17], "best first"
@@ -150,19 +151,19 @@ def test_a_wait_is_reported_in_the_unit_a_person_would_say_it_in():
     assert human_wait(float("inf")) == "никогда"
 
 
-def test_the_plan_stays_under_what_the_balance_allows():
-    """CSFloat lets outstanding orders run to ten times the balance. The
-    allowance is real but it is not money: an order whose turn comes while the
-    balance is short is removed, not queued. So it caps the plan."""
+def test_the_plan_stays_under_what_the_balance_holds():
+    """The fills are paid from the balance, so the balance caps what the plan
+    may keep busy. The ten-times allowance is shown but never binds first:
+    every band keeps at least its own bid busy."""
     from src.executor import LEVERAGE, Limits
 
     l = Limits(total_capital=20000.0, balance=960.0)
     assert l.allowance == 9600.0 == 960.0 * LEVERAGE
-    assert l.budget == 9600.0, "their ceiling, not ours"
+    assert l.budget == 960.0, "the money there is, not the money asked for"
     assert l.capped_by_balance
 
-    under = Limits(total_capital=2000.0, balance=960.0)
-    assert under.budget == 2000.0 and not under.capped_by_balance
+    under = Limits(total_capital=500.0, balance=960.0)
+    assert under.budget == 500.0 and not under.capped_by_balance
 
     # Not told the balance: only our own limit applies.
     unknown = Limits(total_capital=2000.0)
@@ -170,18 +171,18 @@ def test_the_plan_stays_under_what_the_balance_allows():
     assert unknown.as_dict()["allowance"] is None
 
 
-def test_selection_spends_the_allowed_budget_not_the_asked_one():
+def test_selection_spends_the_balance_not_the_asked_budget():
     bands = [Band(float_min=0.0 + i / 100, float_max=0.01 + i / 100,
                   bid=100.0, margin=1.0 - i / 100, take=True)
              for i in range(10)]
-    # Asked for $5000, balance only covers $300 of outstanding orders.
-    got = select(bands, Limits(total_capital=5000.0, balance=30.0,
+    # Asked for $5000, the account holds $300.
+    got = select(bands, Limits(total_capital=5000.0, balance=300.0,
                                max_orders=10, max_orders_per_item=10))
     assert sum(b.bid for b in got) <= 300.0
     assert len(got) == 3
 
 
-def _cand(item, lo, bid, margin, lam=1.0):
+def _cand(item, lo, bid, margin, lam=0.1):
     return (item, Band(float_min=lo, float_max=lo + 0.02, bid=bid,
                        ceiling=bid * 1.2, step=0.10, margin=margin,
                        lam=lam, take=True))
@@ -244,20 +245,57 @@ def test_a_band_that_stopped_qualifying_is_not_kept_just_because_it_is_held():
 
 
 
-def test_ranking_needs_both_halves_not_either_alone():
-    """Margin alone sent the allowance to bands that pay well and never fill;
-    flow alone sent it to fast ones paying nothing. On a live item the two
-    extremes earned within 6% of each other and the middle beat both."""
+def _turn(margin, lam, t_sell, bid=20.0, lot=(0.16, 0.18), sell_rate=None):
+    return Band(float_min=0.15, float_max=0.17, bid=bid, margin=margin,
+                lam=lam, t_sell=t_sell, lot_min=lot[0], lot_max=lot[1],
+                sell_rate=sell_rate or 0.0, take=True)
+
+
+def test_the_rank_is_what_a_dollar_earns_not_how_often_it_turns():
+    """The worked example the rank was changed on. lam × margin put the fast
+    thin band first; per dollar tied up it is last. The money waits in the
+    balance while an order stands - it is the lock and the sale that hold it."""
     from src.executor import rank
 
-    fat_and_still = Band(float_min=0.15, float_max=0.17, bid=100.0,
-                         margin=0.12, lam=0.02, take=True)
-    thin_and_quick = Band(float_min=0.15, float_max=0.17, bid=100.0,
-                          margin=0.015, lam=0.40, take=True)
-    middle = Band(float_min=0.15, float_max=0.17, bid=100.0,
-                  margin=0.051, lam=0.125, take=True)
-    assert rank(middle) > rank(fat_and_still)
-    assert rank(middle) > rank(thin_and_quick)
+    fast_thin = _turn(0.03, 1.0, 0.25)
+    middle = _turn(0.08, 0.25, 1.0)
+    slow_fat = _turn(0.15, 0.0625, 2.0)
+    assert rank(slow_fat) > rank(middle) > rank(fast_thin)
+    assert rank(middle) == 0.08 / (7.0 + 1.0)
+
+
+def test_a_fast_band_does_not_eat_the_money_of_better_ones():
+    """$60 in the account. The fast band would keep $145 busy on its own -
+    ranked first, it takes everything and fills only until the money runs
+    out. Ranked by return per dollar, the two better ones fit and earn more."""
+    from src.executor import select_portfolio, tied_up
+
+    fast_thin = ("A", _turn(0.03, 1.0, 0.25))
+    middle = ("B", _turn(0.08, 0.25, 1.0))
+    slow_fat = ("C", _turn(0.15, 0.0625, 2.0))
+    assert tied_up(fast_thin[1]) == 20.0 * 1.0 * 7.25
+    assert tied_up(middle[1]) == 20.0 * 0.25 * 8.0
+    assert tied_up(slow_fat[1]) == 20.0, "never less than one bid"
+
+    got = select_portfolio([fast_thin, middle, slow_fat],
+                           Limits(total_capital=60.0, max_orders=10,
+                                  max_orders_per_item=3))
+    assert sorted(got) == ["B", "C"]
+
+
+def test_bands_selling_into_one_lot_band_share_its_buyers():
+    """Two rungs of one item whose items land in the same band: each alone
+    sells, together they would buy faster than the band sells."""
+    from src.executor import select_portfolio
+
+    first = ("A", _turn(0.10, 0.6, 1 / 0.4, sell_rate=1.0))
+    second = ("A", Band(float_min=0.15, float_max=0.18, bid=20.0,
+                        margin=0.09, lam=0.6, t_sell=1 / 0.4, lot_min=0.16,
+                        lot_max=0.18, sell_rate=1.0, take=True))
+    got = select_portfolio([first, second],
+                           Limits(total_capital=10_000.0, max_orders=10,
+                                  max_orders_per_item=3))
+    assert got["A"] == [first[1]], "1.2 a day into a band that sells 1.0"
 
 
 def test_a_band_with_no_measured_flow_ranks_at_nothing():

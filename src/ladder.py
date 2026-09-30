@@ -34,6 +34,9 @@ Four numbers decide a rung, and each is measured rather than assumed:
   how often it fills    sales at or below our bid, where no rival outbids us
                         for that float. Two filters, and the second is the
                         severe one: most sellers get more elsewhere.
+
+And one number ranks them: what a dollar earns per day it is tied up. See
+`turnover`.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from .depth import DEPTH_PAGE
+from .trend import weekly
 
 # CSFloat holds a bought item for seven days before it can be listed. That is
 # not a setting: it is the platform's rule, and it doubles as the natural
@@ -63,6 +67,9 @@ class Params:
     min_sample: int = 8          # sales needed before a median means anything
     lock_days: float = LOCK_DAYS
     top_step: float = TOP_STEP
+    # How far the skin may have fallen over the last week, float-adjusted,
+    # before no rung of it is opened. 0 turns the check off. See `trend`.
+    max_drop: float = 0.05
 
 
 @dataclass
@@ -96,6 +103,15 @@ class Rung:
     lots_cleared: float = 0.0        # ...of which the lock disposes
     fills: int = 0                   # past sales our bid would have taken
     lam: float = 0.0                 # fills per day
+    # The band our items will be sold into, how fast it sells, and how many
+    # of our own are already on their way to it. Together they say how long
+    # one of ours stands before a buyer reaches it - see `turnover`.
+    lot_lo: float | None = None
+    lot_hi: float | None = None
+    sell_rate: float = 0.0           # sales a day in that band
+    own: int = 0                     # ours bought in the last lock, same band
+    t_sell: float | None = None      # days on sale once the lock lifts
+    trend: float | None = None       # the skin's last week, float-adjusted
     rank: float = 0.0
     take: bool = False
     reason: str = ""
@@ -109,7 +125,10 @@ class Rung:
             "lots": self.lots, "lots_cleared": round(self.lots_cleared, 1),
             "lots_capped": self.lots_capped, "lots_read": self.lots_read,
             "asks": list(self.asks),
-            "fills": self.fills, "lam": self.lam, "rank": self.rank,
+            "fills": self.fills, "lam": self.lam,
+            "lot_lo": self.lot_lo, "lot_hi": self.lot_hi,
+            "sell_rate": self.sell_rate, "own": self.own,
+            "t_sell": self.t_sell, "trend": self.trend, "rank": self.rank,
             "take": self.take, "reason": self.reason,
         }
 
@@ -320,6 +339,58 @@ def snap_down(price: float, step: float) -> float:
     return int(price / step + 1e-9) * step
 
 
+def turnover(rung: Rung, lock_days: float) -> bool:
+    """Days on sale and the rank that follows from them. False when the band
+    cannot sell what we would buy into it.
+
+    The rank is what a dollar earns per day it is tied up:
+
+        rank = margin / (lock_days + t_sell)
+
+    CSFloat takes the money when an order fills, not when it is placed - the
+    outstanding orders may run to ten times the balance, and one whose turn
+    comes while the balance is short is simply removed. So the days an order
+    stands waiting cost nothing; the money is in the balance, paying for other
+    fills. It is tied up from the fill: seven days of lock, then however long
+    the item stands before somebody buys it. How often the rung fills does not
+    change what a dollar in it earns - it changes how many dollars the rung can
+    use, which is the executor's business, not the rank's.
+
+    `lam × margin` was the rank before this. It is right when the ten-times
+    allowance runs out first, and it never does: a rung that fills at all has
+    lam of at least one in the window, and then lam × 7 already exceeds the
+    tenth of a dollar of balance each dollar of allowance stands for.
+    `margin / (1/lam + 7)` charged the wait for a fill as capital, which it
+    would be if placing an order reserved the money. On CSFloat it does not.
+
+    t_sell. Our lot is listed a step under the first survivor, so it stands at
+    the front and every buyer in the band reaches it first. What stands in
+    front of it is our own: the items bought in the last lock come out of it
+    into the same band, one after another, at the rate we buy. That is a
+    queue, and its wait is
+
+        t_sell = (own + 1) / (sell_rate - lam)
+
+    with `own` the ones already bought. Buying about as fast as the band sells
+    and the wait runs away; faster, and it never ends. Other rungs of ours
+    selling into the same band join the same queue - which of them are held
+    together is decided later, so the executor adds them (`tied_up`).
+    """
+    spare = rung.sell_rate - rung.lam
+    if spare <= 1e-12:
+        rung.t_sell = None
+        rung.rank = 0.0
+        return False
+    rung.t_sell = (rung.own + 1) / spare
+    rung.rank = (rung.margin or 0.0) / (lock_days + rung.t_sell)
+    return True
+
+
+def _jammed(rung: Rung) -> str:
+    return (f"полоса не успевает продавать: покупали бы {rung.lam:.2f}/сут, "
+            f"а в ней продаётся {rung.sell_rate:.2f}/сут")
+
+
 # -- the ladder ------------------------------------------------------------
 
 def price_step(price: float) -> float:
@@ -335,8 +406,14 @@ def price_step(price: float) -> float:
 def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
              span: tuple[float, float], lots: int,
              asks: Sequence, params: Params,
-             lot_span: tuple[float, float] | None = None) -> Rung:
+             lot_span: tuple[float, float] | None = None,
+             own: Sequence[float] = ()) -> Rung:
     """One rung of the ladder: the order [span_low, top], priced.
+
+    `own` is the tops of our orders that filled within the last lock: those
+    items are still locked, unsold for certain, and will stand in the same
+    sell queue as this rung's. Their top stands in for their float, as it does
+    everywhere in the model.
 
     `lot_span` is the float range the listings sit in, which is NOT the rung's
     range: the rung reaches down to the wear minimum while the lots are banded
@@ -366,6 +443,9 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     q_lo, q_hi = lot_span or (max(low, top - params.top_step), top)
     rate = sale_rate(sales, q_lo, q_hi, params.window_days)
     rung.lots_cleared = rate * params.lock_days
+    rung.lot_lo, rung.lot_hi = q_lo, q_hi
+    rung.sell_rate = rate
+    rung.own = sum(1 for f in own if f is not None and q_lo < f <= q_hi + 1e-9)
     step = price_step(rung.market)
     # Only the lots our order would actually queue behind. A depth band is
     # 0.02 wide while the top moves by 0.01, so half of one can be worse items
@@ -479,7 +559,9 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         return rung
 
     rung.lam = rung.fills / params.window_days if params.window_days else 0.0
-    rung.rank = rung.lam * rung.margin
+    if not turnover(rung, params.lock_days):
+        rung.reason = _jammed(rung)
+        return rung
     rung.take = True
     return rung
 
@@ -533,7 +615,8 @@ def lots_in_band(depth: Sequence[dict], top: float):
 def ladder(sales: Sequence[dict], orders: Sequence[dict],
            span: tuple[float, float] | None,
            depth: Sequence[dict] = (),
-           params: Params | None = None) -> list[Rung]:
+           params: Params | None = None,
+           own: Sequence[float] = ()) -> list[Rung]:
     """Every candidate top, scored - the rejected ones too.
 
     A rejected rung keeps its reason: "why not this one" is the question the
@@ -545,11 +628,20 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
     rung is then credited only with what the tighter ones left. Crediting each
     with the whole range would count the same sale several times and make the
     lower rungs look better than they are.
+
+    A skin that fell more than `max_drop` over the last week has every rung
+    scored and none taken: the numbers are still worth reading, and "why not"
+    is answered by the fall. Only opening is refused - an order already
+    standing is priced by `evaluate` alone, and the defence decides about it.
     """
     p = params or Params()
     if not span:
         return []
     low, high = span
+    # Before the windowing below: the trend compares the last week with the
+    # three before it, which reaches past a fortnight's window.
+    drift = weekly((r.get("age_days"), sale_float(r), sale_price(r))
+                   for r in sales)
     # Windowed once, here, rather than in every rate: the caller loads far
     # more history than the window so a thin band still has a median to read,
     # and dividing that wider count by the narrower window is what overstated
@@ -562,7 +654,8 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
     while top <= high + 1e-9:
         lots, prices, lot_span = lots_in_band(depth, top)
         rung = evaluate(top, sales, orders, (low, high), lots, prices, p,
-                        lot_span=lot_span)
+                        lot_span=lot_span, own=own)
+        rung.trend = drift.change
         if rung.take:
             mine = [i for i in fills_at(sales, orders, low, top, rung.bid)
                     if i not in claimed]
@@ -574,7 +667,13 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
                 claimed |= set(mine)
                 rung.fills = len(mine)
                 rung.lam = rung.fills / p.window_days if p.window_days else 0.0
-                rung.rank = rung.lam * rung.margin
+                turnover(rung, p.lock_days)
+        if (rung.take and p.max_drop > 0 and drift.change is not None
+                and drift.change <= -p.max_drop):
+            rung.take = False
+            rung.reason = (f"скин дешевеет: {drift.change * 100:+.1f}% за неделю "
+                           f"с поправкой на float, порог −{p.max_drop * 100:.0f}% "
+                           f"({drift.recent} продаж против {drift.base})")
         out.append(rung)
         top = round(top + p.top_step, 4)
 

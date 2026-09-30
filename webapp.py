@@ -1003,6 +1003,7 @@ def _sales_for(db, item_id: int, params) -> list[dict]:
 @app.route("/api/analysis")
 def api_analysis():
     """Score every float band of every listed item."""
+    from src.executor import tied_up
     from src.orders import wear_range
     from src.pricing import plan
 
@@ -1036,8 +1037,11 @@ def api_analysis():
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
-        bands = [b.as_dict() for b in _refuse_unread_book(
-            db, item_id, plan(sales, orders, wear_range(name), depth, params))]
+        own = _locked_tops(db, item_id)
+        scored = _refuse_unread_book(
+            db, item_id,
+            plan(sales, orders, wear_range(name), depth, params, own=own))
+        bands = [b.as_dict() for b in scored]
         take = [b for b in bands if b["take"]]
         out.append({
             "item": name,
@@ -1053,7 +1057,11 @@ def api_analysis():
             # repriced or sold since is still in it.
             "depth_at": max((b["fetched_at"] for b in depth), default=None),
             "bands": bands,
+            # Face value of the orders - what the ten-times-balance rule counts.
             "capital": round(sum(b["bid"] for b in take), 2),
+            # And the money their fills would keep busy - what actually runs
+            # out, and what the plan spends its budget by.
+            "tied_up": round(sum(tied_up(b) for b in scored if b.take), 2),
             # What the orders would make once, not per month: the annualised
             # figure divided a margin we trust by a cycle time we do not.
             "profit": round(sum(b["bid"] * (b["margin"] or 0) for b in take), 2),
@@ -1075,7 +1083,8 @@ def api_analysis_plan():
     documented and has to be captured from the browser, so until it is
     supplied this is the whole of the feature - and even once it is, the plan
     is produced first and acted on separately."""
-    from src.executor import exposure, reconcile, select_portfolio
+    from src.executor import (exposure, rank, reconcile, select_portfolio,
+                              tied_up)
     from src.holdings import strip_own
     from src.orders import wear_range
     from src.placement import PLACEMENT_KEY, describe, load
@@ -1115,17 +1124,18 @@ def api_analysis_plan():
                     for r in mine]
         candidates += [(name, b) for b in _refuse_unread_book(
             db, item_id,
-            plan_bands(sales, orders, wear_range(name), depth, params))]
+            plan_bands(sales, orders, wear_range(name), depth, params,
+                       own=_locked_tops(db, item_id)))]
 
     wanted_by_item = select_portfolio(candidates, limits, holding)
 
     actions: list[dict] = []
-    ranked: dict[tuple, float] = {}
+    ranked: dict[tuple, tuple[float, float]] = {}
     for name in mine_by_item:
         wanted = wanted_by_item.get(name, [])
         for b in wanted:
             ranked[(name, round(b.float_min, 4), round(b.float_max, 4))] = \
-                (b.lam or 0.0) * (b.margin or 0.0)
+                (rank(b), tied_up(b))
         actions += [a.as_dict() for a in
                     reconcile(name, wanted, mine_by_item[name],
                               books[name], limits)]
@@ -1137,9 +1147,12 @@ def api_analysis_plan():
     # to four decimals are still ordered by the difference behind them, and
     # rounding before the sort turned that into a tie broken by item name.
     for action in actions:
-        action["rank"] = ranked.get(
+        action["rank"], tied = ranked.get(
             (action["item"], round(action["float_min"], 4),
-             round(action["float_max"], 4)), 0.0)
+             round(action["float_max"], 4)), (0.0, 0.0))
+        # Not a field of the action itself: what the plan spends its budget
+        # by, carried to the page so "из лимита" counts the same thing.
+        action["tied_up"] = round(tied, 2) if tied != float("inf") else None
 
     # Shown best-first, across every item. Grouping by item was the order the
     # names happened to be typed in, so the page said nothing about which
@@ -1155,7 +1168,9 @@ def api_analysis_plan():
     # item are not several bets: they are one bet in pieces, and they fill
     # together when that market moves, so the split has to be visible.
     from src.executor import Action
-    after = exposure([Action(**a) for a in actions], held)
+    fields = set(Action.__dataclass_fields__)
+    after = exposure([Action(**{k: v for k, v in a.items() if k in fields})
+                      for a in actions], held)
     after = {k: round(v, 2) for k, v in after.items() if v > 0}
     total = sum(after.values())
 
@@ -1182,7 +1197,38 @@ def api_analysis_plan():
         # are only what the bot wrote down. They are not the same claim.
         "sync_at": db.get_setting("orders_sync_at") or None,
         "sync": _json_setting(db, "orders_sync_result"),
+        "guard": _guard_state(db, limits),
     })
+
+
+def _locked_tops(db, item_id: int) -> list[float]:
+    """Our purchases of this item still inside the trade lock: they will be
+    in front of anything we buy next when the queue is reached."""
+    from src.holdings import locked_tops
+    from src.ladder import LOCK_DAYS
+    return locked_tops(db.our_orders(item_id, live_only=False), LOCK_DAYS)
+
+
+def _guard_state(db, limits) -> dict:
+    """The brake as the page shows it: whether it tripped, and where today
+    stands against it."""
+    from src.guard import read, tripped
+    return {"tripped": tripped(db),
+            "today": read(db.our_orders(live_only=False), limits).as_dict()}
+
+
+@app.route("/api/analysis/guard", methods=["POST"])
+def api_analysis_guard():
+    """Release the brake. By hand only: it tripped because something looked
+    wrong, and nothing but a person can say that it no longer does."""
+    from src.guard import reset
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    if data.get("reset"):
+        reset(db)
+        log.warning("Brake released by hand")
+    return jsonify(_guard_state(db, _analysis_limits(db)))
 
 
 @app.route("/api/analysis/arm", methods=["POST"])
@@ -1219,6 +1265,10 @@ def api_analysis_apply():
 
     _require_admin()
     db = get_db()
+    from src.guard import tripped
+    if tripped(db):
+        abort(403, description="сработала защита от слива — выставление "
+                               "выключено до ручного сброса")
     if (db.get_setting("analysis_armed") or "0") != "1":
         abort(403, description="не разрешено — включи разрешение на выставление")
 

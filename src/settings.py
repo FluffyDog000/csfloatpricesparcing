@@ -17,18 +17,20 @@ from .executor import Limits
 from .pricing import Params
 from .screen import Screen
 
-# Three settings, because the model reads three numbers. The band width, the
+# The settings the model reads, and no others. The band width, the
 # minimum flow, the fill deadline, the outbid reserve, the sigma multiplier and
 # the borrowing reach all described machinery that no longer exists; their
 # stored values are simply ignored rather than silently steering nothing.
 PARAM_BOUNDS = {
     "fee": (0.0, 0.20), "min_margin": (0.0, 1.0),
     "window_days": (1.0, 365.0), "min_sample": (1, 1000),
+    "max_drop": (0.0, 1.0),
 }
 PARAM_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
     ("an_window", "window_days", float),
     ("an_min_sample", "min_sample", int),
+    ("an_max_drop", "max_drop", float),
 )
 
 LIMIT_BOUNDS = {
@@ -36,6 +38,7 @@ LIMIT_BOUNDS = {
     "max_orders": (0, 1000), "max_orders_per_item": (0, 1000),
     "patience_minutes": (0.0, 525_600.0),
     "balance": (0.0, 1_000_000.0),
+    "guard_share": (0.0, 1.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
@@ -44,6 +47,7 @@ LIMIT_KEYS = (
     ("an_max_per_item", "max_orders_per_item", int),
     ("an_patience_min", "patience_minutes", float),
     ("an_balance", "balance", float),
+    ("an_guard_share", "guard_share", float),
 )
 
 # The free pass over sales history, before any request is spent. Wide by

@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
+from .ladder import LOCK_DAYS
 from .pricing import Band, increment, next_above
 
 def human_wait(days: float) -> str:
@@ -55,8 +56,9 @@ KEEP = "keep"
 # CSFloat lets the outstanding value of your buy orders run to ten times your
 # balance, on the reasoning that they will not all fill at once. The allowance
 # is real, but it is not money: an order whose turn comes while the balance is
-# short is removed, not queued. So the multiplier caps what we may plan, and
-# the balance is what actually buys.
+# short is removed, not queued. So what the plan spends is the money the fills
+# keep busy, against the balance (`tied_up`); the allowance is shown, and
+# never binds before it.
 LEVERAGE = 10.0
 MAX_ORDERS_CSFLOAT = 1000
 
@@ -68,7 +70,9 @@ RANK_Z = 1.0
 
 @dataclass
 class Limits:
-    total_capital: float = 0.0      # 0 = nothing may be placed
+    # Money the fills may keep busy at once, not the face value of the orders:
+    # see `tied_up`. 0 = nothing may be placed.
+    total_capital: float = 0.0
     per_item_capital: float = 0.0   # 0 = only the share implied by the count
     max_orders: int = 20
     max_orders_per_item: int = 3
@@ -81,6 +85,9 @@ class Limits:
     # What sits on the CSFloat account. 0 means "not told", and then the
     # leverage cap cannot be worked out and only total_capital applies.
     balance: float = 0.0
+    # The brake: fills worth more than this share of the balance within a day
+    # take every order down and disarm. See `guard`. 0 turns it off.
+    guard_share: float = 0.3
 
     @property
     def allowance(self) -> float:
@@ -89,13 +96,15 @@ class Limits:
 
     @property
     def budget(self) -> float:
-        """What we may actually plan: our own limit, under their ceiling."""
-        return min(self.total_capital, self.allowance)
+        """Money we may keep busy: our own limit, under what the account has."""
+        if self.balance > 0:
+            return min(self.total_capital, self.balance)
+        return self.total_capital
 
     @property
     def capped_by_balance(self) -> bool:
-        """Our limit is above what the account can carry."""
-        return self.balance > 0 and self.total_capital > self.allowance
+        """Our limit is above what the account holds."""
+        return self.balance > 0 and self.total_capital > self.balance
 
     def as_dict(self) -> dict[str, Any]:
         """Fields plus what they work out to - the page needs both, and
@@ -119,8 +128,8 @@ class Action:
     order_id: int | None = None
     remote_id: str | None = None
     was: float | None = None        # the price we were bidding, when raising
-    # λ × margin: return per dollar per day, and the order the plan is listed
-    # in. It rides on the action rather than being recomputed by each reader,
+    # margin / (lock + t_sell): return per dollar per day, and the order the
+    # plan is listed in. It rides on the action rather than being recomputed by each reader,
     # so the number shown and the number sorted by cannot drift apart.
     rank: float = 0.0
     # The body actually sent, filled in by the sender just before the request.
@@ -142,50 +151,65 @@ def _key(row: Any) -> tuple[float, float]:
 def rank(band: Band) -> float:
     """What a band is worth, for choosing between them.
 
-    Fills a day times margin: the return on a dollar of a finite allowance,
-    per day it is tied up. Both halves are needed and neither alone will do.
-    Ranking on margin sent the allowance to bands that pay well and never
-    fill; ranking on flow sent it to the fast ones that pay nothing. Measured
-    on a live item, the two extremes earned within 6% of each other while the
-    middle beat both.
+    What a dollar earns per day it is tied up: margin over the lock plus the
+    days on sale. Worked out in `ladder.turnover`, which also says why this
+    replaced `lam × margin`: the order waiting for a fill ties up no money on
+    CSFloat, the fill does, and from then on it is the lock and the queue that
+    decide how long.
 
-    Per dollar rather than per order, because the allowance is what runs out
-    first: a $500 order earning more in absolute terms than a $48 one still
-    loses, having taken ten times the room to do it.
-
-    Not an annualised return. Turning this into one needs the trade lock and
-    the payout wait, a fortnight that nothing here measures, and dividing a
-    number we trust by one we do not is how a band that fills in two days beat
-    one paying twice as much.
+    Flow still matters, but not here: it decides how much money a band can
+    use (`tied_up`), and the selection spends by that. A band that never
+    fills is refused before it gets a rank.
     """
-    if band.margin is None:
-        return -1.0
-    return (band.lam or 0.0) * band.margin
+    if band.margin is None or not band.lam:
+        return 0.0 if band.margin is not None else -1.0
+    if band.rank:
+        return band.rank
+    return band.margin / (LOCK_DAYS + (band.t_sell or 0.0))
+
+
+def tied_up(band: Band, extra_lam: float = 0.0) -> float:
+    """Money a band keeps busy, on average, while it runs.
+
+    Little's law: it buys `lam` a day, each for `bid`, and each purchase is
+    money until it is sold - the lock, then the days on sale. Never less than
+    one bid, because a single fill has to be paid for in full whenever it
+    comes.
+
+    `extra_lam` is what other bands of ours already buy into the same lot
+    band; they stand in the same queue, so the wait is worked out again with
+    them in it, and a band that could not sell the sum costs more than any
+    budget.
+    """
+    if band.bid is None:
+        return float("inf")
+    lam = band.lam or 0.0
+    t = band.t_sell or 0.0
+    if extra_lam and band.sell_rate:
+        spare = band.sell_rate - lam - extra_lam
+        if spare <= 1e-12:
+            return float("inf")
+        t = (band.own_queue + 1) / spare
+    return band.bid * max(1.0, lam * (LOCK_DAYS + t))
+
+
+def _lot_key(item: str, band: Band) -> tuple | None:
+    """The lot band a band's items sell into, when it is known."""
+    if band.lot_min is None or band.lot_max is None:
+        return None
+    return (item, round(band.lot_min, 4), round(band.lot_max, 4))
 
 
 def select(bands: Sequence[Band], limits: Limits,
            spent: float = 0.0, placed: int = 0) -> list[Band]:
     """The bands worth holding for one item, best first, within its caps."""
-    take = sorted((b for b in bands if b.take), key=lambda b: -rank(b))
-    room_orders = min(limits.max_orders_per_item, limits.max_orders - placed)
-    budget = limits.budget
-    cap = limits.per_item_capital or budget
-    cap = min(cap, budget - spent)
-
-    chosen: list[Band] = []
-    used = 0.0
-    for band in take:
-        if len(chosen) >= room_orders:
-            break
-        if band.bid is None or used + band.bid > cap + 1e-9:
-            continue
-        chosen.append(band)
-        used += band.bid
-    return chosen
+    return select_portfolio([("", b) for b in bands], limits,
+                            spent=spent, placed=placed).get("", [])
 
 
 def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
-                     held: Sequence[tuple[str, float, float]] = ()
+                     held: Sequence[tuple[str, float, float]] = (),
+                     spent: float = 0.0, placed: int = 0
                      ) -> dict[str, list[Band]]:
     """Which bands to hold, chosen across every item at once.
 
@@ -201,13 +225,26 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     costs a cancel, a replacement, and the queue position that came with it -
     and the replacement may not fill at all. Churn is a real expense, and
     "slightly better on paper" does not cover it.
+
+    What is spent is the money the fills keep busy (`tied_up`), against the
+    budget and the per-item cap, because that is what runs out. The face
+    value of the orders is not counted: CSFloat allows ten times the balance
+    of it, every band keeps at least its own bid busy, and the budget is never
+    more than the balance - so the face value is always the slack one.
+
+    Bands of one item selling into the same lot band share its buyers, so
+    each one taken lengthens the wait of the next, and one the band cannot
+    absorb on top of the others is not taken.
     """
     chosen: dict[str, list[Band]] = {}
-    spent = 0.0
     per_item_spent: dict[str, float] = {}
-    placed = 0
+    flow: dict[tuple, float] = {}
     budget = limits.budget
     item_cap = limits.per_item_capital or budget
+
+    def cost(item: str, band: Band) -> float:
+        key = _lot_key(item, band)
+        return tied_up(band, flow.get(key, 0.0) if key else 0.0)
 
     def room_for(item: str, band: Band) -> bool:
         if band.bid is None:
@@ -216,15 +253,20 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
             return False
         if len(chosen.get(item, ())) >= limits.max_orders_per_item:
             return False
-        if spent + band.bid > budget + 1e-9:
+        need = cost(item, band)
+        if spent + need > budget + 1e-9:
             return False
-        return per_item_spent.get(item, 0.0) + band.bid <= item_cap + 1e-9
+        return per_item_spent.get(item, 0.0) + need <= item_cap + 1e-9
 
     def take(item: str, band: Band) -> None:
         nonlocal spent, placed
+        need = cost(item, band)
         chosen.setdefault(item, []).append(band)
-        spent += band.bid
-        per_item_spent[item] = per_item_spent.get(item, 0.0) + band.bid
+        spent += need
+        per_item_spent[item] = per_item_spent.get(item, 0.0) + need
+        key = _lot_key(item, band)
+        if key:
+            flow[key] = flow.get(key, 0.0) + (band.lam or 0.0)
         placed += 1
 
     holding = {(name, round(lo, 4), round(hi, 4)) for name, lo, hi in held}

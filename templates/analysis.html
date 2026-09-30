@@ -46,6 +46,8 @@
   </details>
   <div id="plan-state" class="muted"></div>
   <div id="plan-sync" class="muted"></div>
+  <div id="plan-guard" class="muted"></div>
+  <button class="btn danger" id="plan-guard-reset" hidden>Сбросить защиту от слива</button>
   <button class="btn" id="plan-run">Пересчитать план</button>
   <label class="arm-line">
     <input type="checkbox" id="plan-dry" checked> вхолостую (ничего не отправлять)
@@ -83,6 +85,10 @@
       <label>минимальная выборка, продаж в полосе
         <input type="number" id="p-sample" class="input" step="1" min="1" max="1000" value="8">
         <small class="muted">меньше — цена ступени не считается вовсе</small></label>
+      <label>скин подешевел за неделю не больше, %
+        <input type="number" id="p-drop" class="input" step="1" min="0" max="100" value="5">
+        <small class="muted">по всем продажам скина с поправкой на float.<br>
+          Упал сильнее — новые ордера на него не ставятся. 0 — не проверять</small></label>
     </div>
     <h3>Отсев до обхода стаканов</h3>
     <p class="muted">Считается по истории продаж, <b>не тратя ни одного
@@ -122,9 +128,10 @@
         <input type="number" id="l-balance" class="input" step="10" min="0" value="0">
         <small class="muted">CSFloat разрешает ордеров на 10× баланса.<br>
           0 — не знаю, тогда проверка отключена</small></label>
-      <label>всего в ордерах, $
+      <label>денег в сделках, $
         <input type="number" id="l-total" class="input" step="10" min="0" value="0">
-        <small class="muted">0 — ничего не выставляется</small></label>
+        <small class="muted">сколько денег могут держать купленные предметы:<br>
+          блокировка плюс продажа. 0 — ничего не выставляется</small></label>
       <label>на один предмет, $
         <input type="number" id="l-item" class="input" step="10" min="0" value="0">
         <small class="muted">пять ордеров на предмет — одна ставка пятью кусками</small></label>
@@ -137,6 +144,10 @@
         <input type="number" id="l-patience" class="input" step="5" min="0" value="60">
         <small class="muted">перебили — отвечаем, только если очередь<br>
           разойдётся дольше этого. 60 — за час не разошлась, перебиваем</small></label>
+      <label>защита от слива, % баланса за сутки
+        <input type="number" id="l-guard" class="input" step="5" min="0" max="100" value="30">
+        <small class="muted">исполнилось больше — снять все ордера бота<br>
+          и выключить выставление до ручного сброса. 0 — выключена</small></label>
     </div>
     <div class="muted" id="l-allowance"></div>
     <button class="btn" id="p-save">Сохранить пороги и лимиты</button>

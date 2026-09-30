@@ -18,7 +18,10 @@ and saying so is better than guessing at the one that sounds better.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Sequence
+
+from .pacing import parse_iso
 
 GONE = "gone"          # ours, not on the site any more
 FILLED = "filled"      # the site says it bought something
@@ -183,4 +186,49 @@ def summary(changes: Iterable[Change]) -> dict[str, int]:
     out = {GONE: 0, FILLED: 0, REPRICED: 0, ADOPTED: 0, MATCHED: 0}
     for change in changes:
         out[change.kind] = out.get(change.kind, 0) + 1
+    return out
+
+
+# How the account answers for an order that bought: "filled" when the list
+# still shows it with a count, "gone" when a one-piece order simply vanished.
+# The second is also what an order taken down by hand from the site looks
+# like, and the two cannot be told apart - so both are counted as bought.
+# For what this feeds, the brake and the sell queue, that is the safe side.
+BOUGHT_STATES = ("filled", "gone")
+
+
+def bought_within(rows: Iterable[dict], days: float,
+                  now: datetime | None = None) -> list[dict]:
+    """Our orders that bought within the last `days`, by when we noticed.
+
+    `rows` is `our_orders(live_only=False)`. When the sync noticed is later
+    than when the fill happened, never earlier, so the window errs towards
+    keeping a purchase in it.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    out = []
+    for row in rows:
+        if row.get("state") not in BOUGHT_STATES:
+            continue
+        at = parse_iso(row.get("updated_at"))
+        if at is not None and at >= cutoff:
+            out.append(row)
+    return out
+
+
+def locked_tops(rows: Iterable[dict], days: float,
+                now: datetime | None = None) -> list[float]:
+    """Tops of the orders whose items are still inside the trade lock.
+
+    Unsold for certain - they cannot even be listed yet - and headed for the
+    same sell queue as whatever we buy next in that band. The top stands in
+    for the float, as everywhere in the model.
+    """
+    out = []
+    for row in bought_within(rows, days, now):
+        try:
+            out.append(float(row["float_max"]))
+        except (KeyError, TypeError, ValueError):
+            continue
     return out

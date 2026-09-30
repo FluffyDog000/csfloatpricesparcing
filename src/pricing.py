@@ -84,7 +84,7 @@ def next_above(price: float) -> float:
 
 @dataclass
 class Params:
-    """The three numbers the model reads, and no more.
+    """The numbers the model reads, and no more.
 
     Everything else that used to live here - band width, a minimum flow, a
     fill deadline, an outbid reserve, a sigma multiplier, a borrowing reach -
@@ -98,6 +98,16 @@ class Params:
     min_margin: float = 0.05       # the allowance for a wrong exit price
     window_days: float = 16.0      # history the medians are read from
     min_sample: int = 8            # sales needed before a median means anything
+    # How far the skin may have fallen over the last week, float-adjusted,
+    # before nothing of it is opened. 0 turns the check off.
+    max_drop: float = 0.05
+
+    def ladder_params(self):
+        from . import ladder as _ladder
+        return _ladder.Params(fee=self.fee, min_margin=self.min_margin,
+                              window_days=self.window_days,
+                              min_sample=self.min_sample,
+                              max_drop=self.max_drop)
 
 
 @dataclass
@@ -132,10 +142,16 @@ class Band:
     lam: float | None = None
     queue: int = 0
     t_buy: float | None = None
-    # How long until someone buys in this band at all. Reported, never
-    # divided by: turning a margin into a rate needs the trade lock and the
-    # payout wait, a fortnight that nothing here measures.
+    # Days our item stands on sale once the lock lifts, behind the ones of
+    # ours already heading into the same band. The rank divides by it plus
+    # the lock - see `ladder.turnover`.
     t_sell: float | None = None
+    sell_rate: float = 0.0             # sales a day in the band we sell into
+    lot_min: float | None = None       # that band
+    lot_max: float | None = None
+    own_queue: int = 0                 # ours bought within the last lock
+    trend: float | None = None         # the skin's last week, float-adjusted
+    rank: float = 0.0                  # margin / (lock + t_sell)
     # What the cheapest leading price would have given, so the surcharge the
     # scan paid for flow is visible beside the price it chose rather than
     # having to be taken on trust.
@@ -180,7 +196,8 @@ def _competing(orders: Sequence[dict], lo: float, hi: float,
 def evaluate(lo: float, hi: float, sales: Sequence[dict],
              orders: Sequence[dict], span: tuple[float, float] | None = None,
              depth: Sequence[dict] = (),
-             params: Params | None = None) -> Band:
+             params: Params | None = None,
+             own: Sequence[float] = ()) -> Band:
     """Price one order that already exists, over exactly [lo, hi].
 
     Planning asks "which orders are worth placing"; this asks "what is the one
@@ -196,16 +213,15 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
     # priced a held order off a quarter of history at a fortnight's rate.
     rung = _ladder.evaluate(
         hi, _ladder.within(sales, p.window_days), orders, (lo, hi), lots, prices,
-        _ladder.Params(fee=p.fee, min_margin=p.min_margin,
-                       window_days=p.window_days, min_sample=p.min_sample),
-        lot_span=lot_span)
+        p.ladder_params(), lot_span=lot_span, own=own)
     return _as_band(rung)
 
 
 def plan(sales: Sequence[dict], orders: Sequence[dict],
          span: tuple[float, float] | None,
          depth: Sequence[dict] = (),
-         params: Params | None = None) -> list[Band]:
+         params: Params | None = None,
+         own: Sequence[float] = ()) -> list[Band]:
     """Score every candidate order for an item, taken or not.
 
     The scoring lives in `ladder`, which prices nested orders running from the
@@ -223,10 +239,8 @@ def plan(sales: Sequence[dict], orders: Sequence[dict],
     p = params or Params()
     if not span:
         return []
-    rungs = _ladder.ladder(
-        sales, orders, span, depth,
-        _ladder.Params(fee=p.fee, min_margin=p.min_margin,
-                       window_days=p.window_days, min_sample=p.min_sample))
+    rungs = _ladder.ladder(sales, orders, span, depth, p.ladder_params(),
+                           own=own)
     return [_as_band(r) for r in rungs]
 
 
@@ -258,6 +272,13 @@ def _as_band(rung) -> Band:
         paid=rung.bid,
         margin_worst=rung.margin,
         lam=rung.lam,
+        t_sell=rung.t_sell,
+        sell_rate=rung.sell_rate,
+        lot_min=rung.lot_lo,
+        lot_max=rung.lot_hi,
+        own_queue=rung.own,
+        trend=rung.trend,
+        rank=rung.rank,
         queue=rung.lots,
         flow_sample=rung.sample,
         take=rung.take,

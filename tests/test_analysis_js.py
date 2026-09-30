@@ -458,7 +458,8 @@ def test_the_table_shows_the_rank_the_plan_orders_by():
     "why is this one first" had no answer you could read off the table."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
-    assert "const rank = (b.lam || 0) * (b.margin || 0)" in row
+    assert "const rank = b.rank || 0" in row, \
+        "the rank the ladder computed, not one worked out again on the page"
     header = source.split("полоса</th>")[1].split("</thead>")[0]
     assert "ранг" in header
 
@@ -472,12 +473,12 @@ def test_the_headroom_is_shown_in_outbids_not_only_dollars():
 
 
 def test_no_column_reads_a_field_the_ladder_stopped_filling():
-    """The old disjoint-band model left `entry`, `wars`, `t_buy` and `t_sell`
-    behind. Nothing fills them now, so a column reading one renders a blank
+    """The old disjoint-band model left `entry`, `wars` and `t_buy`
+    behind (`t_sell` is filled again: the rank divides by it). Nothing fills them now, so a column reading one renders a blank
     or throws - which is how "запас None перебив." reached the plan page."""
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
-    for dead in ("b.entry", "b.wars", "b.t_buy", "b.t_sell", "b.entry_lam",
+    for dead in ("b.entry", "b.wars", "b.t_buy", "b.entry_lam",
                  "b.paid", "b.margin_worst"):
         assert dead not in row, f"{dead} is not filled any more"
 

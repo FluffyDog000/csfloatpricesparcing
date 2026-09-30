@@ -1,0 +1,99 @@
+"""The brake: too much bought in one day takes every order down.
+
+Steam bots carry the same rule as "the balance fell by N% in a day". On CSFloat
+the balance falls for exactly one reason we control - orders filling - so the
+rule is kept and measured where it happens: the fills the account sync has
+seen in the last twenty-four hours, against the balance.
+
+What it is for. A normal day buys a small, steady share: with the money spent
+the way the plan spends it, a dollar comes back after the lock and the sale,
+so a day's fills are roughly a ninth of what is tied up. A day that buys a
+third of the balance is not that. Either sellers are dumping into our orders
+because the skin is collapsing faster than the history knows, or a ceiling is
+wrong and every seller has noticed. Both are cases for stopping first and
+looking second.
+
+Once it trips it stays tripped. Every order the bot placed is taken down, the
+plan is disarmed and anything approved but not yet sent is dropped, and
+nothing can be applied until someone resets it by hand. Orders placed by hand
+on the site are the owner's, and are left alone.
+
+The balance is not read from the account - the bot is told it on the settings
+page. Without it the budget stands in, which is the money we meant to commit.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable
+
+from .holdings import bought_within
+
+TRIPPED_KEY = "guard_tripped"
+WINDOW_DAYS = 1.0
+
+
+@dataclass
+class Reading:
+    spent: float            # fills seen in the last day, at our order price
+    fills: int
+    reference: float        # the balance, or the budget when it is not known
+    limit: float            # spent at or above this trips it; 0 = off
+
+    @property
+    def tripped(self) -> bool:
+        return self.limit > 0 and self.spent >= self.limit - 1e-9
+
+    def reason(self) -> str:
+        return (f"за сутки исполнилось {self.fills} ордер(ов) на "
+                f"${self.spent:.2f} — это {self.spent / self.reference * 100:.0f}% "
+                f"от ${self.reference:.2f}, порог "
+                f"{self.limit / self.reference * 100:.0f}%")
+
+    def as_dict(self) -> dict:
+        out = dict(self.__dict__)
+        out["tripped"] = self.tripped
+        return out
+
+
+def read(rows: Iterable[dict], limits, now: datetime | None = None) -> Reading:
+    """Where the day stands. `rows` is `our_orders(live_only=False)`."""
+    bought = bought_within(rows, WINDOW_DAYS, now)
+    spent = 0.0
+    for row in bought:
+        try:
+            spent += float(row.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    reference = limits.balance if limits.balance > 0 else limits.total_capital
+    share = limits.guard_share
+    limit = reference * share if reference > 0 and share > 0 else 0.0
+    return Reading(round(spent, 2), len(bought), reference, limit)
+
+
+def tripped(db) -> dict | None:
+    """What tripped it and when, or None while it stands open."""
+    raw = db.get_setting(TRIPPED_KEY)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        # Unreadable is still tripped: the safe reading of a brake whose
+        # state cannot be read is "on".
+        return {"at": None, "reason": "состояние защиты не читается"}
+
+
+def trip(db, reading: Reading, at: str) -> dict:
+    state = {"at": at, "reason": reading.reason(), **reading.as_dict()}
+    db.set_setting(TRIPPED_KEY, json.dumps(state, ensure_ascii=False))
+    # Disarmed, and whatever was approved but not yet sent goes with it: it
+    # was approved before this happened.
+    db.set_setting("analysis_armed", "0")
+    db.set_setting("analysis_pending_actions", "")
+    return state
+
+
+def reset(db) -> None:
+    db.set_setting(TRIPPED_KEY, "")

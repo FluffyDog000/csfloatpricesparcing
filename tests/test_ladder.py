@@ -269,11 +269,14 @@ def test_the_ladder_is_ordered_by_rank():
     assert rungs == sorted(rungs, key=lambda r: -r.rank)
 
 
-def test_rank_is_return_per_dollar_per_day():
-    """Ranking on money alone would let dear orders crowd out better ones."""
+def test_rank_is_return_per_dollar_per_day_it_is_tied_up():
+    """The money is tied up from the fill: the lock, then the days on sale.
+    Not while the order waits - CSFloat does not reserve it."""
     rungs = [r for r in ladder(spread(), [], (0.15, 0.38)) if r.take]
+    assert rungs
     for r in rungs:
-        assert r.rank == pytest.approx(r.lam * r.margin)
+        assert r.t_sell is not None and r.t_sell > 0
+        assert r.rank == pytest.approx(r.margin / (LOCK_DAYS + r.t_sell))
 
 
 def test_the_lock_is_a_fact_not_a_setting():
@@ -409,3 +412,64 @@ def test_a_window_of_zero_windows_nothing_rather_than_everything():
 
     rows = [sale(50.0, 0.16, age=900.0)]
     assert len(within(rows, 0.0)) == 1
+
+
+# -- the trend, the sell queue and our own place in it ----------------------
+
+def falling():
+    """spread(), with the last week's sales ten percent cheaper."""
+    out = []
+    for i in range(24):
+        f = round(0.16 + i * 0.01, 4)
+        price = 55.0 - i * 0.5
+        for j in range(10):
+            age = j % 14 + 0.5
+            out.append(sale(price * (0.9 if age <= 7 else 1.0), f, age=age))
+        # A bargain deep enough to clear a bid priced off the lower median.
+        out.append(sale(price * 0.75, f, age=i % 14 + 0.5))
+    return out
+
+
+def test_a_falling_skin_is_scored_but_not_opened():
+    rungs = ladder(falling(), [], (0.15, 0.38))
+    assert rungs and not any(r.take for r in rungs)
+    refused = [r for r in rungs if "дешевеет" in r.reason]
+    assert refused, [r.reason for r in rungs]
+    assert all(r.market is not None and r.trend < -0.05 for r in refused), \
+        "the numbers are still there to read"
+
+
+def test_the_fall_check_can_be_turned_off():
+    rungs = ladder(falling(), [], (0.15, 0.38), params=Params(max_drop=0.0))
+    assert any(r.take for r in rungs)
+
+
+def test_a_steady_skin_is_not_refused_for_its_trend():
+    rungs = ladder(spread(), [], (0.15, 0.38))
+    assert all("дешевеет" not in r.reason for r in rungs)
+    assert all(r.trend is not None and abs(r.trend) < 0.05 for r in rungs)
+
+
+def test_our_own_locked_items_stand_in_front_of_the_next_one():
+    """Bought within the lock, unsold for certain, headed for the same band:
+    the next item waits behind them, and the rank falls with the wait."""
+    alone = {r.top: r for r in ladder(spread(), [], (0.15, 0.38)) if r.take}
+    top = min(alone)
+    behind = {r.top: r for r in ladder(spread(), [], (0.15, 0.38),
+                                       own=[top] * 3) if r.take}
+    assert behind[top].own == 3
+    assert behind[top].t_sell == pytest.approx(4 * alone[top].t_sell)
+    assert behind[top].rank < alone[top].rank
+
+
+def test_a_band_that_sells_slower_than_we_would_buy_is_refused():
+    """Cheap sales across the whole reach fill the order, but our items land
+    at the top, and the top's band sells slower than that. Our own items
+    would queue there for ever."""
+    sales = [sale(40.0, 0.199, age=j % 14 + 0.5) for j in range(8)]
+    sales += [sale(30.0, 0.16, age=j % 14 + 0.5) for j in range(20)]
+    r = evaluate(0.20, sales, [], (0.15, 0.38), lots=0, asks=[],
+                 params=Params(max_drop=0.0))
+    assert r.lam > r.sell_rate > 0
+    assert not r.take
+    assert "не успевает" in r.reason, r.reason

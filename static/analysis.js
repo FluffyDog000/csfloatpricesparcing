@@ -283,7 +283,12 @@
     // bought by not overpaying at the start.
     const room = (b.ceiling || 0) - (b.bid || 0);
     const steps = b.step ? Math.floor(room / b.step + 1e-9) : 0;
-    const rank = (b.lam || 0) * (b.margin || 0);
+    const rank = b.rank || 0;
+    // The days on sale the rank divides by, beside it: the rank alone does
+    // not say whether a band lost on margin or on a queue of our own.
+    const sells = b.t_sell === null || b.t_sell === undefined ? ""
+      : `продажа ~${b.t_sell < 1 ? "<1" : b.t_sell.toFixed(1)} дн`
+        + (b.own_queue ? `, своих впереди ${b.own_queue}` : "");
     // Which candidate set the exit, and what the other one said. "история"
     // on its own does not say whether the sell queue was a cent away from
     // binding or nowhere near it - and that is the question the stored lot
@@ -336,7 +341,8 @@
         <br><small class="muted">${exitSecond}</small></td>
       <td><b>${pct(b.margin)}</b></td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
-      <td><b>${rank ? rank.toFixed(4) : "—"}</b></td>
+      <td><b>${rank ? rank.toFixed(4) : "—"}</b>${
+        sells ? `<br><small class="muted">${sells}</small>` : ""}</td>
       <td class="muted">${b.queue || 0}${b.queue_capped ? "+" : ""}${
         aged ? `<br><small${
           Date.now() - Date.parse(depthAt) > 86400000 ? ' class="over"' : ""
@@ -515,8 +521,9 @@
 так что это худший случай, а не ожидаемый">маржа</th>
         <th title="как часто наш ордер исполнялся бы: не поток через полосу,
 а наша доля в нём">λ/сут</th>
-        <th title="λ × маржа — отдача на доллар в сутки. По нему план
-расставляет, что ставить первым, когда лимита на всех не хватает">ранг</th>
+        <th title="маржа ÷ (7 дней блокировки + дни на продаже) — отдача на
+доллар в сутки, пока деньги заняты. По нему план расставляет, что ставить
+первым, когда денег на всех не хватает">ранг</th>
         <th title="лотов дешевле медианы, которые стоят перед нами при
 продаже. Дороже медианы не в счёт: такие мы подрезаем">очередь</th>
       </tr></thead>`;
@@ -600,6 +607,8 @@
       }
     }
 
+    renderGuard(d.guard);
+
     if (!d.actions.length) {
       box.innerHTML = '<p class="muted">Действий нет.</p>';
       return;
@@ -608,13 +617,16 @@
     t.className = "stat";
     t.innerHTML = `<thead><tr><th>что</th><th>предмет</th><th>float</th>
       <th>цена</th><th>потолок</th>
-      <th title="λ × маржа — отдача на доллар в сутки. Список идёт по нему
-сверху вниз: когда лимита на всех не хватает, ставится то, что выше">ранг</th>
+      <th title="маржа ÷ (блокировка + дни на продаже) — отдача на доллар
+в сутки. Список идёт по нему сверху вниз: когда денег на всех не хватает,
+ставится то, что выше">ранг</th>
       <th>почему</th></tr></thead>`;
     const tb = document.createElement("tbody");
     let need = 0;
+    let tied = 0;
     d.actions.forEach((a) => {
       if (a.kind === "place") need += a.price;
+      if (a.kind === "place") tied += a.tied_up || 0;
       if (a.kind === "raise" && a.was) need += a.price - a.was;
       const [label, cls] = KIND[a.kind] || [a.kind, ""];
       const tr = document.createElement("tr");
@@ -644,7 +656,8 @@
     // A button that will refuse should say so before it is pressed, not
     // after: "ничего не произошло" is the one outcome that teaches nothing.
     const doing = d.actions.filter((a) => a.kind !== "keep");
-    const blocking = !d.can_place ? "запрос постановки не настроен"
+    const blocking = d.guard && d.guard.tripped ? "сработала защита от слива"
+      : !d.can_place ? "запрос постановки не настроен"
       : !d.limits.total_capital ? "бюджет равен нулю"
       : !doing.length ? "в плане нечего выполнять"
       : !d.armed ? "выставление не разрешено"
@@ -657,8 +670,9 @@
 
     const places = d.actions.filter((a) => a.kind === "place").length;
     const sum = document.createElement("p");
-    sum.innerHTML = `Потребуется <b>${money(need)}</b> из лимита `
-      + `<b>${money(d.limits.total_capital)}</b> · ${places} ордер(ов) `
+    sum.innerHTML = `Ордеров на <b>${money(need)}</b>; их исполнения будут `
+      + `держать около <b>${money(tied)}</b> из <b>${money(d.limits.budget)}</b> `
+      + `· ${places} ордер(ов) `
       + `из ${d.limits.max_orders}, не больше `
       + `${d.limits.max_orders_per_item} на предмет`;
     box.appendChild(sum);
@@ -825,6 +839,32 @@
     box.appendChild(actionTable(res.results, "итог"));
   }
 
+  /** The brake: tripped or not, and where today stands against it. */
+  function renderGuard(g) {
+    const box = $("plan-guard");
+    const reset = $("plan-guard-reset");
+    if (!box) return;
+    if (!g) { box.textContent = ""; if (reset) reset.hidden = true; return; }
+    const today = g.today || {};
+    if (g.tripped) {
+      box.className = "err";
+      box.textContent = "Сработала защита от слива"
+        + (g.tripped.at ? " " + String(g.tripped.at).slice(0, 16).replace("T", " ") : "")
+        + ": " + (g.tripped.reason || "")
+        + (g.tripped.cancelled !== undefined
+          ? ` · снято ${g.tripped.cancelled}, не снялось ${g.tripped.failed || 0}` : "")
+        + ". Выставление выключено до сброса.";
+      if (reset) reset.hidden = false;
+      return;
+    }
+    if (reset) reset.hidden = true;
+    box.className = "muted";
+    box.textContent = !today.limit
+      ? "Защита от слива выключена: не задан ни баланс, ни бюджет, либо порог 0."
+      : `Защита от слива: за сутки исполнилось на ${money(today.spent)} `
+        + `из допустимых ${money(today.limit)}.`;
+  }
+
   function fillLimits(l) {
     $("l-total").value = l.total_capital;
     $("l-item").value = l.per_item_capital;
@@ -832,22 +872,23 @@
     $("l-maxitem").value = l.max_orders_per_item;
     $("l-patience").value = l.patience_minutes;
     $("l-balance").value = l.balance;
+    $("l-guard").value = Math.round((l.guard_share || 0) * 1000) / 10;
     const note = $("l-allowance");
     if (!note) return;
     if (!l.balance) {
       note.className = "muted";
-      note.textContent = "Баланс не указан — проверка «10× баланса» отключена.";
+      note.textContent = "Баланс не указан — планирую на весь лимит, "
+        + "и защита от слива считает от него.";
     } else if (l.capped_by_balance) {
       note.className = "err";
-      note.textContent = `Баланс ${money(l.balance)} — CSFloat разрешит ордеров `
-        + `не больше чем на ${money(l.allowance)}. Лимит `
-        + `${money(l.total_capital)} выше этого, планировать буду на `
-        + `${money(l.budget)}.`;
+      note.textContent = `Баланс ${money(l.balance)} меньше лимита `
+        + `${money(l.total_capital)}: исполнения платятся с баланса, `
+        + `планировать буду на ${money(l.budget)}.`;
     } else {
       note.className = "muted";
-      note.textContent = `Баланс ${money(l.balance)} → потолок CSFloat `
-        + `${money(l.allowance)}. Твой лимит ${money(l.total_capital)} — в него `
-        + `укладывается. Учти: исполнится только то, на что хватит баланса.`;
+      note.textContent = `Баланс ${money(l.balance)}, лимит `
+        + `${money(l.total_capital)} в него укладывается. Ордеров CSFloat `
+        + `разрешит на ${money(l.allowance)} — это ограничение до денег не доходит.`;
     }
   }
 
@@ -871,6 +912,7 @@
     $("p-margin").value = (p.min_margin * 100).toFixed(1);
     $("p-window").value = p.window_days;
     $("p-sample").value = p.min_sample;
+    $("p-drop").value = Math.round((p.max_drop || 0) * 1000) / 10;
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -1027,6 +1069,16 @@
       await loadPlan();
     });
     $("plan-defend").onchange = saveDefence;
+
+    $("plan-guard-reset").onclick = () => {
+      if (!confirm("Сбросить защиту? Выставление снова станет возможным — "
+        + "сначала разберись, почему она сработала.")) return;
+      action("Сбрасываю защиту", async () => {
+        await postJSON("/api/analysis/guard", { reset: true }, token());
+        say("Защита сброшена.", "ok");
+        await loadPlan();
+      });
+    };
     $("plan-defend-min").onchange = saveDefence;
 
     $("plan-apply").onclick = () => {
@@ -1115,12 +1167,14 @@
         an_min_margin: (parseFloat($("p-margin").value) / 100) || 0.05,
         an_window: $("p-window").value,
         an_min_sample: $("p-sample").value,
+        an_max_drop: (parseFloat($("p-drop").value) || 0) / 100,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,
       an_max_orders: $("l-max").value,
       an_max_per_item: $("l-maxitem").value,
       an_patience_min: $("l-patience").value,
       an_balance: $("l-balance").value,
+      an_guard_share: (parseFloat($("l-guard").value) || 0) / 100,
       scr_min_price: $("s-minprice").value,
       scr_max_price: $("s-maxprice").value,
       scr_min_flow: $("s-flow").value,

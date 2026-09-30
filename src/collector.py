@@ -584,7 +584,11 @@ class Collector:
             return None
         try:
             pending = _json.loads(raw)
-            actions = [Action(**a) for a in pending.get("actions", [])]
+            # Only the action's own fields: the page's plan carries extras for
+            # display (the money a band keeps busy), which are not orders.
+            fields = set(Action.__dataclass_fields__)
+            actions = [Action(**{k: v for k, v in a.items() if k in fields})
+                       for a in pending.get("actions", [])]
         except (ValueError, TypeError) as exc:
             log.warning("Approved plan unreadable, dropping it: %s", exc)
             self.db.set_setting("analysis_pending_actions", "")
@@ -593,6 +597,12 @@ class Collector:
         # Taken before the first request: a crash halfway must not leave a plan
         # that gets applied again on the next pass.
         self.db.set_setting("analysis_pending_actions", "")
+        from .guard import tripped
+        if tripped(self.db):
+            # The page refuses to queue a plan while the brake is on; this is
+            # the same refusal for one queued in the moment before it tripped.
+            log.warning("Approved plan dropped: the brake is on")
+            return None
         spec = load(self.db.get_setting(PLACEMENT_KEY))
         dry = (self.db.get_setting("analysis_dry_run", "1") or "1") != "0"
 
@@ -739,7 +749,86 @@ class Collector:
         self.db.set_setting("orders_sync_at", result["at"])
         if result["changes"]:
             log.info("Order sync: %s", result["counts"])
+        # Here, because this is where a fill is first seen: the brake reads
+        # nothing the sync has not just written.
+        try:
+            self.check_guard()
+        except Exception as exc:  # noqa: BLE001 - logged loudly, sync stands
+            log.error("Brake check failed: %s", exc)
         return result
+
+    def check_guard(self) -> dict | None:
+        """Pull the brake if the last day bought too much. See `guard`.
+
+        Returns what it did, or None when nothing tripped. Once tripped it
+        does nothing further until reset by hand: taking the orders down a
+        second time would only be the same requests again.
+        """
+        from .guard import TRIPPED_KEY, read, trip, tripped
+        from .placement import PLACEMENT_KEY, load
+        from .sender import Sender
+        from .settings import dry_run, limits as read_limits
+
+        if tripped(self.db):
+            return None
+        reading = read(self.db.our_orders(live_only=False),
+                       read_limits(self.db))
+        if not reading.tripped:
+            return None
+
+        state = trip(self.db, reading, utcnow_iso())
+        log.error("Brake pulled: %s", state["reason"])
+
+        # Every order the bot placed, and only those: a "manual" row is one
+        # the owner put up on the site, and it is theirs to take down.
+        dry = dry_run(self.db)
+        spec = load(self.db.get_setting(PLACEMENT_KEY))
+        results = []
+        live = self.db.our_orders()
+        if live:
+            self.client.pool.pin(for_orders=True)
+            try:
+                sender = Sender(self.config.http.base_url, spec,
+                                self.client.send_json, dry_run=dry)
+                for row in live:
+                    name = self.db.item_name(int(row["item_id"])) or "?"
+                    action = Action(
+                        CANCEL, name, float(row["float_min"]),
+                        float(row["float_max"]), float(row["price"]),
+                        float(row["ceiling"]),
+                        "защита от слива: " + state["reason"],
+                        order_id=row.get("id"), remote_id=row.get("remote_id"))
+                    out = sender.perform(action)
+                    results.append(out.as_dict())
+                    self._log_order_event(out, "guard", dry,
+                                          item_id=int(row["item_id"]))
+                    if out.ok and not dry:
+                        self.db.set_our_order_state(int(row["id"]),
+                                                    "cancelled", out.detail)
+            finally:
+                self.client.pool.unpin()
+
+        done = sum(1 for r in results if r["ok"])
+        state.update({"cancelled": done, "failed": len(results) - done,
+                      "dry_run": dry})
+        # The same record the page reads, now with what came of it.
+        self.db.set_setting(TRIPPED_KEY, json.dumps(state, ensure_ascii=False))
+        self._tell("🛑 CSFloat: сработала защита от слива.\n"
+                   f"{state['reason']}.\n"
+                   f"Снято ордеров: {done} из {len(results)}"
+                   + (" (вхолостую)" if dry else "")
+                   + ". Выставление выключено до ручного сброса.")
+        return state
+
+    def _tell(self, text: str) -> None:
+        """One Telegram message, if Telegram is set up. Never raises."""
+        try:
+            from .telegram import TelegramClient
+            tg = TelegramClient(self.config.telegram)
+            if tg.configured():
+                tg.send_message(text)
+        except Exception as exc:  # noqa: BLE001 - the brake matters more
+            log.warning("Could not send the brake alert: %s", exc)
 
     def _all_pages(self, base: str, path: str, cap: int = 20) -> list[dict]:
         """Every order on the path, following its pages if it has any.
@@ -848,7 +937,8 @@ class Collector:
         import json as _json
 
         from .executor import CANCEL, RAISE, reconcile
-        from .holdings import strip_own
+        from .holdings import locked_tops, strip_own
+        from .ladder import LOCK_DAYS
         from .placement import PLACEMENT_KEY, load
         from .pricing import evaluate
         from .sender import Sender
@@ -905,6 +995,8 @@ class Collector:
             # would read as "this band no longer qualifies" and withdraw a
             # position that is perfectly sound.
             span = wear_range(name)
+            own = locked_tops(self.db.our_orders(item_id, live_only=False),
+                              LOCK_DAYS)
             wanted = []
             for row in rows:
                 # Passed on whether or not it would be placed anew. "Not worth
@@ -913,7 +1005,7 @@ class Collector:
                 # missing band as a dead one and withdraw a sound position.
                 wanted.append(evaluate(
                     float(row["float_min"]), float(row["float_max"]),
-                    sales, book, span, depth, params))
+                    sales, book, span, depth, params, own=own))
 
             actions = [a for a in reconcile(name, wanted, rows, book, limits)
                        if a.kind in (RAISE, CANCEL)]
