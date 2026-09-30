@@ -188,3 +188,34 @@ def test_the_items_reply_carries_what_the_filters_read():
     assert (it["category"], it["wear"], it["rarity_name"], it["collection"]) \
         == ("knife", "FN", "Тайное", "The Chroma Collection"), \
         "a poll without the fields must not wipe what an earlier one stored"
+
+
+def test_a_selection_goes_to_the_analysis_list_in_one_request():
+    """Picked here, swept there: the list the order-book sweep runs over."""
+    from tests.test_analysis_page import _app
+
+    names = ["AK-47 | Redline (Field-Tested)", "AWP | Asiimov (Field-Tested)",
+             "★ Karambit | Fade (Factory New)"]
+    c = _app(names)
+    c.post("/api/analysis/items", json={"market_hash_name": names[0]})
+    r = c.post("/api/analysis/items", json={
+        "action": "add_many", "names": names + ["Nobody | Tracks This"]}).get_json()
+    assert r["items"] == names, "what was there stays first, nothing twice"
+    assert r["unknown"] == ["Nobody | Tracks This"]
+
+    flags = {i["market_hash_name"]: i["in_analysis"]
+             for i in c.get("/api/items").get_json()["items"]}
+    assert all(flags[n] for n in names)
+    assert not any(v for n, v in flags.items() if n not in names), \
+        "only what was sent"
+
+    r = c.post("/api/analysis/items", json={
+        "action": "remove_many", "names": names[1:]}).get_json()
+    assert r["items"] == names[:1]
+
+
+def test_the_analysis_list_is_a_filter_too():
+    items = [item("AK-47 | Redline (Field-Tested)", in_analysis=True),
+             item("AWP | Asiimov (Field-Tested)", in_analysis=False)]
+    got = run(items, f"""filters.sets.analysis.add("out"); render(); {NAMES}""")
+    assert got == ["AWP | Asiimov (Field-Tested)"]

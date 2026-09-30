@@ -455,6 +455,7 @@ def api_items():
 
     db = get_db()
     rows = db.items_summary()
+    in_analysis = set(_analysis_items(db))
     out = []
     folders: set[str] = set()
     for r in rows:
@@ -487,6 +488,7 @@ def api_items():
                 "rarity": r["rarity"],
                 "rarity_name": rarity_label(r["rarity"]),
                 "collection": r["collection"],
+                "in_analysis": name in in_analysis,
                 **describe(name),
                 "min_price": round(r["min_price"], 2) if r["min_price"] is not None else None,
                 "max_price": round(r["max_price"], 2) if r["max_price"] is not None else None,
@@ -821,7 +823,11 @@ def api_analysis_items():
     `set` replaces the whole list at once, which is what the picker sends: a
     dialog where boxes are ticked and unticked has one answer at the end, and
     applying it as a stream of adds and removes would leave the list half
-    changed if one of them failed."""
+    changed if one of them failed.
+
+    `add_many` and `remove_many` are what the item list sends for a selection:
+    a filter of several hundred items goes over in one request, and whatever
+    is already on the list stays where it is."""
     _require_admin()
     data = request.get_json(silent=True) or {}
     name = (data.get("market_hash_name") or "").strip()
@@ -831,6 +837,23 @@ def api_analysis_items():
     unknown: list[str] = []
     if action == "clear":
         names = []
+    elif action in ("add_many", "remove_many"):
+        wanted = data.get("names")
+        if not isinstance(wanted, list):
+            abort(400, description="names must be a list")
+        picked = [str(n or "").strip() for n in wanted]
+        picked = [n for n in picked if n]
+        if action == "remove_many":
+            drop = set(picked)
+            names = [n for n in names if n not in drop]
+        else:
+            for n in picked:
+                if n in names:
+                    continue
+                if db.get_item_id(n) is None:
+                    unknown.append(n)
+                    continue
+                names.append(n)
     elif action == "set":
         wanted = data.get("names")
         if not isinstance(wanted, list):

@@ -46,7 +46,7 @@ function msg(text, isError) {
 
 const FILTER_KEY = "items_filters_v1";
 const GROUPS = ["category", "wear", "rarity", "special", "status", "folder",
-                "collection"];
+                "analysis", "collection"];
 const PAGE = 120;                    // cards drawn per "показать ещё"
 
 // Every group reads one value off an item. "none" stands for "the item has
@@ -59,6 +59,7 @@ const VALUE = {
   special: (it) => (it.stattrak ? "st" : it.souvenir ? "sv" : "plain"),
   status: (it) => (it.active ? "active" : "paused"),
   folder: (it) => folderOf(it),
+  analysis: (it) => (it.in_analysis ? "in" : "out"),
   collection: (it) => it.collection || "none",
 };
 
@@ -237,6 +238,7 @@ function chipLabel(group, value, sample) {
     return { st: "StatTrak™", sv: "Souvenir", plain: "обычные" }[value] || value;
   }
   if (group === "status") return value === "active" ? "собирается" : "на паузе";
+  if (group === "analysis") return value === "in" ? "в списке" : "не в списке";
   if (group === "collection" && value === "none") return "нет данных";
   return escapeHtml(value);
 }
@@ -247,6 +249,7 @@ function chipOrder(group, values) {
     wear: ["FN", "MW", "FT", "WW", "BS", "none"],
     special: ["plain", "st", "sv"],
     status: ["active", "paused"],
+    analysis: ["in", "out"],
   }[group];
   if (rank) return values.sort((a, b) => rank.indexOf(a) - rank.indexOf(b));
   if (group === "rarity") {
@@ -382,6 +385,7 @@ function cardMain(it) {
   const inactive = it.active ? "" : `<span class="inactive">на паузе</span>`;
   const pat = it.pattern_sensitive ? "" : `<span class="tag">seed н/в</span>`;
   const hid = it.hidden ? `<span class="tag">скрыт</span>` : "";
+  const an = it.in_analysis ? `<span class="tag tag-an">в анализе</span>` : "";
   const rar = it.rarity_name
     ? `<span class="rar" style="background:${RARITY_COLOR[it.rarity] || "#888"}">${escapeHtml(it.rarity_name)}</span>`
     : "";
@@ -393,7 +397,7 @@ function cardMain(it) {
     <a class="card-main" href="/item/${encodeURIComponent(it.market_hash_name)}">
       ${img}
       <div>
-        <div class="name">${escapeHtml(it.market_hash_name)} ${inactive} ${pat} ${hid}</div>
+        <div class="name">${escapeHtml(it.market_hash_name)} ${inactive} ${pat} ${hid} ${an}</div>
         ${rar || sub ? `<div class="sub">${rar}${sub}</div>` : ""}
         <div class="meta">
           продаж: <b>${it.total_sales}</b>
@@ -581,6 +585,10 @@ document.getElementById("bulk-bar").addEventListener("click", async (ev) => {
     return;
   }
   if (act === "none") { selected.clear(); render(); return; }
+  if (act === "analysis-add" || act === "analysis-remove") {
+    await toAnalysis(act === "analysis-add");
+    return;
+  }
   if (act === "folder") {
     const f = prompt(`Переместить ${selected.size} предм. в папку (пусто = Other):`, "");
     if (f === null) return;
@@ -594,6 +602,27 @@ document.getElementById("bulk-bar").addEventListener("click", async (ev) => {
   }
   await bulk(act);
 });
+
+// The analysis tab keeps its own list, and the sweep of order books runs over
+// it. Sending a selection there is the step between "these look worth a
+// look" here and "what would the bot bid" there.
+async function toAnalysis(add) {
+  if (!selected.size) { msg("Ничего не выбрано", true); return; }
+  const names = Array.from(selected);
+  try {
+    const res = await postJSON("/api/analysis/items",
+      { action: add ? "add_many" : "remove_many", names }, token());
+    const total = (res.items || []).length;
+    msg(add
+      ? `В анализ: ${names.length - (res.unknown || []).length} предм., всего в списке ${total}. `
+        + "Обход стаканов — на вкладке «Анализ ордеров»."
+      : `Убрано из анализа: ${names.length}. Осталось в списке ${total}.`);
+    selected.clear();
+    await load();
+  } catch (e) {
+    msg("Ошибка: " + e.message, true);
+  }
+}
 
 // -- per-card management actions --------------------------------------------
 

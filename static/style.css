@@ -456,3 +456,4 @@ tr.act-keep td { opacity: .6; }
   .fgroup { flex-direction: column; gap: 4px; }
   .fgroup-title { flex: none; }
 }
+.card .tag.tag-an { color: var(--accent); border-color: var(--accent); }
