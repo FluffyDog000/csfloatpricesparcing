@@ -52,7 +52,7 @@ def decode(body: bytes, encoding: str) -> bytes:
     return body
 
 
-def measure(session, url, timeout, proxy):
+def measure(session, url, timeout, proxy, offer=None):
     """Один запрос: что пришло по проводу и что получилось после распаковки.
 
     Байты считаются здесь, а не берутся у urllib3: его счётчик сжатого потока
@@ -62,6 +62,7 @@ def measure(session, url, timeout, proxy):
     измерены, а не выведены одна из другой.
     """
     resp = session.get(url, timeout=timeout, stream=True,
+                       headers={"Accept-Encoding": offer} if offer else None,
                        proxies={"http": proxy, "https": proxy} if proxy else None)
     try:
         packed = resp.raw.read(decode_content=False)
@@ -102,6 +103,8 @@ def main() -> int:
     ap.add_argument("--params", help="какие имена проверить, через запятую; "
                                      "пустая строка — только замер размера, "
                                      "один запрос")
+    ap.add_argument("--codecs", action="store_true",
+                    help="сравнить упаковщики на этом же ответе: три запроса")
     ap.add_argument("--want", type=int, default=WANT,
                     help=f"сколько записей просить (по умолчанию {WANT})")
     args = ap.parse_args()
@@ -176,6 +179,31 @@ def main() -> int:
 
     # Пустая строка -- это «ничего не проверять», а не «не задано»: замер
     # размера стоит один запрос, перебор имён -- по одному на имя.
+    if args.codecs:
+        # Тот же ответ, упакованный по-разному. Сервер выбирает из того, что
+        # мы объявили, поэтому объявляем по одному кодеку за раз.
+        print("\nЧЕМ УПАКОВАНО   (один и тот же ответ, три запроса)")
+        base_wire = None
+        for offer, label in (("br", "brotli"), ("gzip", "gzip"),
+                             ("identity", "без сжатия")):
+            try:
+                got = measure(session, base, config.http.timeout_seconds, proxy,
+                              offer=offer)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  {label:<12} не дошло: {type(exc).__name__}")
+                continue
+            got_enc = got["encoding"]
+            if offer != "identity" and got_enc != offer:
+                print(f"  {label:<12} сервер не дал ({got_enc}) — "
+                      "предлагать нечего")
+                continue
+            if base_wire is None:
+                base_wire = got["wire"]
+            delta = ((got["wire"] / base_wire - 1) * 100) if base_wire else 0
+            print(f"  {label:<12} {got['wire'] / 1024:6.1f} КБ"
+                  + (f"   +{delta:.0f}% к brotli" if delta > 0.5 else
+                     "   ← лучший" if base_wire == got["wire"] else ""))
+
     names = ([p.strip() for p in args.params.split(",") if p.strip()]
              if args.params is not None else list(CANDIDATES))
     if not names:

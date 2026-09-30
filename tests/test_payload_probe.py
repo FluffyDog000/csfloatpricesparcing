@@ -167,3 +167,20 @@ def test_an_empty_params_list_means_measure_only():
     ap.add_argument("--params")
     assert ap.parse_args(["--params", ""]).params == ""
     assert ap.parse_args([]).params is None
+
+
+def test_one_codec_is_offered_at_a_time_when_comparing():
+    """Сервер выбирает из объявленного, поэтому сравнить их можно только
+    предложив по одному: иначе он всегда отдаёт лучший, и сравнения нет."""
+    tool = _tool()
+    session = Session(Resp(page(5), encoding=None))
+    tool.measure(session, "https://x/api", 5, None, offer="gzip")
+    assert session.kwargs[0]["headers"] == {"Accept-Encoding": "gzip"}
+
+
+def test_no_encoding_header_is_forced_when_not_comparing():
+    """Обычный замер идёт ровно так, как ходит сборщик."""
+    tool = _tool()
+    session = Session(Resp(page(5), encoding=None))
+    tool.measure(session, "https://x/api", 5, None)
+    assert session.kwargs[0]["headers"] is None
