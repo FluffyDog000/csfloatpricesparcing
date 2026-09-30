@@ -86,15 +86,24 @@ class EdgeBlocked(Exception):
 def wire_bytes(resp) -> int:
     """Bytes actually pulled over the wire, not the size of the decoded body.
 
-    A metered proxy bills for what crossed the link. CSFloat gzips its JSON,
-    so `len(resp.content)` - the decompressed body - overstates that several
-    times over, and a traffic forecast built on it buys far more gigabytes
-    than the job needs.
+    A metered proxy bills for what crossed the link. CSFloat gzips - and, once
+    brotli is installed, brotli-compresses - its JSON, so `len(resp.content)`
+    overstates that by an order of magnitude, and a traffic forecast built on
+    it buys far more gigabytes than the job needs.
 
-    urllib3 counts the compressed stream for us. Chunked responses carry no
-    Content-Length, and a mocked response may have neither, so the decoded
-    length stays as the last resort - wrong, but never absent.
+    Content-Length comes first because it is the server's own count of the
+    compressed body and is simply present or not. urllib3's stream counter
+    agrees with it where both exist, but on the live endpoint it came back
+    zero, which silently turned this into `len(resp.content)` and made the
+    traffic report identical to the figure it was meant to replace. The
+    decoded length stays as the last resort - wrong, but never absent.
     """
+    declared = (resp.headers or {}).get("Content-Length")
+    if declared:
+        try:
+            return int(declared)
+        except (TypeError, ValueError):
+            pass
     raw = getattr(resp, "raw", None)
     try:
         counted = raw.tell() if raw is not None else 0
@@ -102,12 +111,6 @@ def wire_bytes(resp) -> int:
         counted = 0
     if counted:
         return int(counted)
-    declared = (resp.headers or {}).get("Content-Length")
-    if declared:
-        try:
-            return int(declared)
-        except (TypeError, ValueError):
-            pass
     return len(resp.content)
 
 

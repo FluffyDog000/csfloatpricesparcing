@@ -1,14 +1,20 @@
 """Что стоит один опрос и можно ли просить меньше.
 
-Замер должен отделять провод от разжатого тела: на счёт прокси попадает
-первое, а в дашборде до недавнего стояло второе, и разница больше чем
-десятикратная. Проверка параметра должна отличать «принят и сработал» от
-«принят и проигнорирован» — иначе вывод сделан по коду 200, а он тут ничего
-не значит.
+Замер обязан отделять провод от разжатого тела: на счёт прокси попадает
+первое, а в дашборде до недавнего стояло второе. Первая живая попытка
+показала обе графы одинаковыми — счётчик сжатого потока у urllib3 вернул ноль
+и замер свалился в длину разжатого тела, выведя одну величину из другой.
+Поэтому байты считаются здесь, из сырого потока.
+
+Проверка параметра должна отличать «принят и сработал» от «принят и
+проигнорирован» — иначе вывод делается по коду 200, а он тут ничего не значит.
 """
+import gzip
 import importlib.util
 import json
 import pathlib
+
+import pytest
 
 
 def _tool():
@@ -19,29 +25,37 @@ def _tool():
     return mod
 
 
-class Raw:
-    def __init__(self, counted):
-        self._counted = counted
+def page(records):
+    """Страница продаж правдоподобного размера: описание повторяется в каждой
+    записи, из-за чего она и жмётся в разы."""
+    return json.dumps([
+        {"id": i, "price": 1000 + i, "created_at": "2026-09-29T10:00:00Z",
+         "item": {"float_value": 0.2 + i / 1000, "paint_seed": i,
+                  "market_hash_name": "AK-47 | Redline (Field-Tested)",
+                  "description": "лорный текст, одинаковый во всех записях " * 8}}
+        for i in range(records)]).encode()
 
-    def tell(self):
-        return self._counted
+
+class Raw:
+    def __init__(self, body):
+        self._body = body
+
+    def read(self, decode_content=False):
+        assert decode_content is False, "поток читается сырым, как пришёл"
+        return self._body
 
 
 class Resp:
-    def __init__(self, records, wire, status=200, encoding="gzip", payload=None):
-        # Записи набиты до правдоподобного размера: разжатое тело обязано быть
-        # заметно больше провода, иначе проверка сжатия ничего не проверяет.
-        body = payload if payload is not None else [
-            {"id": i, "price": 1000 + i, "item": {"description": "x" * 400}}
-            for i in range(records)]
-        self.content = json.dumps(body).encode()
+    def __init__(self, body, status=200, encoding="gzip", headers=None):
         self.status_code = status
-        self.headers = {"Content-Encoding": encoding} if encoding else {}
-        self.raw = Raw(wire)
-        self._body = body
+        self.headers = dict(headers or {})
+        if encoding:
+            self.headers["Content-Encoding"] = encoding
+        self.raw = Raw(body)
+        self.closed = False
 
-    def json(self):
-        return self._body
+    def close(self):
+        self.closed = True
 
 
 class Session:
@@ -50,9 +64,11 @@ class Session:
     def __init__(self, *responses):
         self._queue = list(responses)
         self.urls = []
+        self.kwargs = []
 
     def get(self, url, **kwargs):
         self.urls.append(url)
+        self.kwargs.append(kwargs)
         return self._queue.pop(0)
 
 
@@ -60,44 +76,77 @@ def measure(tool, resp):
     return tool.measure(Session(resp), "https://x/api", 5, None)
 
 
-def test_the_wire_size_is_reported_apart_from_the_decoded_body():
+def test_the_wire_size_is_measured_apart_from_the_decoded_body():
+    """Обе величины замерены, а не выведены одна из другой."""
     tool = _tool()
-    got = measure(tool, Resp(records=40, wire=3_000))
-    assert got["wire"] == 3_000
-    assert got["decoded"] > got["wire"], "разжатое тело больше того, что прошло"
+    plain = page(40)
+    got = measure(tool, Resp(gzip.compress(plain, 6)))
+    assert got["decoded"] == len(plain)
+    assert got["wire"] < got["decoded"] / 5, "сжатие обязано быть видно"
+    assert got["records"] == 40
 
 
-def test_the_record_count_comes_from_a_bare_list():
+def test_brotli_is_decoded_like_gzip():
+    brotli = pytest.importorskip("brotli")
     tool = _tool()
-    assert measure(tool, Resp(records=40, wire=3_000))["records"] == 40
+    plain = page(40)
+    got = measure(tool, Resp(brotli.compress(plain, quality=5), encoding="br"))
+    assert got["decoded"] == len(plain)
+    assert got["records"] == 40
+
+
+def test_an_uncompressed_answer_measures_the_same_both_ways():
+    """Без сжатия провод и тело совпадают — и это законный случай, не сбой."""
+    tool = _tool()
+    plain = page(10)
+    got = measure(tool, Resp(plain, encoding=None))
+    assert got["wire"] == got["decoded"] == len(plain)
+    assert got["encoding"] == "нет"
+
+
+def test_a_header_naming_a_codec_the_body_does_not_use_is_reported():
+    """Так делает прокси, распаковавший ответ и не снявший заголовок."""
+    tool = _tool()
+    got = measure(tool, Resp(page(5), encoding="br"))
+    assert got["failed"], "молчать об этом нельзя — обе графы совпадут"
+    assert got["records"] == 5, "тело всё равно разобрано"
 
 
 def test_the_record_count_comes_from_a_wrapped_list_too():
-    """Тот же эндпоинт у CSFloat встречается и обёрнутым в {"data": [...]}."""
     tool = _tool()
-    resp = Resp(records=0, wire=900, payload={"data": [{"id": 1}, {"id": 2}]})
-    assert measure(tool, resp)["records"] == 2
+    body = json.dumps({"data": [{"id": 1}, {"id": 2}]}).encode()
+    assert measure(tool, Resp(body, encoding=None))["records"] == 2
 
 
 def test_a_body_that_is_not_json_does_not_raise():
     tool = _tool()
-
-    class Junk(Resp):
-        def json(self):
-            raise ValueError("не json")
-
-    got = measure(tool, Junk(records=3, wire=100))
+    got = measure(tool, Resp(b"<html>Cloudflare</html>", encoding=None))
     assert got["records"] == 0 and got["body"] is None
 
 
-def test_an_uncompressed_answer_is_named_as_such():
+def test_the_missing_content_length_is_named_rather_than_assumed():
+    """Ответ кусками (chunked) заголовка не несёт — это надо видеть в выводе."""
     tool = _tool()
-    assert measure(tool, Resp(records=40, wire=45_000, encoding=None))["encoding"] == "нет"
+    got = measure(tool, Resp(page(5), encoding=None))
+    assert got["declared"] is None
+    got = measure(tool, Resp(page(5), encoding=None,
+                             headers={"Content-Length": "1234"}))
+    assert got["declared"] == "1234"
+
+
+def test_the_connection_is_released_even_though_the_read_is_streamed():
+    """stream=True держит соединение открытым, пока его не закрыть."""
+    tool = _tool()
+    resp = Resp(page(5), encoding=None)
+    session = Session(resp)
+    tool.measure(session, "https://x/api", 5, None)
+    assert session.kwargs[0]["stream"] is True
+    assert resp.closed
 
 
 def test_the_probe_asks_for_the_parameter_it_is_testing():
     tool = _tool()
-    session = Session(Resp(records=5, wire=800))
+    session = Session(Resp(page(5), encoding=None))
     tool.measure(session, "https://x/api?limit=5", 5, None)
     assert session.urls == ["https://x/api?limit=5"]
 
@@ -110,12 +159,8 @@ def test_the_candidate_names_are_tried_one_request_each():
 
 
 def test_an_empty_params_list_means_measure_only():
-    """Замер размера стоит один запрос; перебор имён — по одному на имя.
-
-    Пустая строка это «ничего не перебирать», а не «не задано»: иначе просьба
-    сделать один дешёвый замер тратит шесть запросов из квоты.
-    """
-    tool = _tool()
+    """Пустая строка — «ничего не перебирать», а не «не задано»: иначе просьба
+    сделать один дешёвый замер тратит шесть запросов из квоты."""
     import argparse
 
     ap = argparse.ArgumentParser()

@@ -27,16 +27,24 @@ class Resp:
             self.raw = Raw(counted)
 
 
-def test_the_compressed_stream_wins_over_the_decoded_body():
+def test_the_servers_own_count_wins_over_the_decoded_body():
+    """Content-Length — это длина сжатого тела, названная самим сервером."""
+    resp = Resp(body=b"x" * 60_000, counted=0,
+                headers={"Content-Length": "6500"})
+    assert wire_bytes(resp) == 6_500
+
+
+def test_the_stream_counter_is_used_when_no_length_was_declared():
+    """Ответ кусками (chunked) заголовка не несёт, счётчик потока есть."""
     resp = Resp(body=b"x" * 60_000, counted=7_000)
     assert wire_bytes(resp) == 7_000
 
 
-def test_content_length_is_used_when_the_stream_kept_no_count():
-    """Ответ переданный кусками (chunked) счётчика не имеет, заголовок есть."""
-    resp = Resp(body=b"x" * 60_000, counted=0,
-                headers={"Content-Length": "6500"})
-    assert wire_bytes(resp) == 6_500
+def test_a_stream_counter_stuck_at_zero_does_not_pass_for_a_measurement():
+    """Ровно это и случилось живьём: счётчик вернул ноль, замер молча стал
+    длиной разжатого тела, и обе графы в отчёте показали одно число."""
+    resp = Resp(body=b"x" * 60_000, counted=0)
+    assert wire_bytes(resp) == 60_000, "падаем в тело, но не притворяемся"
 
 
 def test_a_stream_that_refuses_to_count_does_not_break_the_read():

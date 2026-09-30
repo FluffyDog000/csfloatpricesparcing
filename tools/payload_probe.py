@@ -31,25 +31,64 @@ CANDIDATES = ("limit", "count", "per_page", "page_size", "take")
 WANT = 5
 
 
-def measure(session, url, timeout, proxy):
-    """Один запрос: что пришло по проводу и что получилось после распаковки."""
-    from src.csfloat_client import wire_bytes
+def decode(body: bytes, encoding: str) -> bytes:
+    """Распаковать тело тем же кодеком, которым его упаковал сервер."""
+    enc = (encoding or "").lower()
+    if enc == "gzip":
+        import gzip
+        return gzip.decompress(body)
+    if enc == "deflate":
+        import zlib
+        try:
+            return zlib.decompress(body)
+        except zlib.error:                      # без zlib-обёртки, голый deflate
+            return zlib.decompress(body, -zlib.MAX_WBITS)
+    if enc == "br":
+        import brotli
+        return brotli.decompress(body)
+    if enc == "zstd":
+        import zstandard
+        return zstandard.ZstdDecompressor().decompress(body)
+    return body
 
-    resp = session.get(url, timeout=timeout,
+
+def measure(session, url, timeout, proxy):
+    """Один запрос: что пришло по проводу и что получилось после распаковки.
+
+    Байты считаются здесь, а не берутся у urllib3: его счётчик сжатого потока
+    на сервере вернул ноль, замер молча свалился в длину разжатого тела, и обе
+    графы показали одно число. Поток читается сырым (`decode_content=False`),
+    распаковывается тем же кодеком, что назвал сервер, — и тогда обе величины
+    измерены, а не выведены одна из другой.
+    """
+    resp = session.get(url, timeout=timeout, stream=True,
                        proxies={"http": proxy, "https": proxy} if proxy else None)
-    decoded = len(resp.content)
-    wire = wire_bytes(resp)
     try:
-        body = resp.json()
-    except ValueError:
+        packed = resp.raw.read(decode_content=False)
+    finally:
+        resp.close()
+
+    encoding = resp.headers.get("Content-Encoding", "")
+    try:
+        plain = decode(packed, encoding)
+        failed = ""
+    except Exception as exc:  # noqa: BLE001 - сказать, чем именно не распаковалось
+        plain, failed = packed, f"{type(exc).__name__}: {exc}"
+
+    try:
+        body = json.loads(plain)
+    except (ValueError, UnicodeDecodeError):
         body = None
     records = len(body) if isinstance(body, list) else (
         len(body.get("data", [])) if isinstance(body, dict) else 0)
     return {
         "status": resp.status_code,
-        "encoding": resp.headers.get("Content-Encoding", "нет"),
-        "wire": wire,
-        "decoded": decoded,
+        "encoding": encoding or "нет",
+        "wire": len(packed),
+        "decoded": len(plain),
+        "declared": resp.headers.get("Content-Length"),
+        "chunked": resp.headers.get("Transfer-Encoding", ""),
+        "failed": failed,
         "records": records,
         "body": body,
     }
@@ -116,7 +155,14 @@ def main() -> int:
         return 1
 
     print(f"\nКАК СЕЙЧАС   HTTP {full['status']}, записей {full['records']}")
-    print(f"  сжатие: {full['encoding']}")
+    print(f"  сжатие: {full['encoding']}"
+          + (f", Content-Length {full['declared']}" if full["declared"] else
+             ", без Content-Length")
+          + (f", {full['chunked']}" if full["chunked"] else ""))
+    if full["failed"]:
+        print(f"  НЕ РАСПАКОВАЛОСЬ: {full['failed']}")
+        print("  сервер назвал кодек, которым тело не упаковано — обычно так\n"
+              "  делает прокси, распаковавший ответ и забывший снять заголовок")
     print(f"  по проводу:  {full['wire'] / 1024:7.1f} КБ   ← за это платит прокси")
     print(f"  разжатое:    {full['decoded'] / 1024:7.1f} КБ   ← это показывает дашборд")
     if full["wire"] and full["decoded"] > full["wire"]:
