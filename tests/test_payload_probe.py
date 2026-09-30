@@ -107,3 +107,18 @@ def test_the_candidate_names_are_tried_one_request_each():
     tool = _tool()
     assert len(tool.CANDIDATES) == len(set(tool.CANDIDATES))
     assert all(isinstance(name, str) and name for name in tool.CANDIDATES)
+
+
+def test_an_empty_params_list_means_measure_only():
+    """Замер размера стоит один запрос; перебор имён — по одному на имя.
+
+    Пустая строка это «ничего не перебирать», а не «не задано»: иначе просьба
+    сделать один дешёвый замер тратит шесть запросов из квоты.
+    """
+    tool = _tool()
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--params")
+    assert ap.parse_args(["--params", ""]).params == ""
+    assert ap.parse_args([]).params is None

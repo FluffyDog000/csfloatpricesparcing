@@ -60,7 +60,9 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name", help="market_hash_name, в кавычках")
-    ap.add_argument("--params", help="какие имена проверить, через запятую")
+    ap.add_argument("--params", help="какие имена проверить, через запятую; "
+                                     "пустая строка — только замер размера, "
+                                     "один запрос")
     ap.add_argument("--want", type=int, default=WANT,
                     help=f"сколько записей просить (по умолчанию {WANT})")
     args = ap.parse_args()
@@ -126,8 +128,12 @@ def main() -> int:
     if full["records"]:
         print(f"  на одну продажу: {full['wire'] / full['records']:.0f} Б по проводу")
 
+    # Пустая строка -- это «ничего не проверять», а не «не задано»: замер
+    # размера стоит один запрос, перебор имён -- по одному на имя.
     names = ([p.strip() for p in args.params.split(",") if p.strip()]
-             if args.params else list(CANDIDATES))
+             if args.params is not None else list(CANDIDATES))
+    if not names:
+        return 0
     print(f"\nМОЖНО ЛИ ПРОСИТЬ МЕНЬШЕ (хотим {args.want} записей вместо "
           f"{full['records']})")
     works = []
