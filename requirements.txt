@@ -1,5 +1,6 @@
 requests>=2.31
 PySocks>=1.7          # socks5:// proxies
+brotli>=1.1           # urllib3 объявит br, Cloudflare отдаст на ~17% меньше gzip
 PyYAML>=6.0
 python-dotenv>=1.0
 tabulate>=0.9
