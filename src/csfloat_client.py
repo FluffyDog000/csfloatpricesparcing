@@ -83,6 +83,56 @@ class EdgeBlocked(Exception):
         self.response = response
 
 
+def decompress(body: bytes, encoding: str) -> bytes:
+    """Undo the codec the server named. Unknown or absent: hand it back as is."""
+    enc = (encoding or "").strip().lower()
+    if enc == "gzip":
+        import gzip
+        return gzip.decompress(body)
+    if enc == "deflate":
+        import zlib
+        try:
+            return zlib.decompress(body)
+        except zlib.error:                      # raw deflate, no zlib wrapper
+            return zlib.decompress(body, -zlib.MAX_WBITS)
+    if enc == "br":
+        import brotli
+        return brotli.decompress(body)
+    if enc == "zstd":
+        import zstandard
+        return zstandard.ZstdDecompressor().decompress(body)
+    return body
+
+
+def absorb(resp) -> int:
+    """Read a streamed body into the response, and report its size on the wire.
+
+    Only way to know what the link carried. CSFloat answers chunked, and
+    urllib3's byte counter does not count chunked responses - it stays at zero,
+    which is how a traffic report meant to replace `len(resp.content)` ended up
+    printing exactly that. Reading the stream undecoded is the measurement.
+
+    Afterwards the response behaves like any other: `.text`, `.json()` and the
+    Cloudflare check all read the body we just put back, so nothing downstream
+    knows this happened. A body that will not decode is stored as it came -
+    the JSON parse then fails, which is the existing error path, rather than
+    this helper deciding a poll is lost.
+    """
+    raw = getattr(resp, "raw", None)
+    if raw is None or not hasattr(raw, "read"):
+        # A stand-in response in the tests, or one already consumed. Nothing to
+        # read back, so fall through to whatever the headers admit to.
+        return wire_bytes(resp)
+    packed = raw.read(decode_content=False)
+    try:
+        plain = decompress(packed, resp.headers.get("Content-Encoding", ""))
+    except Exception:  # noqa: BLE001 - a bad body is the parser's to report
+        plain = packed
+    resp._content = plain
+    resp._content_consumed = True
+    return len(packed)
+
+
 def wire_bytes(resp) -> int:
     """Bytes actually pulled over the wire, not the size of the decoded body.
 
@@ -570,9 +620,14 @@ class CSFloatClient:
             self.last_route = route.key
             self._respect_spacing()
             try:
+                # stream=True leaves the body unread, which is the only
+                # moment its size on the wire can be taken; absorb() puts it
+                # straight back, so everything below reads it as before.
                 resp = self.session.get(url, timeout=self.http.timeout_seconds,
                                         proxies=route.proxies(),
-                                        headers=self._sales_headers())
+                                        headers=self._sales_headers(),
+                                        stream=True)
+                measured = absorb(resp)
             except requests.RequestException as exc:
                 self.pool.record_failure(route, exc)
                 attempt += 1
@@ -660,7 +715,7 @@ class CSFloatClient:
                 backoff = min(backoff * 2, rl.max_backoff_seconds)
                 continue
 
-            self.last_response_bytes = wire_bytes(resp)
+            self.last_response_bytes = measured
             self.pool.record_success(route)
             self._consecutive_429 = 0  # healthy response clears the escalation
             return resp.json()
