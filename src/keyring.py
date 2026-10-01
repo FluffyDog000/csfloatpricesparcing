@@ -194,14 +194,31 @@ class KeyRing:
         return chosen
 
     def wait_seconds(self) -> float:
-        """How long until some key could speak again; 0 if one can now."""
+        """How long until some key could speak again; 0 if one can now.
+
+        A key speaks when its own clock has come round AND one of its own
+        addresses is usable. Counting the clock alone said "0, go now" for a
+        key whose three addresses were all out of quota or cooling down, and
+        the caller gave up at once with "no working key" - over a wait that was
+        minutes, not forever.
+
+        Infinite when no live key has a single address in the pool at all:
+        that is not a wait, it is a configuration to fix.
+        """
         now = time.monotonic()
+        waits = []
         with self._lock:
-            waits = [max(0.0, s.ready_at(self.spacing) - now)
-                     for s in self.keys if s.disabled_reason is None and s.routes]
-        if not waits:
-            return 0.0
-        return min(waits)
+            for s in self.keys:
+                if s.disabled_reason is not None:
+                    continue
+                routes = [self.pool.routes[n] for n in s.routes
+                          if n in self.pool.routes]
+                if not routes:
+                    continue
+                address = min(r.wait_seconds(self.pool.reserve, now)
+                              for r in routes)
+                waits.append(max(s.ready_at(self.spacing) - now, address, 0.0))
+        return min(waits) if waits else float("inf")
 
     # -- health --------------------------------------------------------------
 

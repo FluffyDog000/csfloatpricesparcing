@@ -1447,6 +1447,14 @@ class Collector:
         changed = self.client.pool.replace(urls, use_direct=use_direct,
                                            rotating_limit=self.rotating_limit())
         if changed:
+            # Keys are bound to addresses by name. Left bound to the old list,
+            # a key whose three addresses were edited away was "ready" with
+            # nothing to speak from, and every lease that drew it failed with
+            # "no working key". The binding is a function of the key and the
+            # names, so this keeps whatever survived.
+            ring = getattr(self.client, "keyring", None)
+            if ring is not None:
+                ring.bind()
             self.restore_rotating_usage()
             # A quarantine in force has to cover routes added while it runs.
             # Without this, adding sessions during one silently lifted it: the

@@ -129,3 +129,63 @@ def test_a_snapshot_never_carries_the_key_itself():
     rows = r.snapshot()
     assert rows[0]["key"] == fingerprint(secret)
     assert secret not in repr(rows)
+
+
+# -- "ни одного рабочего ключа с адресом" -----------------------------------
+
+def test_a_key_whose_addresses_are_cooling_is_a_wait_not_a_dead_end():
+    """The clock said "ready" while all three of the key's addresses were
+    cooling down after a 429, so the wait came back as 0 and the sweep gave
+    up at once with "no working key" - over a few minutes."""
+    r = ring(keys=["solo"], spacing=0.0)
+    now = time.monotonic()
+    for name in r.keys[0].routes:
+        r.pool.routes[name].cooldown_until = now + 300
+    assert r.lease() is None
+    assert 290 < r.wait_seconds() <= 300
+
+
+def test_new_proxies_reach_the_keys():
+    """The proxy list is re-read from the dashboard while the collector runs,
+    and the keys stayed bound to the old one: a replaced list left every key
+    ready, with nothing in the pool to speak from."""
+    r = ring(keys=["a", "b"], spacing=0.0)
+    r.pool.replace([f"http://user:pw@fresh{n}:8000" for n in range(6)],
+                   use_direct=False)
+    assert r.lease() is None, "still bound to addresses that are gone"
+    assert r.wait_seconds() == float("inf"), "and that is not a wait"
+    r.bind()
+    assert r.lease() is not None
+
+
+def test_the_collector_rebinds_the_keys_when_the_list_changes():
+    from tests.test_sync import _collector
+
+    col, db = _collector()
+    col.client.keyring = KeyRing(["a", "b"], col.client.pool, spacing=0.0)
+    db.set_setting("proxies", "\n".join(
+        f"http://user:pw@fresh{n}:8000" for n in range(6)))
+    db.set_setting("use_direct", "0")
+    assert col.sync_proxies()
+    assert col.client.keyring.lease() is not None
+    db.close()
+
+
+def test_the_client_says_why_when_it_cannot_lease():
+    import pytest
+    from src.csfloat_client import NoRouteAvailable
+    from tests.test_sync import _collector
+
+    col, db = _collector()
+    r = KeyRing(["a"], col.client.pool, spacing=0.0)
+    col.client.keyring = r
+    now = time.monotonic()
+    for route in col.client.pool.routes.values():
+        route.cooldown_until = now + 600
+    with pytest.raises(NoRouteAvailable, match="освободится через 10 мин"):
+        col.client._lease()
+
+    col.client.pool.replace(["http://user:pw@elsewhere:8000"], use_direct=False)
+    with pytest.raises(NoRouteAvailable, match="нет адреса"):
+        col.client._lease()
+    db.close()

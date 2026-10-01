@@ -117,6 +117,16 @@ class RouteState:
                 and self.parked_until <= now_mono
                 and not self.quota_exhausted(reserve))
 
+    def wait_seconds(self, reserve: int, now_mono: float) -> float:
+        """How long until this address may be used again; 0 if it may now."""
+        if self.available(reserve, now_mono):
+            return 0.0
+        waits = [self.cooldown_until - now_mono, self.parked_until - now_mono]
+        reset = self.effective_reset()
+        if self.quota_exhausted(reserve) and reset:
+            waits.append(reset - time.time())
+        return max(max(waits), 0.0)
+
     def drain_key(self) -> tuple[int, float]:
         """Sort key for draining: the route closest to its ceiling goes first.
 
@@ -363,16 +373,8 @@ class ProxyPool:
     def wait_seconds(self) -> float:
         """How long until any route becomes usable again (0 if one is ready)."""
         now = time.monotonic()
-        if any(r.available(self.reserve, now) for r in self.routes.values()):
-            return 0.0
-        waits = []
-        for r in self.routes.values():
-            candidates = [r.cooldown_until - now, r.parked_until - now]
-            reset = r.effective_reset()
-            if r.quota_exhausted(self.reserve) and reset:
-                candidates.append(reset - time.time())
-            waits.append(max(candidates or [0.0]))
-        return max(min(waits), 0.0) if waits else 0.0
+        waits = [r.wait_seconds(self.reserve, now) for r in self.routes.values()]
+        return min(waits) if waits else 0.0
 
     # -- feedback ------------------------------------------------------------
 

@@ -445,12 +445,21 @@ class CSFloatClient:
                 state, route = leased
                 return route, state
             wait = self.keyring.wait_seconds()
-            if wait <= 0 or time.monotonic() + wait > deadline:
+            if wait == float("inf"):
                 raise NoRouteAvailable(
-                    f"все ключи заняты или на паузе, ближайший освободится "
-                    f"через {wait:.0f} с" if wait > 0 else
-                    "ни одного рабочего ключа с адресом")
-            time.sleep(min(wait, 1.0))
+                    "ни у одного ключа нет адреса из текущего списка прокси — "
+                    "проверь список на вкладке «Нагрузка»")
+            if time.monotonic() + wait > deadline:
+                minutes = wait / 60.0
+                raise NoRouteAvailable(
+                    "адреса всех ключей исчерпали часовой лимит или остывают "
+                    "после отказа; ближайший освободится через "
+                    + (f"{minutes:.0f} мин" if minutes >= 1 else f"{wait:.0f} с"))
+            if time.monotonic() >= deadline:
+                raise NoRouteAvailable("все ключи заняты другими потоками обхода")
+            # Zero means one is ready by every measure and another thread took
+            # it first: try again shortly rather than give up on a race.
+            time.sleep(min(max(wait, 0.2), 1.0))
 
     def _respect_spacing(self) -> None:
         """Ensure at least `min_seconds_between_requests` between calls."""
