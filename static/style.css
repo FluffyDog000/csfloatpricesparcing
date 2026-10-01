@@ -13,6 +13,11 @@
 
 * { box-sizing: border-box; }
 
+/* The attribute means hidden, whatever display a class gives the element.
+   Without this, .bulk-bar's flex beat it: the bulk buttons showed outside
+   manage mode, over cards that could not be picked. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -466,3 +471,13 @@ tr.act-keep td { opacity: .6; }
 .card.pickable .name { padding-right: 30px; }
 a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
 .cbtn.cbtn-an { border-color: var(--accent); color: var(--accent); }
+
+/* Phone: the top bar scrolled with the page, ran off the right edge, and on
+   every screen covered a third of it. It wraps and stays at the top of the
+   page instead of over it. */
+@media (max-width: 640px) {
+  .topbar { position: static; flex-wrap: wrap; gap: 6px; padding: 8px 12px; }
+  .topbar-right { flex-wrap: wrap; gap: 6px 12px; width: 100%; }
+  .topbar .build, .topbar .timer { display: none; }
+  .topbar .status { width: 100%; }
+}
