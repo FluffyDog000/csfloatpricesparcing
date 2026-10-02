@@ -37,6 +37,7 @@ log = logging.getLogger("csfloat.main")
 
 # How often the running collector re-reads the tracked-item list from the DB.
 RESYNC_SECONDS = 30.0
+PLAN_SECONDS = 600.0
 # Upper bound on the gap between first polls at startup, so a short item
 # list still starts collecting immediately.
 STARTUP_MAX_STEP = 20.0
@@ -97,6 +98,9 @@ def run_forever(collector: Collector) -> None:
     last_cooldown_log = 0.0
     last_quota_log = 0.0
     last_manual_check = 0.0
+    # The whole list's plan: what it asks of the day, and how far the rest
+    # tier gives way. Six thousand items' history is not read every 30 s.
+    last_plan = -PLAN_SECONDS
 
     # Monotonic, so a clock change cannot make the defence fire in a loop.
 
@@ -119,6 +123,15 @@ def run_forever(collector: Collector) -> None:
         if time.monotonic() - last_resync >= RESYNC_SECONDS:
             last_resync = time.monotonic()
             active = collector.active_items()
+            if time.monotonic() - last_plan >= PLAN_SECONDS:
+                last_plan = time.monotonic()
+                try:
+                    plan = collector.refresh_plan()
+                    log.info("Poll plan: %.0f poll(s)/day asked, %.0f possible, "
+                             "rest tier x%.2f", sum(plan["demand"].values()),
+                             plan["capacity"], plan["rest_stretch"])
+                except Exception as exc:  # noqa: BLE001 - a plan is not a poll
+                    log.warning("Poll plan failed: %s", exc)
             collector.refresh_budget_factor()
             # Unwind the 429 backoff on the clock. Doing this only after a
             # successful poll deadlocks: a large multiplier is exactly what

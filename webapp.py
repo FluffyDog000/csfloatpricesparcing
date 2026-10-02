@@ -43,9 +43,7 @@ from src.rates import DEFAULT_RATE_URL
 # observed sample. Replaced by the measured average as soon as one poll
 # has been logged.
 ASSUMED_RESPONSE_BYTES = 9000
-from src.pacing import (
-    ADAPTIVE_MAX_MINUTES, PACE_MAX, adaptive_minutes, window_start,
-)
+from src.pacing import PACE_MAX
 from src.report import (
     aggregate_buckets,
     aggregate_seeds,
@@ -1745,11 +1743,6 @@ def api_load():
     # stretched by the learned pace multiplier.
     adaptive_on = (db.get_setting("adaptive_intervals", "1") or "1") != "0"
     try:
-        adaptive_ceiling = float(db.get_setting("adaptive_max_minutes")
-                                 or ADAPTIVE_MAX_MINUTES)
-    except (TypeError, ValueError):
-        adaptive_ceiling = ADAPTIVE_MAX_MINUTES
-    try:
         pace_mult = min(max(float(db.get_setting("pace_multiplier") or 1.0), 1.0), PACE_MAX)
     except (TypeError, ValueError):
         pace_mult = 1.0
@@ -1758,27 +1751,54 @@ def api_load():
         quota_factor = max(float(db.get_setting("quota_factor") or 1.0), 1.0)
     except (TypeError, ValueError):
         quota_factor = 1.0
-    rates = db.sales_rates(window_start()) if adaptive_on else {}
-    reqs_per_min = 0.0
+    # The same planner the collector schedules by (src/schedule.py), not a
+    # copy of it: the copies had begun to disagree.
+    from src import schedule as sch
+    stretch = max(pace_mult, quota_factor)   # as Collector.stretch_factor
+    settings_ = sch.read_settings(db, gmin)
+    plan_block = None
     intervals: list[float] = []
-    for it in active:
-        lo = it.get("interval_min_minutes")
-        hi = it.get("interval_max_minutes")
-        if lo or hi:
-            avg_min = ((lo or gmin) + (hi or gmax)) / 2.0
-        else:
-            avg_min = (gmin + gmax) / 2.0
-            if adaptive_on:
-                item_id = it.get("id")
-                cnt, first = rates.get(item_id, (0, None)) if item_id else (0, None)
-                adapt = adaptive_minutes(cnt, first, floor_minutes=gmin,
-                                         ceiling_minutes=adaptive_ceiling)
-                if adapt is not None:
-                    avg_min = adapt
-        # Mirrors Collector.stretch_factor: the two signals don't multiply.
-        avg_min = max(avg_min * max(pace_mult, quota_factor), 0.1)
-        intervals.append(avg_min)
-        reqs_per_min += 1.0 / avg_min
+    if adaptive_on:
+        plans, settings_ = sch.plan_from_db(
+            db, gmin, config.polling.gap_warning_min_overlap)
+        tier_demand = sch.demand(plans)
+        capacity_day = sch.capacity_per_day(spacing)
+        rest_x = sch.rest_stretch(tier_demand, capacity_day)
+        tiers, groups = {}, {}
+        for p in plans:
+            minutes = p.minutes * (rest_x if p.tier == "rest" else 1.0) * stretch
+            intervals.append(minutes)
+            per_day = 1440.0 / max(minutes, 0.1)
+            for bucket, key in ((tiers, p.tier),
+                                (groups, sch.liquidity_group(p.rate))):
+                row = bucket.setdefault(key, {"items": 0, "per_day": 0.0,
+                                              "expected": 0.0})
+                row["items"] += 1
+                row["per_day"] += per_day
+                row["expected"] += p.expected
+        plan_block = {
+            "tiers": [{"tier": t, "label": sch.TIER_LABELS[t],
+                       "items": tiers.get(t, {}).get("items", 0),
+                       "per_day": round(tiers.get(t, {}).get("per_day", 0.0)),
+                       "ceiling_minutes": settings_.ceiling(t)}
+                      for t in sch.TIERS],
+            "groups": [{"group": g, "label": sch.GROUP_LABELS[g],
+                        "items": groups.get(g, {}).get("items", 0),
+                        "per_day": round(groups.get(g, {}).get("per_day", 0.0)),
+                        "sales_per_poll": round(
+                            groups[g]["expected"] / groups[g]["items"], 1)
+                        if groups.get(g) else None}
+                       for g in ("liquid", "middle", "thin")],
+            "demand_day": round(sum(1440.0 / max(m, 0.1) for m in intervals)),
+            "capacity_day": round(capacity_day),
+            "rest_stretch": round(rest_x, 2),
+        }
+    else:
+        for it in active:
+            lo = it.get("interval_min_minutes")
+            hi = it.get("interval_max_minutes")
+            intervals.append(max(((lo or gmin) + (hi or gmax)) / 2.0 * stretch, 0.1))
+    reqs_per_min = sum(1.0 / m for m in intervals)
     budget = 60.0 / max(spacing, 0.01)
 
     now = datetime.now(timezone.utc)
@@ -1876,7 +1896,8 @@ def api_load():
             "quota_reset": _num_setting(db, "rl_reset"),
             "quota_factor": float(db.get_setting("quota_factor") or 1.0),
             "adaptive_enabled": adaptive_on,
-            "adaptive_max_minutes": adaptive_ceiling,
+            "ceilings": {t: settings_.ceiling(t) for t in ("orders", "analysis", "rest")},
+            "plan": plan_block,
             "pace_multiplier": round(pace_mult, 2),
             "pace_max": PACE_MAX,
             "avg_interval_minutes": round(sum(intervals) / len(intervals), 1) if intervals else None,
@@ -2035,7 +2056,9 @@ def api_load_settings():
 
     if "reset" in data and data["reset"]:
         for k in ("poll_interval_min_minutes", "poll_interval_max_minutes",
-                  "min_seconds_between_requests", "adaptive_max_minutes"):
+                  "min_seconds_between_requests", "adaptive_max_minutes",
+                  "ceiling_orders_minutes", "ceiling_analysis_minutes",
+                  "ceiling_rest_minutes"):
             db.set_setting(k, "")
         log.info("Polling settings reset to config.yaml defaults")
         return jsonify({"ok": True, "reset": True})
@@ -2053,7 +2076,12 @@ def api_load_settings():
     if "reset_pace" in data and data["reset_pace"]:
         db.set_setting("pace_multiplier", "1.0")
         log.info("Pace multiplier reset to 1.0 by user")
-    store("adaptive_max_minutes", "adaptive_max_minutes", 15, 1440, "Потолок интервала")
+    store("ceiling_orders_minutes", "ceiling_orders_minutes", 15, 10080,
+          "Потолок: стоит наш ордер")
+    store("ceiling_analysis_minutes", "ceiling_analysis_minutes", 15, 10080,
+          "Потолок: в списке анализа")
+    store("ceiling_rest_minutes", "ceiling_rest_minutes", 15, 10080,
+          "Потолок: остальные")
     store("poll_interval_min_minutes", "interval_min_minutes", 1, 1440, "Интервал min")
     store("poll_interval_max_minutes", "interval_max_minutes", 1, 1440, "Интервал max")
     store("min_seconds_between_requests", "min_seconds_between_requests",

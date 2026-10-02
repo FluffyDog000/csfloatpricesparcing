@@ -20,93 +20,60 @@ def _tool():
     return mod
 
 
-class FakeDb:
-    """Ровно те два запроса, которые делает оценка."""
-
-    def __init__(self, items, rates):
-        self._items = items
-        self._rates = rates
-
-    def get_active_items(self):
-        return self._items
-
-    def sales_rates(self, since_iso):
-        return self._rates
+def plan(item_id, per_day, tier="rest"):
+    """Предмет, продающийся per_day штук в сутки, как его видит планировщик."""
+    from src.schedule import ItemPlan
+    rate = per_day / 24.0 if per_day else None
+    return ItemPlan(item_id, tier, rate, 60.0, 0.0)
 
 
-def item(item_id, lo=None, hi=None):
-    return {"id": item_id, "market_hash_name": f"item-{item_id}",
-            "interval_min_minutes": lo, "interval_max_minutes": hi}
+def settings(rest_hours=72.0):
+    from src.schedule import Settings
+    out = Settings(floor=15.0)
+    out.ceilings["rest"] = rest_hours * 60.0
+    return out
 
 
-def selling(per_day, days=14):
-    """История предмета, продающегося per_day штук в сутки."""
-    first = datetime.now(timezone.utc) - timedelta(days=days)
-    return (per_day * days, first.isoformat())
-
-
-def test_without_items_everything_is_counted_at_the_ceiling():
+def test_each_group_costs_what_the_rule_says():
+    """Ликвид — 15 продаж на опрос; спящий — раз в потолок."""
     tool = _tool()
-    avg, seen, measured = tool.polls_per_day(
-        FakeDb([], {}), ceiling_minutes=360.0, floor_minutes=15.0,
-        plain_minutes=60.0)
-    assert avg == 4.0, "шесть часов — четыре опроса в сутки"
-    assert (seen, measured) == (0, 0)
+    est = tool.estimate([plan(1, 48.0), plan(2, 0.1)], settings(), items=2)
+    assert est["groups"]["liquid"]["per_item"] == pytest.approx(48.0 / 15.0)
+    assert est["groups"]["thin"]["per_item"] == pytest.approx(24.0 / 72.0)
 
 
-def test_a_sleepy_item_sits_at_the_ceiling():
+def test_the_list_keeps_the_mix_of_the_database():
     tool = _tool()
-    db = FakeDb([item(1)], {1: selling(1)})
-    avg, _, measured = tool.polls_per_day(db, 360.0, 15.0, 60.0)
-    assert avg == 4.0
-    assert measured == 1, "истории хватило — интервал назвало правило"
+    plans = [plan(i, 48.0) for i in range(10)] + [plan(10 + i, 0.1) for i in range(90)]
+    est = tool.estimate(plans, settings(), items=6000)
+    assert est["groups"]["liquid"]["items"] == pytest.approx(600)
+    assert est["groups"]["thin"]["items"] == pytest.approx(5400)
 
 
-def test_a_liquid_item_ignores_the_ceiling_and_costs_more():
-    """Окно в 40 продаж прокрутится, поэтому правило не даёт ждать 6 часов."""
+def test_a_mix_can_be_given_when_the_database_is_not_like_the_list():
+    """Сейчас в базе одни перчатки; список на 6000 будет другим."""
     tool = _tool()
-    db = FakeDb([item(1)], {1: selling(240)})
-    avg, _, _ = tool.polls_per_day(db, 360.0, 15.0, 60.0)
-    assert avg > 4.0, "ликвидный предмет опрашивается чаще потолка"
-    assert avg == pytest.approx(24.0), "10 продаж на опрос при 10 в час — раз в час"
+    est = tool.estimate([plan(1, 0.1)], settings(), items=1000,
+                        mix=tool.parse_mix("10,30,60"))
+    assert est["groups"]["liquid"]["items"] == pytest.approx(100)
+    assert not est["groups"]["liquid"]["measured"], \
+        "в базе ликвида нет — взята типичная скорость, и это сказано"
 
 
-def test_the_liquid_tail_pulls_the_average_above_the_ceiling():
-    """Ради чего оценка вообще смотрит в историю, а не делит N на интервал."""
+def test_items_we_hold_or_price_are_counted_as_they_are():
     tool = _tool()
-    items = [item(i) for i in range(1, 11)]
-    rates = {i: selling(1) for i in range(1, 10)}
-    rates[10] = selling(240)
-    avg, seen, _ = tool.polls_per_day(FakeDb(items, rates), 360.0, 15.0, 60.0)
-    assert seen == 10
-    assert avg > 4.0, "один ликвидный предмет из десяти уже виден в среднем"
-    assert avg == pytest.approx((9 * 4.0 + 24.0) / 10)
+    plans = [plan(1, 0.1, tier="orders"), plan(2, 0.1)]
+    est = tool.estimate(plans, settings(), items=100)
+    assert est["held"] == 1
+    assert est["rest_items"] == 99
+    assert est["demand"]["orders"] == pytest.approx(24.0), "раз в час по плану"
 
 
-def test_a_per_item_override_wins_over_the_ceiling():
+def test_the_mix_is_three_shares():
     tool = _tool()
-    db = FakeDb([item(1, lo=30, hi=30)], {1: selling(1)})
-    avg, _, measured = tool.polls_per_day(db, 360.0, 15.0, 60.0)
-    assert avg == 48.0, "полчаса вручную — 48 опросов в сутки"
-    assert measured == 0, "правило к такому предмету не применялось"
-
-
-def test_thin_history_falls_back_to_the_plain_interval():
-    """Меньше MIN_SALES_FOR_RATE продаж — судить не о чем."""
-    tool = _tool()
-    db = FakeDb([item(1)], {1: (2, (datetime.now(timezone.utc)
-                                    - timedelta(days=14)).isoformat())})
-    avg, _, measured = tool.polls_per_day(db, 360.0, 15.0, 60.0)
-    assert measured == 0
-    assert avg == 24.0, "взят обычный интервал в 60 минут"
-
-
-def test_the_plain_interval_never_beats_the_ceiling():
-    """Потолок ниже настроенного интервала — значит, опрашиваем реже, не чаще."""
-    tool = _tool()
-    db = FakeDb([item(1)], {1: (0, None)})
-    avg, _, _ = tool.polls_per_day(db, 60.0, 15.0, 600.0)
-    assert avg == 24.0
+    assert tool.parse_mix("1,1,2") == {"liquid": 1, "middle": 1, "thin": 2}
+    with pytest.raises(ValueError):
+        tool.parse_mix("10,90")
 
 
 def test_the_wire_overhead_is_counted_on_top_of_the_body():

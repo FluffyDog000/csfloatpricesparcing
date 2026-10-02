@@ -149,32 +149,6 @@ def test_period_parsing():
 
 # --- adaptive pacing --------------------------------------------------------
 
-def test_adaptive_minutes_scales_with_sale_rate():
-    from datetime import datetime, timedelta, timezone
-    from src.pacing import adaptive_minutes
-
-    now = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
-    first = (now - timedelta(days=10)).isoformat()
-
-    # 240 sales/day -> 10 sales accumulate in ~1 hour
-    fast = adaptive_minutes(2400, first, floor_minutes=15, ceiling_minutes=120, now=now)
-    # 2 sales/day -> would take days, so it lands on the ceiling
-    slow = adaptive_minutes(20, first, floor_minutes=15, ceiling_minutes=120, now=now)
-    assert fast is not None and slow is not None
-    assert fast < slow, "faster items must be polled more often"
-    assert fast >= 15 and slow <= 120, "must respect floor/ceiling"
-
-    # An extremely hot item is still clamped to the floor.
-    assert adaptive_minutes(100000, first, floor_minutes=15,
-                            ceiling_minutes=120, now=now) == 15
-
-
-def test_adaptive_minutes_needs_history():
-    from src.pacing import adaptive_minutes
-    assert adaptive_minutes(2, "2026-08-01T00:00:00+00:00", floor_minutes=15) is None
-    assert adaptive_minutes(50, None, floor_minutes=15) is None
-
-
 def test_validate_proxy_accepts_supported_urls_and_rejects_junk():
     from src.proxies import validate_proxy
 
@@ -683,7 +657,7 @@ def test_raising_the_ceiling_lowers_the_forecast():
 
     seen = []
     for ceiling in (80, 160, 240, 480):
-        db.set_setting("adaptive_max_minutes", str(ceiling))
+        db.set_setting("ceiling_rest_minutes", str(ceiling))
         seen.append(client.get("/api/load").get_json()["requests_per_day"])
 
     assert seen == sorted(seen, reverse=True), \

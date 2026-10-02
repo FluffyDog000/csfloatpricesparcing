@@ -30,15 +30,15 @@ from .depth import DEPTH_STEP, depth_profile, depth_url, extract_depth
 # after one was cut short. Not a freshness policy: a deliberate refresh past
 # this window re-reads everything.
 BAND_REUSE_SECONDS = 900.0
+# Sales older than this are re-read before an item's books are swept.
+SALES_FRESH_FOR_PRICING = 2 * 3600.0
 from .executor import CANCEL, Action
 from .rates import DEFAULT_RATE_URL, REFRESH_SECONDS, extract_cny_rate
 from .pacing import (
-    ADAPTIVE_MAX_MINUTES,
     PACE_MAX,
     PACE_RECOVER_SECONDS,
     PACE_UP_FACTOR,
-    adaptive_minutes,
-    window_start,
+    parse_iso,
 )
 from .catalog import meta_from
 from .parser import extract_icon_hash, extract_records, parse_sales
@@ -220,21 +220,56 @@ class Collector:
     def adaptive_enabled(self) -> bool:
         return (self.db.get_setting("adaptive_intervals", "1") or "1") != "0"
 
-    def adaptive_ceiling(self) -> float:
-        raw = self.db.get_setting("adaptive_max_minutes")
-        try:
-            return float(raw) if raw else ADAPTIVE_MAX_MINUTES
-        except (TypeError, ValueError):
-            return ADAPTIVE_MAX_MINUTES
+    def adaptive_interval_minutes(self, item_id: int, floor_min: float) -> float:
+        """This item's interval by the planner's rule (see `schedule`), before
+        any stretch: its own sale rate, what its last polls found, and the
+        ceiling of its tier."""
+        from . import schedule as sch
 
-    def adaptive_interval_minutes(self, item_id: int, floor_min: float) -> float | None:
-        """Interval sized to this item's own sale rate (None if too little
-        history — the caller then uses the plain configured interval)."""
-        stats = self.db.sales_window(item_id, window_start())
-        return adaptive_minutes(
-            int(stats.get("c") or 0), stats.get("first_sold"),
-            floor_minutes=floor_min, ceiling_minutes=self.adaptive_ceiling(),
-        )
+        settings = sch.read_settings(self.db, floor_min)
+        tier = self.tier_of(item_id)
+        rate = sch.sales_per_hour(
+            self.db.recent_sold_at(item_id, sch.rate_since(), sch.RECENT_SALES))
+        feedback = sch.feedback_from(
+            self.db.recent_polls(item_id, sch.FEEDBACK_POLLS),
+            self.config.polling.gap_warning_min_overlap)
+        return sch.interval_minutes(rate, settings.floor, settings.ceiling(tier),
+                                    feedback, settings.target)
+
+    def tier_of(self, item_id: int) -> str:
+        """orders / analysis / rest - read fresh, it is two small queries."""
+        from . import schedule as sch
+        return sch.tier_of(item_id, self.db.item_ids_with_live_orders(),
+                           sch.analysis_ids(self.db))
+
+    def refresh_plan(self) -> dict:
+        """The whole list's demand against what the day holds, and how far the
+        rest tier has to give way. Cached for the load page and the quota
+        budget; called every few minutes, not every poll."""
+        from . import schedule as sch
+
+        gmin, _, spacing = self.runtime_polling()
+        plans, settings = sch.plan_from_db(
+            self.db, gmin, self.config.polling.gap_warning_min_overlap)
+        demand = sch.demand(plans)
+        capacity = sch.capacity_per_day(spacing)
+        stretch = sch.rest_stretch(demand, capacity)
+        out = {"at": utcnow_iso(), "demand": demand, "capacity": capacity,
+               "rest_stretch": stretch, "items": len(plans)}
+        self.db.set_setting("plan_state", json.dumps(out))
+        return out
+
+    def plan_state(self) -> dict:
+        try:
+            return json.loads(self.db.get_setting("plan_state") or "{}")
+        except ValueError:
+            return {}
+
+    def rest_stretch(self) -> float:
+        try:
+            return max(float(self.plan_state().get("rest_stretch") or 1.0), 1.0)
+        except (TypeError, ValueError):
+            return 1.0
 
     def stretch_factor(self) -> float:
         """How much to stretch every interval right now.
@@ -264,11 +299,14 @@ class Collector:
         if self.adaptive_enabled():
             if item_id is None:
                 item_id = self.db.get_item_id(item.name)
-            adaptive = (self.adaptive_interval_minutes(item_id, gmin)
-                        if item_id is not None else None)
-            if adaptive is not None:
+            if item_id is not None:
+                minutes = self.adaptive_interval_minutes(item_id, gmin)
+                # The time budget gives way on the rest tier only: an item we
+                # hold an order on, or are about to price, keeps its pace.
+                if self.tier_of(item_id) == "rest":
+                    minutes *= self.rest_stretch()
                 jitter = random.uniform(0.9, 1.1)   # avoid items syncing up
-                return adaptive * 60.0 * jitter * mult
+                return minutes * 60.0 * jitter * mult
 
         return random.uniform(gmin, gmax) * 60.0 * mult
 
@@ -1161,6 +1199,11 @@ class Collector:
         """
         out = {"orders": None, "depth": None}
 
+        # The sales first, when they are old: the ceiling is priced off the
+        # median of recent sales, and on a quiet item the scheduled poll may be
+        # days away. One request, against the thirty-odd the books cost.
+        self._refresh_sales_before_pricing(name, item_id)
+
         def book() -> None:
             out["orders"] = self.sweep_buy_orders(name, item_id)
 
@@ -1193,6 +1236,18 @@ class Collector:
             self._note_orders_error(
                 name, f"стакан покупки прочитан, листинги — нет: {trouble}"[:160])
         return out
+
+    def _refresh_sales_before_pricing(self, name: str, item_id: int) -> None:
+        last = parse_iso(self.db.last_successful_poll(item_id))
+        age = (None if last is None
+               else (datetime.now(timezone.utc) - last).total_seconds())
+        if age is not None and age < SALES_FRESH_FOR_PRICING:
+            return
+        try:
+            self.poll_item(ItemConfig(name=name))
+        except Exception as exc:  # noqa: BLE001 - stale sales beat no sweep
+            log.warning("Sales refresh before the sweep of '%s' failed: %s",
+                        name, exc)
 
     def _recent_bands(self, item_id: int) -> set[tuple[float, float]]:
         """Bands read so recently that reading them again buys nothing.
@@ -1595,18 +1650,21 @@ class Collector:
     def planned_rate_per_second(self) -> float:
         """Current scheduled request rate across all active items."""
         gmin, gmax, _ = self.runtime_polling()
+        if self.adaptive_enabled():
+            # From the cached plan: re-reading six thousand items' history
+            # every thirty seconds would cost more than the polls it plans.
+            state = self.plan_state()
+            if not state.get("demand"):
+                state = self.refresh_plan()
+            demand = state["demand"]
+            rest = demand.get("rest", 0.0) / max(self.rest_stretch(), 1.0)
+            per_day = sum(v for k, v in demand.items() if k != "rest") + rest
+            return per_day / 86400.0
         total = 0.0
         for row in self.db.get_active_items():
             lo = row.get("interval_min_minutes")
             hi = row.get("interval_max_minutes")
-            if lo or hi:
-                minutes = ((lo or gmin) + (hi or gmax)) / 2.0
-            else:
-                minutes = (gmin + gmax) / 2.0
-                if self.adaptive_enabled():
-                    adapt = self.adaptive_interval_minutes(int(row["id"]), gmin)
-                    if adapt is not None:
-                        minutes = adapt
+            minutes = ((lo or gmin) + (hi or gmax)) / 2.0
             total += 1.0 / max(minutes * 60.0, 1.0)
         return total
 

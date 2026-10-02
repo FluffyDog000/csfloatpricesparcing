@@ -165,7 +165,11 @@ def _ready():
     db = Database(cfg.db_path)
     name = "★ Specialist Gloves | Fade (Field-Tested)"
     item_id = db.add_item(name)
-    return Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling)), db, name, item_id
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    # A sweep re-reads stale sales first; here that read answers at once
+    # instead of going to the network.
+    col.client.fetch_latest_sales = lambda n: []
+    return col, db, name, item_id
 
 
 def test_both_sides_are_swept_together():
@@ -483,6 +487,7 @@ def _both_sides_collector():
     name = "★ Specialist Gloves | Fade (Field-Tested)"
     item_id = db.add_item(name)
     col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    col.client.fetch_latest_sales = lambda n: []    # no network in a test
     order = []
     col.sweep_buy_orders = lambda n, i: (order.append("book"), {"bands": 1})[1]
     col.sweep_listing_depth = lambda n, i: (order.append("listings"),
@@ -681,3 +686,27 @@ def test_a_band_read_long_ago_is_read_again():
     col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
     assert col._recent_bands(item_id) == set()
     db.close()
+
+
+def test_stale_sales_are_read_again_before_the_books():
+    """The ceiling is priced off recent sales, and a quiet item's next
+    scheduled poll can be days away. One request first, then the books."""
+    col, db, name, item_id = _ready()
+    order = []
+    col.client.fetch_latest_sales = lambda n: order.append("sales") or []
+    col.sweep_buy_orders = lambda n, i: order.append("orders")
+    col.sweep_listing_depth = lambda n, i: order.append("depth")
+    col.sweep_both_sides(name, item_id)
+    assert order[0] == "sales" and sorted(order[1:]) == ["depth", "orders"]
+
+
+def test_fresh_sales_are_not_read_twice():
+    col, db, name, item_id = _ready()
+    db.log_poll(item_id=item_id, market_hash_name=name, fetched_count=40,
+                new_count=3, overlap_count=37, status="ok")
+    asked = []
+    col.client.fetch_latest_sales = lambda n: asked.append(n) or []
+    col.sweep_buy_orders = lambda n, i: None
+    col.sweep_listing_depth = lambda n, i: None
+    col.sweep_both_sides(name, item_id)
+    assert asked == [], "polled a minute ago - the books are what is old"

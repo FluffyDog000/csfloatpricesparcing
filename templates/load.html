@@ -25,10 +25,21 @@
   <div class="row" style="margin-top:10px">
     <label class="chk"><input type="checkbox" id="adaptive-on">
       адаптивный интервал по скорости продаж</label>
-    <label>потолок
-      <input type="number" id="adaptive-max" class="input num-input" min="15" max="1440" step="5"> мин</label>
     <button class="btn" id="reset-pace-mult">Сбросить замедление</button>
   </div>
+  <div class="row" style="margin-top:10px">
+    <span class="muted">опрашивать не реже, чем раз в:</span>
+    <label>стоит наш ордер
+      <input type="number" id="ceil-orders" class="input num-input" min="0.25" max="168" step="0.25"> ч</label>
+    <label>в списке анализа
+      <input type="number" id="ceil-analysis" class="input num-input" min="0.25" max="168" step="0.5"> ч</label>
+    <label>остальные
+      <input type="number" id="ceil-rest" class="input num-input" min="0.25" max="168" step="1"> ч</label>
+  </div>
+  <p class="muted" style="margin:6px 0 0">Интервал каждого предмета — время, за которое
+    накопится ~15 новых продаж (CSFloat отдаёт последние 40). Пустой опрос растягивает
+    следующий в 1.5 раза, почти полный — возвращает к минимуму. Потолок у каждого из трёх
+    уровней свой. Не хватает суток — реже опрашиваются «остальные».</p>
   <div class="muted" id="pace-hint"></div>
   <div class="settings-msg" id="pace-msg"></div>
 </section>
@@ -38,6 +49,7 @@
   <table class="stat usage-table">
     <tbody id="usage-body"></tbody>
   </table>
+  <div id="plan-box"></div>
   <div class="muted" id="usage-hint"></div>
 </section>
 

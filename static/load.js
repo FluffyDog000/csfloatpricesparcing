@@ -127,6 +127,31 @@ function tickCooldown() {
 }
 setInterval(tickCooldown, 1000);
 
+/** The planner's picture: polls a day by tier and by liquidity, against what
+ * the collector can make in a day. */
+function renderPlan(p) {
+  const box = document.getElementById("plan-box");
+  if (!box) return;
+  if (!p) { box.innerHTML = ""; return; }
+  const n = (v) => Number(v || 0).toLocaleString("ru-RU");
+  const share = p.capacity_day ? Math.round(p.demand_day / p.capacity_day * 100) : 0;
+  const rows = (list, extra) => list.map((r) =>
+    `<tr><td>${r.label}</td><td>${n(r.items)}</td><td>${n(r.per_day)}</td>${extra(r)}</tr>`).join("");
+  box.innerHTML = `
+    <h3>План опросов</h3>
+    <p class="${share > 80 ? "err" : "muted"}">${n(p.demand_day)} опросов в сутки из
+      ${n(p.capacity_day)} возможных (${share}%)${p.rest_stretch > 1
+        ? ` · «остальные» растянуты ×${p.rest_stretch}, чтобы уложиться` : ""}</p>
+    <table class="stat"><thead><tr><th>уровень</th><th>предметов</th>
+      <th>опросов/сутки</th><th>потолок</th></tr></thead><tbody>
+      ${rows(p.tiers, (r) => `<td>${Math.round(r.ceiling_minutes / 60 * 100) / 100} ч</td>`)}
+    </tbody></table>
+    <table class="stat" style="margin-top:8px"><thead><tr><th>ликвидность</th>
+      <th>предметов</th><th>опросов/сутки</th><th>продаж за опрос</th></tr></thead><tbody>
+      ${rows(p.groups, (r) => `<td>${r.sales_per_poll ?? "—"}</td>`)}
+    </tbody></table>`;
+}
+
 function renderPace(d) {
   // Don't overwrite a field the user is editing — but always refresh the
   // summary, or the page ends up quoting settings that are no longer set.
@@ -138,12 +163,18 @@ function renderPace(d) {
   setField("int-max", d.interval_max_minutes);
   setField("spacing", d.min_seconds_between_requests);
   setField("adaptive-on", !!d.adaptive_enabled, "checked");
-  setField("adaptive-max", d.adaptive_max_minutes);
+  const hrs = (m) => (m === undefined || m === null ? "" : Math.round(m / 60 * 100) / 100);
+  if (d.ceilings) {
+    setField("ceil-orders", hrs(d.ceilings.orders));
+    setField("ceil-analysis", hrs(d.ceilings.analysis));
+    setField("ceil-rest", hrs(d.ceilings.rest));
+  }
+  renderPlan(d.plan);
   const parts = [
     `${d.active_items} предм. · ${effectiveInterval(d)} ` +
     `≈ ${d.reqs_per_min_est} запр/мин`,
     d.adaptive_enabled
-      ? `адаптивно: от ${d.interval_min_minutes} до ${d.adaptive_max_minutes} мин по скорости продаж`
+      ? `по скорости продаж: от ${d.interval_min_minutes} мин до потолка своего уровня`
       : `фиксированно ${d.interval_min_minutes}–${d.interval_max_minutes} мин`,
   ];
   if (d.quota_factor > 1.05) {
@@ -252,13 +283,21 @@ function paceMsg(text, isError) {
   el.className = "settings-msg" + (isError ? " err" : "");
 }
 
+// Typed in hours, stored in minutes like every other interval.
+function minutesOf(id) {
+  const v = parseFloat(document.getElementById(id).value);
+  return isNaN(v) ? "" : Math.round(v * 60);
+}
+
 document.getElementById("save-pace").addEventListener("click", async () => {
   const body = {
     interval_min_minutes: document.getElementById("int-min").value,
     interval_max_minutes: document.getElementById("int-max").value,
     min_seconds_between_requests: document.getElementById("spacing").value,
     adaptive_intervals: document.getElementById("adaptive-on").checked,
-    adaptive_max_minutes: document.getElementById("adaptive-max").value,
+    ceiling_orders_minutes: minutesOf("ceil-orders"),
+    ceiling_analysis_minutes: minutesOf("ceil-analysis"),
+    ceiling_rest_minutes: minutesOf("ceil-rest"),
   };
   try {
     await postJSON("/api/load/settings", body, token());

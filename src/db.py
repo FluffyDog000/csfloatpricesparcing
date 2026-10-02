@@ -41,6 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_sales_item        ON sales(item_id);
 CREATE INDEX IF NOT EXISTS idx_sales_sold_at      ON sales(sold_at);
 CREATE INDEX IF NOT EXISTS idx_sales_paint_seed   ON sales(paint_seed);
 CREATE INDEX IF NOT EXISTS idx_sales_float        ON sales(float_value);
+-- The poll planner reads each item's latest sales and latest polls.
+CREATE INDEX IF NOT EXISTS idx_sales_item_sold    ON sales(item_id, sold_at);
 
 CREATE TABLE IF NOT EXISTS settings (
     key                 TEXT PRIMARY KEY,
@@ -167,6 +169,8 @@ CREATE TABLE IF NOT EXISTS poll_log (
     status              TEXT,                  -- ok/auth_error/rate_limited/error
     note                TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_poll_item ON poll_log(item_id, id);
 """
 
 
@@ -1095,6 +1099,54 @@ class Database:
             (item_id, since_iso),
         ).fetchone()
         return dict(row) if row else {"c": 0, "first_sold": None, "last_sold": None}
+
+    def recent_sold_at(self, item_id: int, since_iso: str,
+                       limit: int = 20) -> list[str]:
+        """The item's latest sale times inside the window, newest first."""
+        rows = self.conn.execute(
+            "SELECT sold_at FROM sales WHERE item_id = ? AND sold_at >= ? "
+            "ORDER BY sold_at DESC LIMIT ?", (item_id, since_iso, limit))
+        return [r["sold_at"] for r in rows]
+
+    def recent_sold_at_all(self, since_iso: str,
+                           limit: int = 20) -> dict[int, list[str]]:
+        """recent_sold_at for every item at once."""
+        rows = self.conn.execute(
+            "SELECT item_id, sold_at FROM ("
+            "  SELECT item_id, sold_at, ROW_NUMBER() OVER ("
+            "    PARTITION BY item_id ORDER BY sold_at DESC) AS rn"
+            "  FROM sales WHERE sold_at >= ?) WHERE rn <= ?",
+            (since_iso, limit))
+        out: dict[int, list[str]] = {}
+        for r in rows:
+            out.setdefault(int(r["item_id"]), []).append(r["sold_at"])
+        return out
+
+    def recent_polls(self, item_id: int, limit: int = 6) -> list[dict[str, Any]]:
+        """The item's latest polls, newest first."""
+        rows = self.conn.execute(
+            "SELECT status, fetched_count, new_count, overlap_count, polled_at "
+            "FROM poll_log WHERE item_id = ? ORDER BY id DESC LIMIT ?",
+            (item_id, limit))
+        return [dict(r) for r in rows]
+
+    def recent_polls_all(self, limit: int = 6) -> dict[int, list[dict[str, Any]]]:
+        """recent_polls for every item at once."""
+        rows = self.conn.execute(
+            "SELECT item_id, status, fetched_count, new_count, overlap_count FROM ("
+            "  SELECT *, ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY id DESC) AS rn"
+            "  FROM poll_log WHERE item_id IS NOT NULL) WHERE rn <= ? "
+            "ORDER BY item_id, rn", (limit,))
+        out: dict[int, list[dict[str, Any]]] = {}
+        for r in rows:
+            out.setdefault(int(r["item_id"]), []).append(dict(r))
+        return out
+
+    def item_ids_with_live_orders(self) -> set[int]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT item_id FROM our_orders "
+            "WHERE state IN ('planned', 'live', 'manual')")
+        return {int(r["item_id"]) for r in rows}
 
     def sales_rates(self, since_iso: str) -> dict[int, tuple[int, str | None]]:
         """{item_id: (sales_in_window, earliest_sold_at)} for every active item."""
