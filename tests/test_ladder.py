@@ -473,3 +473,69 @@ def test_a_band_that_sells_slower_than_we_would_buy_is_refused():
     assert r.lam > r.sell_rate > 0
     assert not r.take
     assert "не успевает" in r.reason, r.reason
+
+
+# -- what the fills resell for -----------------------------------------------
+
+def careless():
+    """FT where a good float is worth far more than a worn one, and a few
+    sellers listed good floats as ordinary examples anyway."""
+    out = [sale(50.0, 0.375, age=j % 14 + 0.5) for j in range(10)]   # the top
+    out += [sale(45.0, 0.376, age=j + 1.0) for j in range(2)]        # top, cheap
+    out += [sale(80.0, 0.16, age=j % 14 + 0.5) for j in range(10)]   # good float
+    out += [sale(40.0, 0.161, age=j + 2.0) for j in range(3)]        # mispriced
+    return out
+
+
+def test_a_wide_rung_is_valued_by_the_floats_it_actually_takes():
+    """Three of its five past fills were good floats sold as ordinary ones.
+    Valuing all five at the worst float undervalued exactly this rung."""
+    r = evaluate(0.38, careless(), [], (0.15, 0.38), lots=0, asks=[],
+                 params=Params(max_drop=0.0))
+    assert r.take and r.fills == 5
+    worst = r.exit_net
+    assert r.exit_expected == pytest.approx((3 * 80.0 + 2 * 50.0) / 5 * 0.98)
+    assert r.exit_expected > worst
+    assert r.margin_expected > r.margin, "the ceiling still guards the worst case"
+    assert r.rank == pytest.approx(r.margin_expected / (LOCK_DAYS + r.t_sell))
+
+
+def test_the_ceiling_is_still_the_worst_case():
+    """What we may pay does not move: a run of worn fills must still clear
+    the margin floor."""
+    r = evaluate(0.38, careless(), [], (0.15, 0.38), lots=0, asks=[],
+                 params=Params(max_drop=0.0))
+    assert r.ceiling <= r.exit_net / 1.05 + 1e-9
+
+
+def test_a_float_with_too_few_sales_is_valued_at_the_top():
+    """Three sales are not a price. The fill is valued as if it were the
+    worst float, which is never optimistic."""
+    sales = [sale(50.0, 0.375, age=j % 14 + 0.5) for j in range(10)]
+    sales += [sale(45.0, 0.376, age=1.0), sale(45.0, 0.377, age=2.0)]
+    sales += [sale(200.0, 0.20, age=3.0), sale(40.0, 0.201, age=4.0)]
+    r = evaluate(0.38, sales, [], (0.15, 0.38), lots=0, asks=[],
+                 params=Params(max_drop=0.0))
+    assert r.take
+    assert r.exit_expected == pytest.approx(r.exit_net)
+
+
+def test_a_narrow_rung_expects_what_it_always_did():
+    """Its fills are its top: nothing changes for the rungs the model was
+    built on."""
+    rungs = [r for r in ladder(spread(), [], (0.15, 0.38)) if r.take]
+    narrow = [r for r in rungs if r.fills and r.exit_expected is not None]
+    assert narrow
+    for r in narrow:
+        assert r.margin_expected >= r.margin - 1e-9
+
+
+def test_a_wider_rung_is_valued_on_the_sales_left_to_it():
+    """A tighter rung takes the good floats first; the wide one keeps only
+    what it would still win, and is valued on those - not on the sales it
+    lost, which would count the same items twice."""
+    rungs = {r.top: r for r in ladder(careless(), [], (0.15, 0.38),
+                                      params=Params(max_drop=0.0)) if r.take}
+    assert rungs[0.17].fills == 3, "the mispriced good floats"
+    assert rungs[0.38].fills == 2, "only the worn ones at its top are left"
+    assert rungs[0.38].exit_expected == pytest.approx(rungs[0.38].exit_net)

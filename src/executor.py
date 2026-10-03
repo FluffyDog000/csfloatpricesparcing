@@ -379,9 +379,13 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
         # line read "запас None перебив." on every row.
         room = (band.ceiling or 0.0) - (band.bid or 0.0)
         steps = int(room / increment(band.bid)) if band.bid else 0
+        expected = ""
+        if (band.margin_expected is not None
+                and abs(band.margin_expected - (band.margin or 0)) >= 0.001):
+            expected = f" (ожид. {band.margin_expected * 100:.1f}%)"
         actions.append(Action(
             PLACE, item, key[0], key[1], band.bid, band.ceiling,
-            f"маржа {(band.margin or 0) * 100:.1f}%, "
+            f"маржа {(band.margin or 0) * 100:.1f}%{expected}, "
             f"налив {(band.lam or 0.0):.2f}/день, "
             f"запас ${room:.2f} = {steps} перебив."))
 

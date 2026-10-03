@@ -58,6 +58,11 @@ LOCK_DAYS = 7.0
 # depended on nothing but where the grid happened to start.
 TOP_STEP = 0.01
 
+# A hundredth of float needs this many sales before its median is used as the
+# resale price of an item landing in it. Below that the item is valued as if
+# it were at the rung's top - the worst case, which is never optimistic.
+BUCKET_MIN_SALES = 5
+
 
 @dataclass
 class Params:
@@ -84,7 +89,13 @@ class Rung:
     exit_net: float | None = None    # after the fee
     ceiling: float | None = None     # most we may pay: the margin floor
     bid: float | None = None         # what we place: one step over the rival
-    margin: float | None = None
+    margin: float | None = None      # if every fill were the worst float
+    # What the fills are expected to resell for, and the margin on it. A wide
+    # rung also takes good floats from sellers who listed them as ordinary
+    # examples; pricing all of them at the top undervalued exactly the rungs
+    # that take the most. See `expected_exit`.
+    exit_expected: float | None = None
+    margin_expected: float | None = None
     rival: float = 0.0               # best competing bid over our range
     lots: int = 0                    # lots listed in the band
     # The band was read to the endpoint's page limit AND the median is above
@@ -121,7 +132,9 @@ class Rung:
             "low": self.low, "top": self.top, "sample": self.sample,
             "market": self.market, "queue_price": self.queue_price,
             "priced_from": self.priced_from, "exit_net": self.exit_net,
-            "ceiling": self.ceiling, "bid": self.bid, "margin": self.margin, "rival": self.rival,
+            "ceiling": self.ceiling, "bid": self.bid, "margin": self.margin,
+            "exit_expected": self.exit_expected,
+            "margin_expected": self.margin_expected, "rival": self.rival,
             "lots": self.lots, "lots_cleared": round(self.lots_cleared, 1),
             "lots_capped": self.lots_capped, "lots_read": self.lots_read,
             "asks": list(self.asks),
@@ -339,6 +352,67 @@ def snap_down(price: float, step: float) -> float:
     return int(price / step + 1e-9) * step
 
 
+def bucket_medians(sales: Sequence[dict], step: float = TOP_STEP,
+                   least: int = BUCKET_MIN_SALES) -> dict[int, float]:
+    """Median price per hundredth of float, where there are enough sales."""
+    groups: dict[int, list[float]] = {}
+    for row in sales:
+        f, price = sale_float(row), sale_price(row)
+        if f is None or price is None:
+            continue
+        groups.setdefault(int(f / step + 1e-9), []).append(price)
+    return {k: median(v) for k, v in groups.items() if len(v) >= least}
+
+
+def expected_exit(rung: Rung, sales: Sequence[dict], picked: Sequence[int],
+                  params: Params) -> float | None:
+    """What the items this rung would have bought resell for, on average,
+    before the fee.
+
+    The ceiling assumes the worst: every fill is the worst float the order
+    accepts, priced at the rung's top. That is the right bound for what we may
+    pay, and it is how a narrow rung actually fills. A wide one does not only
+    fill at its top. Sellers who list a good float as an ordinary example of
+    the skin sell into it too, and those items resell at their own float's
+    price. The past sales this rung would have taken say which floats arrive,
+    so each is valued where it lands:
+
+      at the top    the exit already worked out - the median or the queue,
+                    whichever binds;
+      below it      the median of its own hundredth, when that has enough
+                    sales; otherwise the top's exit, never more.
+
+    No queue is read for the lower hundredths: the lots stored are the top's
+    band. That leaves them at the history median, which the top's own queue
+    check showed is usually the one that binds anyway.
+    """
+    if not picked or rung.exit_net is None:
+        return None
+    top_exit = rung.exit_net / (1 - params.fee) if params.fee < 1 else rung.exit_net
+    medians = bucket_medians(sales, params.top_step)
+    edge = rung.top - params.top_step
+    values = []
+    for i in picked:
+        f = sale_float(sales[i])
+        if f is None or f > edge - 1e-9:
+            values.append(top_exit)
+            continue
+        own = medians.get(int(f / params.top_step + 1e-9))
+        values.append(top_exit if own is None else own)
+    return sum(values) / len(values)
+
+
+def price_fills(rung: Rung, sales: Sequence[dict], picked: Sequence[int],
+                params: Params) -> None:
+    """Set the expected exit and margin from the sales this rung takes."""
+    gross = expected_exit(rung, sales, picked, params)
+    if gross is None or not rung.bid:
+        rung.exit_expected = rung.margin_expected = None
+        return
+    rung.exit_expected = gross * (1 - params.fee)
+    rung.margin_expected = (rung.exit_expected - rung.bid) / rung.bid
+
+
 def turnover(rung: Rung, lock_days: float) -> bool:
     """Days on sale and the rank that follows from them. False when the band
     cannot sell what we would buy into it.
@@ -382,7 +456,9 @@ def turnover(rung: Rung, lock_days: float) -> bool:
         rung.rank = 0.0
         return False
     rung.t_sell = (rung.own + 1) / spare
-    rung.rank = (rung.margin or 0.0) / (lock_days + rung.t_sell)
+    margin = rung.margin_expected if rung.margin_expected is not None \
+        else (rung.margin or 0.0)
+    rung.rank = margin / (lock_days + rung.t_sell)
     return True
 
 
@@ -559,6 +635,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         return rung
 
     rung.lam = rung.fills / params.window_days if params.window_days else 0.0
+    price_fills(rung, sales, mine, params)
     if not turnover(rung, params.lock_days):
         rung.reason = _jammed(rung)
         return rung
@@ -667,6 +744,9 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
                 claimed |= set(mine)
                 rung.fills = len(mine)
                 rung.lam = rung.fills / p.window_days if p.window_days else 0.0
+                # Valued on the sales this rung actually keeps, not the ones
+                # a tighter rung took first.
+                price_fills(rung, sales, mine, p)
                 turnover(rung, p.lock_days)
         if (rung.take and p.max_drop > 0 and drift.change is not None
                 and drift.change <= -p.max_drop):

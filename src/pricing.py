@@ -138,6 +138,11 @@ class Band:
     # the ceiling guarantees.
     paid: float | None = None
     margin_worst: float | None = None
+    # The margin on what the fills would actually resell for: each past sale
+    # the rung takes, valued at its own float. The rank is built on this one;
+    # `margin` stays the worst case the ceiling guarantees.
+    margin_expected: float | None = None
+    exit_expected: float | None = None
     wars: int | None = None            # outbids the headroom pays for
     lam: float | None = None
     queue: int = 0
@@ -271,6 +276,8 @@ def _as_band(rung) -> Band:
         margin=rung.margin,
         paid=rung.bid,
         margin_worst=rung.margin,
+        margin_expected=rung.margin_expected,
+        exit_expected=rung.exit_expected,
         lam=rung.lam,
         t_sell=rung.t_sell,
         sell_rate=rung.sell_rate,

@@ -339,7 +339,11 @@
       <td>${money(exit_from === "очередь" ? b.queue_price : b.market)}
         <span class="muted" title="${exitWhy}">${b.priced_from}</span>
         <br><small class="muted">${exitSecond}</small></td>
-      <td><b>${pct(b.margin)}</b></td>
+      <td><b>${pct(b.margin)}</b>${
+        b.margin_expected !== null && b.margin_expected !== undefined
+          && Math.abs(b.margin_expected - (b.margin || 0)) >= 0.001
+          ? `<br><small class="muted" title="по продажам, которые ордер забрал бы, каждая по цене своей сотой float">ожид. ${pct(b.margin_expected)}</small>`
+          : ""}</td>
       <td>${b.lam === null || b.lam === undefined ? "—" : b.lam.toFixed(2)}</td>
       <td><b>${rank ? rank.toFixed(4) : "—"}</b>${
         sells ? `<br><small class="muted">${sells}</small>` : ""}</td>
@@ -517,8 +521,9 @@
         <th title="сколько перебоев умещается между ставкой и потолком">запас</th>
         <th title="цена выхода: медиана продаж в последней сотой перед верхом
 либо цена очереди лотов — что ниже">выход</th>
-        <th title="считается от ставки: CSFloat берёт цену лота, а не нашу,
-так что это худший случай, а не ожидаемый">маржа</th>
+        <th title="жирным — худший случай: каждое исполнение по ставке и с худшим
+float, который принимает ордер. Ниже «ожид.» — по прошлым продажам, которые
+ордер забрал бы, каждая по цене своей сотой float. Ранг считается по ожидаемой">маржа</th>
         <th title="как часто наш ордер исполнялся бы: не поток через полосу,
 а наша доля в нём">λ/сут</th>
         <th title="маржа ÷ (7 дней блокировки + дни на продаже) — отдача на
