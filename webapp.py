@@ -348,7 +348,7 @@ def close_db(_exc: object) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_ALLOWED_PERIODS = {"7d", "30d", "all"}
+_ALLOWED_PERIODS = {"7d", "14d", "30d", "all"}
 
 
 def _pattern_sensitive(name: str) -> bool:
@@ -365,7 +365,7 @@ def _require_item(name: str) -> int:
 
 def _resolve_range() -> tuple[str | None, str | None, str]:
     """Resolve the time window from request args. Either ?from=YYYY-MM-DD&to=...
-    (custom range) or ?period=7d|30d|all. Returns (since, until, label)."""
+    (custom range) or ?period=7d|14d|30d|all. Returns (since, until, label)."""
     frm = request.args.get("from")
     to = request.args.get("to")
     if frm or to:
