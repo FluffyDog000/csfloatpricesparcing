@@ -138,3 +138,52 @@ def test_the_page_refuses_to_queue_a_plan_while_it_is_on():
 
     assert not c.post("/api/analysis/guard",
                       json={"reset": True}).get_json()["tripped"]
+
+
+# -- by the trades, when they can be read ----------------------------------------
+
+def _trade(id_, price, hours_ago, role="buy", state="verified"):
+    at = (NOW - timedelta(hours=hours_ago)).replace(microsecond=0).isoformat()
+    return {"trade_id": id_, "role": role, "state": state, "price": price,
+            "created_at": at, "done_at": at}
+
+
+def test_the_trades_say_what_was_bought():
+    from src.guard import read_trades
+
+    trades = [_trade("1", 20.0, 1), _trade("2", 500.0, 30),       # yesterday
+              _trade("3", 500.0, 2, role="sell"),                   # a sale
+              _trade("4", 500.0, 2, state="cancelled")]             # fell through
+    r = read_trades(trades, Limits(balance=960.0, guard_share=0.9), NOW)
+    assert (r.spent, r.fills) == (20.0, 1) and not r.tripped
+
+
+def test_orders_missing_from_a_half_read_list_do_not_trip_it_when_trades_say_otherwise():
+    """One real $20 fill; 46 orders absent from a list read halfway. The brake
+    went off on $2910 "bought" and took down 100 live orders."""
+    col, db, name, answers, site = _setup()
+    sent = []
+    col.client.send_json = lambda *a, **k: sent.append(a) or {}
+    db.set_setting("trades_path", "/api/v1/me/trades?page={page}&limit=100")
+    db.set_setting("trades_sync_result", json.dumps({"error": ""}))
+    db.set_setting("account_steam_id", "me")
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    one_fill = {"trades": [{"id": "t1", "buyer_id": "me", "seller_id": "x",
+                            "state": "verified", "created_at": now,
+                            "verified_at": now,
+                            "contract": {"price": 2000, "item": {
+                                "market_hash_name": name, "float_value": 0.155,
+                                "paint_seed": 1}}}]}
+
+    def answer(url, headers=None, account=False):
+        if "/trades" in url:
+            return one_fill if "page=0" in url else {"trades": []}
+        # Three of five orders missing from the list.
+        return {"data": [site("r3", lo=0.18, hi=0.19), site("r4", lo=0.19, hi=0.20),
+                         site("hand", price_cents=9000, lo=0.40, hi=0.45)]}
+
+    col.client.fetch_json = answer
+    col.sync_our_orders()
+    assert db.get_setting(TRIPPED_KEY) in (None, ""), db.get_setting(TRIPPED_KEY)
+    assert sent == []
+    db.close()

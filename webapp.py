@@ -1050,7 +1050,7 @@ def api_analysis():
     from src.orders import wear_range
     from src.pricing import plan
 
-    from src.screen import look
+    from src.screen import cap_bids, look
 
     db = get_db()
     params = _analysis_params(db)
@@ -1087,9 +1087,10 @@ def api_analysis():
         except Exception:  # noqa: BLE001 - an older DB has no such table
             depth = []
         own = _locked_tops(db, item_id)
-        scored = _refuse_unread_book(
+        scored = cap_bids(_refuse_unread_book(
             db, item_id,
-            plan(sales, orders, wear_range(name), depth, params, own=own))
+            plan(sales, orders, wear_range(name), depth, params, own=own)),
+            screen)
         bands = [b.as_dict() for b in scored]
         take = [b for b in bands if b["take"]]
         out.append({
@@ -1139,9 +1140,12 @@ def api_analysis_plan():
     from src.placement import PLACEMENT_KEY, describe, load
     from src.pricing import plan as plan_bands
 
+    from src.screen import cap_bids
+
     db = get_db()
     params = _analysis_params(db)
     limits = _analysis_limits(db)
+    screen = _analysis_screen(db)
     spec = load(db.get_setting(PLACEMENT_KEY))
 
     # Everything is scored first and chosen afterwards. Choosing item by item
@@ -1171,10 +1175,10 @@ def api_analysis_plan():
         held[name] = sum(float(r["price"]) for r in mine)
         holding += [(name, float(r["float_min"]), float(r["float_max"]))
                     for r in mine]
-        candidates += [(name, b) for b in _refuse_unread_book(
+        candidates += [(name, b) for b in cap_bids(_refuse_unread_book(
             db, item_id,
             plan_bands(sales, orders, wear_range(name), depth, params,
-                       own=_locked_tops(db, item_id)))]
+                       own=_locked_tops(db, item_id))), screen)]
 
     trace: list = []
     wanted_by_item = select_portfolio(candidates, limits, holding, trace=trace)
@@ -1302,9 +1306,10 @@ def _locked_tops(db, item_id: int) -> list[float]:
 def _guard_state(db, limits) -> dict:
     """The brake as the page shows it: whether it tripped, and where today
     stands against it."""
-    from src.guard import read, tripped
+    from src.guard import current, trades_readable, tripped
     return {"tripped": tripped(db),
-            "today": read(db.our_orders(live_only=False), limits).as_dict()}
+            "today": current(db, limits).as_dict(),
+            "by_trades": trades_readable(db)}
 
 
 @app.route("/api/analysis/guard", methods=["POST"])

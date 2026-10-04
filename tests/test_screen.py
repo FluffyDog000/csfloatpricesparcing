@@ -69,3 +69,20 @@ def test_a_profile_never_judges():
     p = profile(sales([1.0] * 3))
     assert p.passed, "measuring is not screening"
     assert p.median == 1.0 and p.sales == 3
+
+
+def test_the_price_limits_hold_for_each_order_not_only_the_item():
+    """A glove whose sales sit around $90 passed "no dearer than $100", and
+    the plan offered a $300 order on its best floats."""
+    from src.pricing import Band
+    from src.screen import cap_bids
+
+    bands = [Band(float_min=0.15, float_max=0.16, bid=300.0, take=True),
+             Band(float_min=0.15, float_max=0.25, bid=85.0, take=True),
+             Band(float_min=0.15, float_max=0.38, bid=3.0, take=True)]
+    cap_bids(bands, Screen(min_price=5.0, max_price=100.0))
+    assert [b.take for b in bands] == [False, True, False]
+    assert "дороже $100.00" in bands[0].reason
+    assert "дешевле $5.00" in bands[2].reason
+    cap_bids(bands[1:2], Screen())
+    assert bands[1].take, "zero means the check is off"

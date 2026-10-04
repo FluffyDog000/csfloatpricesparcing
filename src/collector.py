@@ -54,6 +54,22 @@ MAX_QUOTA_PAUSE_SECONDS = 3600.0   # re-check at least hourly while waiting
 
 
 
+class IncompleteList(Exception):
+    """The account's order list could not be read to its end. Reconciling
+    against part of it would mark every order past the cut as gone."""
+
+
+def declared_total(payload) -> int | None:
+    """How many rows the reply says the whole list has, when it says."""
+    if not isinstance(payload, dict):
+        return None
+    for key in ("count", "total", "total_count"):
+        val = payload.get(key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            return int(val)
+    return None
+
+
 class Collector:
     def __init__(self, config: AppConfig, db: Database, client: CSFloatClient):
         self.config = config
@@ -742,6 +758,23 @@ class Collector:
 
         result["seen"] = len(theirs)
 
+        # Orders we wrote off as gone that the account still shows: a list
+        # read halfway marked them so. They are ours, not someone's placed
+        # by hand, and they go back to standing before anything is compared.
+        standing = {str(r.get("remote_id")) for r in theirs if r.get("remote_id")}
+        revived = 0
+        for row in self.db.our_orders(live_only=False):
+            if (row["state"] == "gone"
+                    and row.get("remote_id")
+                    and str(row["remote_id"]) in standing):
+                self.db.set_our_order_state(int(row["id"]), "live",
+                                            "снова найден на сайте")
+                revived += 1
+        if revived:
+            result["revived"] = revived
+            log.warning("%d order(s) written off as gone are still on the "
+                        "account; back to standing", revived)
+
         ours = []
         for row in self.db.our_orders():
             row = dict(row)
@@ -808,15 +841,23 @@ class Collector:
         does nothing further until reset by hand: taking the orders down a
         second time would only be the same requests again.
         """
-        from .guard import TRIPPED_KEY, read, trip, tripped
+        from .guard import TRIPPED_KEY, trip, tripped
         from .placement import PLACEMENT_KEY, load
         from .sender import Sender
         from .settings import dry_run, limits as read_limits
 
+        from .guard import current, trades_readable
+
         if tripped(self.db):
             return None
-        reading = read(self.db.our_orders(live_only=False),
-                       read_limits(self.db))
+        # Fresh trades first: the brake reads what was bought, and the
+        # half-hourly reading may be minutes behind a fill.
+        if trades_readable(self.db):
+            try:
+                self.sync_trades(discover=False)
+            except Exception as exc:  # noqa: BLE001 - a stale reading still reads
+                log.warning("Trades before the brake check failed: %s", exc)
+        reading = current(self.db, read_limits(self.db))
         if not reading.tripped:
             return None
 
@@ -887,25 +928,59 @@ class Collector:
         from .placement import parse_order_list
 
         if "{page}" not in path:
-            return parse_order_list(self.client.fetch_json(base + path,
-                                                           account=True))
+            payload = self.client.fetch_json(base + path, account=True)
+            rows = parse_order_list(payload)
+            total = declared_total(payload)
+            if total is not None and len(rows) < total:
+                raise IncompleteList(
+                    f"CSFloat говорит, что ордеров {total}, а в ответе {len(rows)}")
+            return rows
 
         out: list[dict] = []
         seen: set[str] = set()
+        size = 0              # rows on a full page: the first page's count
+        last_fresh = 0        # rows on the last page that brought anything
+        repeats = 0
+        total = None
         for page in range(cap):
-            rows = parse_order_list(
-                self.client.fetch_json(base + path.format(page=page),
-                                       account=True))
+            payload = self.client.fetch_json(base + path.format(page=page),
+                                             account=True)
+            total = total if total is not None else declared_total(payload)
+            rows = parse_order_list(payload)
             fresh = [r for r in rows if r["remote_id"] not in seen]
             seen.update(r["remote_id"] for r in fresh)
             out.extend(fresh)
-            # A short page is the last one; a page that repeats what the last
-            # one held means the parameter is not honoured, and asking again
-            # would loop.
-            if not rows or not fresh:
-                break
+            if not rows:
+                break                      # past the end
+            size = size or len(rows)
+            if not fresh:
+                # A page that repeats the last one. Pages may be numbered from
+                # one, which makes page 0 and page 1 the same page: stopping
+                # there read 100 of 146 orders, marked the other 46 gone,
+                # counted them as bought and pulled the brake. So one more
+                # page is asked before concluding the parameter is ignored.
+                repeats += 1
+                if repeats >= 2:
+                    break
+                continue
+            repeats = 0
+            last_fresh = len(rows)
+            if len(rows) < size:
+                break                      # a short page is the last one
         else:
             log.warning("Stopped reading buy orders at %d pages", cap)
+
+        # Read to the end, or not: an order the reply did not reach reads as
+        # one taken down, so a list that may go on past what was read is not
+        # a list to reconcile against.
+        if total is not None and len(out) < total:
+            raise IncompleteList(
+                f"CSFloat говорит, что ордеров {total}, а прочитано {len(out)}")
+        if repeats >= 2 and size and last_fresh >= size:
+            raise IncompleteList(
+                f"прочитано {len(out)} ордеров — страница была полной, а "
+                "следующие страницы повторяют её: список, похоже, длиннее, "
+                "чем удаётся прочитать")
         return out
 
     def _read_their_orders(self, spec, discover: bool):
@@ -925,6 +1000,12 @@ class Collector:
         if spec.list_path:
             try:
                 return self._all_pages(base, spec.list_path), "", spec.list_path
+            except IncompleteList as exc:
+                # The path works; the list is longer than it reads. Going on
+                # to other candidates would find one that answers with a first
+                # page and nothing else - the same mistake, accepted.
+                tried.append(f"{spec.list_path} — {exc}")
+                return None, f"список ордеров прочитан не целиком: {exc}", tried
             except Exception as exc:  # noqa: BLE001
                 detail = f"{type(exc).__name__}: {exc}"
                 tried.append(f"{spec.list_path} — {detail}")

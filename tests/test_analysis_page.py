@@ -1144,3 +1144,17 @@ def test_the_analysis_does_not_price_an_item_against_our_own_order():
     after = c.get("/api/analysis").get_json()["items"][0]
     assert after["capital"] == before["capital"]
     assert [b["bid"] for b in after["bands"]] == [b["bid"] for b in before["bands"]]
+
+
+def test_the_plan_never_offers_an_order_dearer_than_the_price_limit():
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
+    places = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
+              if a["kind"] == "place"]
+    assert places and max(a["price"] for a in places) > 100.0
+
+    c.post("/api/analysis/params", json={"scr_max_price": "100"})
+    plan = c.get("/api/analysis/plan").get_json()
+    assert not [a for a in plan["actions"] if a["kind"] == "place"]
+    assert any("отсев по цене" in q["reason"] for q in plan["queue"]) or \
+        not plan["queue"]

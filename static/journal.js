@@ -426,6 +426,7 @@
     if (c.filled) bits.push(`${c.filled} исполнено`);
     if (c.repriced) bits.push(`${c.repriced} с другой ценой`);
     if (c.adopted) bits.push(`${c.adopted} не наших`);
+    if (s.revived) bits.push(`${s.revived} снова найдены на сайте`);
     el.textContent = (el.textContent || "")
       + `Сверено ${when(d.sync_at)}: на аккаунте ${s.seen} `
       + `ордер(ов)` + (bits.length ? " — " + bits.join(", ") : "") + ".";

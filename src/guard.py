@@ -72,6 +72,60 @@ def read(rows: Iterable[dict], limits, now: datetime | None = None) -> Reading:
     return Reading(round(spent, 2), len(bought), reference, limit)
 
 
+def read_trades(trades: Iterable[dict], limits,
+                now: datetime | None = None) -> Reading:
+    """Where the day stands, by what the account actually bought.
+
+    An order missing from the account's list was counted as bought, because a
+    fill and a removal look the same there. A list read halfway made 46
+    standing orders "bought" at once and pulled the brake on a day with one
+    real fill. The trades say what was bought, at what price, and when.
+    """
+    from datetime import timedelta, timezone
+
+    from .pacing import parse_iso
+    from .profit import BUY, FAILED
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=WINDOW_DAYS)
+    spent, fills = 0.0, 0
+    for t in trades:
+        if t.get("role") != BUY or t.get("state") in FAILED:
+            continue
+        at = parse_iso(t.get("created_at")) or parse_iso(t.get("done_at"))
+        if at is None or at < cutoff:
+            continue
+        try:
+            spent += float(t.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        fills += 1
+    reference = limits.balance if limits.balance > 0 else limits.total_capital
+    share = limits.guard_share
+    limit = reference * share if reference > 0 and share > 0 else 0.0
+    return Reading(round(spent, 2), fills, reference, limit)
+
+
+def trades_readable(db) -> bool:
+    """Whether the account's trades are being read: a path was found and the
+    last reading came back without an error."""
+    if not db.get_setting("trades_path"):
+        return False
+    try:
+        last = json.loads(db.get_setting("trades_sync_result") or "null")
+    except ValueError:
+        return False
+    return bool(last) and not last.get("error")
+
+
+def current(db, limits) -> Reading:
+    """The day's reading from the trades when they can be read, and from the
+    orders gone from the account's list only when they cannot."""
+    if trades_readable(db):
+        return read_trades(db.all_trades(), limits)
+    return read(db.our_orders(live_only=False), limits)
+
+
 def tripped(db) -> dict | None:
     """What tripped it and when, or None while it stands open."""
     raw = db.get_setting(TRIPPED_KEY)

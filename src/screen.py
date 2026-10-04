@@ -110,3 +110,26 @@ def look(sales: Sequence[dict], limits: Screen, window_days: float = 28.0,
     if not measured.passed:
         return measured
     return screen(measured, limits)
+
+
+def cap_bids(bands: Sequence, limits: Screen) -> list:
+    """The price limits applied to each order, not only to the item.
+
+    The screen judges an item by the median of its sales, and a glove whose
+    sales sit around $90 passes "no dearer than $100" - while its best-float
+    rung bids $300. The limit was meant for what we pay, so a rung whose bid
+    falls outside it is not opened. The band is kept, with the reason, for
+    the same "why is this not here" the other refusals answer.
+    """
+    for band in bands:
+        if not getattr(band, "take", False) or band.bid is None:
+            continue
+        if limits.max_price and band.bid > limits.max_price + 1e-9:
+            band.take = False
+            band.reason = (f"ставка ${band.bid:.2f} дороже "
+                           f"${limits.max_price:.2f} (отсев по цене)")
+        elif limits.min_price and band.bid < limits.min_price - 1e-9:
+            band.take = False
+            band.reason = (f"ставка ${band.bid:.2f} дешевле "
+                           f"${limits.min_price:.2f} (отсев по цене)")
+    return list(bands)

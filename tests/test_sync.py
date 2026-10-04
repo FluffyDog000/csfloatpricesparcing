@@ -323,6 +323,76 @@ def test_a_page_parameter_the_server_ignores_does_not_loop():
     col.client.fetch_json = answer
     out = col.sync_our_orders()
 
-    assert len(asked) == 2, f"stopped after a repeat, asked {len(asked)}"
-    assert out["seen"] == 2, "and the repeats are not counted twice"
+    assert len(asked) == 3, f"one more page, then stop: asked {len(asked)}"
+    # A full page and nothing past it that can be read: the list may well go
+    # on, so nothing is reconciled against it.
+    assert "не целиком" in out["error"]
+    db.close()
+
+
+def _paged_account(pages, total=None):
+    def answer(url, headers=None, account=False):
+        page = int(url.split("page=")[1].split("&")[0])
+        body = {"data": pages.get(page, [])}
+        if total is not None:
+            body["count"] = total
+        return body
+    return answer
+
+
+def test_pages_numbered_from_one_are_read_to_the_end():
+    """146 orders standing, 100 a page. Page 0 and page 1 were the same page;
+    the sync stopped there, called the other 46 gone, counted them as bought
+    and pulled the brake on 100 live orders."""
+    col, db = _collector(
+        list_path="/api/v1/me/buy-orders?page={page}&limit=2&order=desc")
+    item_id = db.add_item(NAME)
+    for i in range(3):
+        db.upsert_our_order(item_id, 0.15 + i / 100, 0.16 + i / 100, 150.0,
+                            160.0, state="live", remote_id=f"r{i}")
+    first = [_site_order("r0", lo=0.15, hi=0.16), _site_order("r1", lo=0.16, hi=0.17)]
+    col.client.fetch_json = _paged_account(
+        {0: first, 1: first, 2: [_site_order("r2", lo=0.17, hi=0.18)], 3: []})
+    out = col.sync_our_orders()
+
+    assert out["error"] == "" and out["seen"] == 3
+    assert out["counts"].get("gone", 0) == 0
+    assert len(db.our_orders()) == 3
+    db.close()
+
+
+def test_a_list_shorter_than_its_declared_count_marks_nothing_gone():
+    col, db = _collector(
+        list_path="/api/v1/me/buy-orders?page={page}&limit=2&order=desc")
+    item_id = db.add_item(NAME)
+    for i in range(3):
+        db.upsert_our_order(item_id, 0.15 + i / 100, 0.16 + i / 100, 150.0,
+                            160.0, state="live", remote_id=f"r{i}")
+    col.client.fetch_json = _paged_account(
+        {0: [_site_order("r0", lo=0.15, hi=0.16)]}, total=3)
+    out = col.sync_our_orders()
+
+    assert "не целиком" in out["error"] and "3" in out["error"]
+    assert len(db.our_orders()) == 3, "every order still counts as standing"
+    db.close()
+
+
+
+def test_orders_written_off_by_a_half_read_list_come_back():
+    """46 orders were marked gone by a list read halfway, and stayed standing
+    on the site. The next full read must take them back as ours - not adopt
+    them as placed by hand, which the bot would then never manage."""
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    oid = db.upsert_our_order(item_id, 0.15, 0.16, 150.0, 160.0,
+                              state="live", remote_id="r1")
+    db.set_our_order_state(oid, "gone", "нет на сайте")
+
+    _answers(col, [_site_order("r1", lo=0.15, hi=0.16)])
+    out = col.sync_our_orders()
+
+    assert out["revived"] == 1
+    rows = db.our_orders()
+    assert [r["state"] for r in rows] == ["live"]
+    assert out["counts"].get("adopted", 0) == 0
     db.close()
