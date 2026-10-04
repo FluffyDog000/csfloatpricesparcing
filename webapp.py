@@ -2174,6 +2174,7 @@ def _key_ring_info(db) -> dict:
             "key_proxies_text": text, "key_routes": routes,
             "key_ring": ring,
             "main_key_state": _json_setting(db, "main_key_state") or [],
+            "main_key_routes": _json_setting(db, "main_key_routes") or [],
             "main_key": bool(config.http.api_key)}
 
 

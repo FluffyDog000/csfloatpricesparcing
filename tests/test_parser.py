@@ -1606,8 +1606,7 @@ def test_an_edge_403_is_told_apart_from_a_real_one_on_side_requests():
 
     cfg = load_config()
     client = CSFloatClient(cfg.http, cfg.polling)
-    client.pool.replace(["a:p:g1:1 #rotating", "a:p:g2:2 #rotating"],
-                        use_direct=False)
+    client.pool.replace(["a:p:g1:1", "a:p:g2:2"], use_direct=False)
     client._respect_spacing = lambda: None
 
     client.session.get = lambda url, **kw: _StubResp(
@@ -1694,17 +1693,20 @@ def test_no_usable_route_is_not_reported_as_a_csfloat_limit():
     db = Database(cfg.db_path)
     item_id = db.add_item("Gloves")
     col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
-    col.client.pool.replace([f"a:p:g:{i} #rotating" for i in range(12)],
+    col.client.pool.replace([f"a:p:g:{i}" for i in range(12)],
                             use_direct=False)
-    col.client.pool.park_rotating(6 * 3600)
+    import time as _time
+    for route in col.client.pool.routes.values():
+        route.parked_until = _time.monotonic() + 6 * 3600
 
     result = col.sweep_buy_orders("Gloves", item_id)
-    assert "нет доступных маршрутов" in result["error"]
+    assert "недоступны" in result["error"], result["error"]
     assert "лимит CSFloat" not in result["error"]
     assert "мин" in result["error"], "say when a route frees up"
 
     # An actual 429 still reads as CSFloat's limit.
-    col.client.pool.unpark_rotating()
+    for route in col.client.pool.routes.values():
+        route.parked_until = 0.0
 
     def limited(url, headers=None):
         raise RateLimited("429 on a side request")
@@ -2027,7 +2029,7 @@ def test_a_side_request_network_error_faults_the_route():
 
     cfg = load_config()
     client = CSFloatClient(cfg.http, cfg.polling)
-    client.pool.replace(["a:p:g1:1 #rotating"], use_direct=False)
+    client.pool.replace(["a:p:g1:1"], use_direct=False)
     client._respect_spacing = lambda: None
     route = client.pool.routes["http://g1:1#" + list(
         client.pool.routes)[0].split("#")[1]] if False else \
@@ -2043,3 +2045,45 @@ def test_a_side_request_network_error_faults_the_route():
     except requests.RequestException:
         pass
     assert route.fails > before, "a dropping route must be faulted"
+
+
+
+def test_the_main_key_speaks_from_three_addresses_and_no_more():
+    """42 proxies, and the main key went out through each of them in turn:
+    CSFloat answered "too many requests from too many IPs" and locked the
+    account for most of a day. Support allowed 2-4 addresses per key."""
+    import logging
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import MAIN_KEY_ROUTES, CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace([f"http://u:p@gate:{10000 + i}" for i in range(42)],
+                        use_direct=False)
+    client._respect_spacing = lambda: None
+    used = []
+
+    def get(url, **kw):
+        used.append(kw["proxies"]["https"])
+        return _StubResp(200, "{}", {"Content-Type": "application/json"})
+
+    def request(method, url, **kw):
+        used.append(kw["proxies"]["https"])
+        return _StubResp(200, "{}", {"Content-Type": "application/json"})
+
+    client.session.get = get
+    client.session.request = request
+    for _ in range(30):
+        client.fetch_json("https://csfloat.com/api/v1/me/buy-orders", account=True)
+        client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
+    assert len(set(used)) == MAIN_KEY_ROUTES
+
+    # The same addresses after a restart, and after a proxy is added.
+    again = CSFloatClient(cfg.http, cfg.polling)
+    again.pool.replace([f"http://u:p@gate:{10000 + i}" for i in range(43)],
+                       use_direct=False)
+    assert ({r.key for r in again.account_routes()}
+            >= {r.key for r in client.account_routes()} - {None}) or \
+        len({r.key for r in again.account_routes()}
+            & {r.key for r in client.account_routes()}) >= MAIN_KEY_ROUTES - 1

@@ -49,6 +49,12 @@ KIND_LABELS = {"listings": "листинги (200/час на ключ)",
                "write": "выставление, правка и снятие ордеров",
                "other": "запросы"}
 
+# How many addresses the main key may speak from. CSFloat's support allowed
+# 2-4 per key. Left to the pool, the main key went out through each of 42
+# proxies in turn and the account drew "too many requests from too many IPs",
+# locked for most of a day.
+MAIN_KEY_ROUTES = 3
+
 # The longest a main-key refusal holds that kind of request back, whatever the
 # header says.
 MAIN_KEY_HOLD_MAX = 24 * 3600.0
@@ -464,6 +470,43 @@ class CSFloatClient:
             "seen_at": time.time(),
         }
 
+    def _main_seed(self) -> str:
+        return (getattr(self.http, "api_key", None) or self.http.authorization
+                or self.http.cookie or "session")
+
+    def account_routes(self) -> list:
+        """The main key's own addresses (see MAIN_KEY_ROUTES)."""
+        return self.pool.account_routes(self._main_seed(), MAIN_KEY_ROUTES)
+
+    def _account_route(self):
+        """One of the main key's own addresses, taking turns between them.
+
+        Never another one: a burst through the wider pool is exactly what
+        CSFloat reads as one account touring the internet. When all of them
+        are down, the request waits for one rather than borrowing.
+        """
+        now = time.monotonic()
+        mine = self.account_routes()
+        if not mine:
+            raise NoRouteAvailable("нет ни одного постоянного прокси для "
+                                   "главного ключа — добавь прокси на «Нагрузке»")
+        usable = [r for r in mine if r.reachable(now)]
+        if not usable:
+            wait = min(r.reach_wait(now) for r in mine)
+            raise NoRouteAvailable(
+                f"адреса главного ключа недоступны, ближайший через "
+                f"{wait / 60:.0f} мин")
+        # Buy orders are refused from datacenter addresses; prefer the others.
+        clean = [r for r in usable if not r.vpn_blocked]
+        usable = clean or usable
+        usable.sort(key=lambda r: r.last_used)
+        route = usable[0]
+        route.last_used = now
+        route.note_request()
+        self.pool.last_picked = route
+        self.last_route = route.key
+        return route
+
     def main_key_wait(self, kind: str) -> float:
         """Seconds until the main key may make this kind of request."""
         q = self.main_quota.get(kind)
@@ -498,13 +541,7 @@ class CSFloatClient:
                     f"главный ключ (.env): лимит CSFloat на "
                     f"{KIND_LABELS.get(kind, kind)}, сброс через "
                     + (f"{minutes:.0f} мин" if minutes >= 1 else f"{held:.0f} с"))
-            route = self.pool.pick()
-            if route is None:
-                wait = self.pool.wait_seconds()
-                raise NoRouteAvailable(
-                    f"нет доступных маршрутов, ближайший освободится через "
-                    f"{wait / 60:.0f} мин" if wait > 0 else
-                    "нет доступных маршрутов")
+            route = self._account_route()
             self._respect_spacing()
             return route, None
 

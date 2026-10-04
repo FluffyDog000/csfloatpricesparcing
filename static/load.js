@@ -396,12 +396,17 @@ function renderMainKey(d) {
     box.innerHTML = '<p class="settings-msg err">CSFLOAT_API_KEY в .env не задан.</p>';
     return;
   }
+  const addrs = (d.main_key_routes || []);
+  const where = addrs.length
+    ? `<p class="muted">Ходит только через ${addrs.length} адреса: `
+      + addrs.map((a) => `<code>${esc(a)}</code>`).join(", ") + "</p>"
+    : "";
   if (!rows.length) {
-    box.innerHTML = '<p class="muted">Ключ задан. Лимиты появятся после первого '
+    box.innerHTML = where + '<p class="muted">Ключ задан. Лимиты появятся после первого '
       + "запроса им с момента запуска сборщика — чтение сделок идёт через минуту.</p>";
     return;
   }
-  box.innerHTML = `<table class="stat"><thead><tr><th>запросы</th>
+  box.innerHTML = where + `<table class="stat"><thead><tr><th>запросы</th>
     <th class="num">осталось</th><th class="num">лимит</th><th>сброс</th>
     <th>состояние</th></tr></thead><tbody>${rows.map((m) => {
       const reset = m.reset ? timeFmt(new Date(m.reset * 1000).toISOString()) : "—";

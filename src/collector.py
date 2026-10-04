@@ -1814,6 +1814,8 @@ class Collector:
         if main is not None:
             self.db.set_setting("main_key_state",
                                 json.dumps(main(), ensure_ascii=False))
+            self.db.set_setting("main_key_routes", json.dumps(
+                [r.key for r in self.client.account_routes()]))
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())

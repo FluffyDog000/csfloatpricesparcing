@@ -373,6 +373,23 @@ class ProxyPool:
                     "in the pool for sales history", route.key)
         return route
 
+    def account_routes(self, seed: str, count: int) -> list[RouteState]:
+        """The few fixed addresses one credential is allowed to speak from.
+
+        Chosen by rendezvous hashing on the credential and each route's name:
+        the same credential gets the same addresses after a restart, and
+        adding or removing a proxy moves only the credential whose address
+        it was. Rotating routes are left out - each request through one is a
+        new IP, which is the thing being avoided.
+        """
+        fixed = [r for r in self.routes.values() if not r.rotating]
+
+        def weight(route: RouteState) -> bytes:
+            return hashlib.sha256(f"{seed}|{route.key}".encode()).digest()
+
+        fixed.sort(key=weight)
+        return fixed[:max(count, 1)]
+
     def has_order_route(self) -> bool:
         """Is any route still allowed to read buy orders?"""
         now = time.monotonic()
