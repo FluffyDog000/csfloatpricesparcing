@@ -735,3 +735,15 @@ def test_nothing_queued_says_which_filter_took_the_items():
     block = source.split('$("an-sweep")')[1].split("const before")[0]
     assert "r.skipped" in block
     assert "все предметы отсеяны" in block
+
+
+
+def test_one_cause_failing_many_orders_is_one_line():
+    """Forty raises refused by one limit read as forty lines on top of the
+    page, and the one line that mattered was lost among them."""
+    events = [_event(i, "raise", ok=False, name=f"Item {i} (FT)",
+                     detail="NoRouteAvailable: лимит CSFloat")
+              for i in range(1, 9)]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "8 ордер(ов): не поднят" in got["attention"]
+    assert got["attention"].count("Item ") == 8, "the orders are listed under it"

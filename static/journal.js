@@ -22,6 +22,8 @@
     fill: ["исполнен", "act-place"],
   };
   const SOURCE = { plan: "план", defence: "защита", sync: "сверка" };
+  // This many orders failing for one reason fold into one line.
+  const FOLD_AT = 3;
 
   // The last replies, kept so a filter re-renders what is loaded rather than
   // asking the server again.
@@ -185,11 +187,36 @@
       list.appendChild(li);
     };
 
-    openFailures(d.events || []).forEach(({ e, count }) => {
-      const what = (KIND[e.kind] || [e.kind])[0];
-      add("bad", `${e.market_hash_name} ${bandOf(e)}: не ${what}`
-        + (count > 1 ? ` (${count} раза подряд)` : "")
-        + ` — ${explain(e)} · ${when(e.at)}`, e.detail || e.reason || "");
+    // One cause failing many orders is one problem, not forty lines: the
+    // same refusal folds into a single line with the orders listed under it.
+    const groups = new Map();
+    openFailures(d.events || []).forEach((f) => {
+      const what = (KIND[f.e.kind] || [f.e.kind])[0];
+      const key = what + "|" + explain(f.e);
+      if (!groups.has(key)) groups.set(key, { what, why: explain(f.e), rows: [] });
+      groups.get(key).rows.push(f);
+    });
+    groups.forEach(({ what, why, rows }) => {
+      if (rows.length < FOLD_AT) {
+        rows.forEach(({ e, count }) => add("bad",
+          `${e.market_hash_name} ${bandOf(e)}: не ${what}`
+          + (count > 1 ? ` (${count} раза подряд)` : "")
+          + ` — ${why} · ${when(e.at)}`, e.detail || e.reason || ""));
+        return;
+      }
+      const li = node("li", "att-bad");
+      const det = node("details");
+      const latest = rows.reduce((a, b) => (a.e.at > b.e.at ? a : b)).e;
+      det.appendChild(node("summary", "",
+        `${rows.length} ордер(ов): не ${what} — ${why} · ${when(latest.at)}`));
+      const inner = node("ul", "muted");
+      rows.forEach(({ e, count }) => inner.appendChild(node("li", "",
+        `${e.market_hash_name} ${bandOf(e)}`
+        + (count > 1 ? ` (${count} раза подряд)` : ""))));
+      det.appendChild(inner);
+      li.title = latest.detail || latest.reason || "";
+      li.appendChild(det);
+      list.appendChild(li);
     });
 
     const orders = (pos && pos.orders) || [];
