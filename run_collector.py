@@ -38,6 +38,8 @@ log = logging.getLogger("csfloat.main")
 # How often the running collector re-reads the tracked-item list from the DB.
 RESYNC_SECONDS = 30.0
 PLAN_SECONDS = 600.0
+# How often the account's trades are read for the earnings tab.
+TRADES_SECONDS = 1800.0
 # Upper bound on the gap between first polls at startup, so a short item
 # list still starts collecting immediately.
 STARTUP_MAX_STEP = 20.0
@@ -105,6 +107,8 @@ def run_forever(collector: Collector) -> None:
     # Monotonic, so a clock change cannot make the defence fire in a loop.
 
     last_defence = [time.monotonic()]
+    # First read a minute after start, not in the middle of starting up.
+    last_trades = [time.monotonic() - TRADES_SECONDS + 60.0]
 
     while True:
         # Backup service: daily Telegram export + inbound restore polling.
@@ -203,6 +207,18 @@ def run_forever(collector: Collector) -> None:
                     collector.sync_our_orders(discover=True)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Order sync failed: %s", exc)
+
+            # Trades for the earnings tab: on demand, and every half hour on
+            # its own - one or two requests while nothing new has happened.
+            if (collector.db.get_setting("trades_sync_requested") == "1"
+                    or time.monotonic() - last_trades[0] >= TRADES_SECONDS):
+                asked = collector.db.get_setting("trades_sync_requested") == "1"
+                collector.db.set_setting("trades_sync_requested", "0")
+                last_trades[0] = time.monotonic()
+                try:
+                    collector.sync_trades(discover=asked)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Trades sync failed: %s", exc)
 
             # Defence on its own clock. Off unless turned on, and it may only
             # amend or withdraw - opening a position stays a decision made by

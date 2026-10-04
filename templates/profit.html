@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Заработок{% endblock %}
+{% block content %}
+<h1>Заработок</h1>
+<p class="muted">Бот читает сделки аккаунта на CSFloat и сводит каждую продажу
+с покупкой того же скина — по названию, float и паттерну. Профит — цена
+продажи за вычетом комиссии CSFloat минус цена покупки. Что куплено и ещё не
+продано, оценивается по медиане недавних продаж в той же сотой float.</p>
+
+<section class="settings-block">
+  <div class="journal-controls">
+    <label>период
+      <select id="f-days" class="input">
+        <option value="7">7 дней</option>
+        <option value="30" selected>30 дней</option>
+        <option value="90">90 дней</option>
+        <option value="0">всё время</option>
+      </select>
+    </label>
+    <label class="grow">поиск по названию
+      <input id="f-search" class="input" type="search" placeholder="например, Fade или Karambit">
+    </label>
+    <label class="arm-line">
+      <input type="checkbox" id="f-bot"> только по ордерам бота
+    </label>
+    <button class="btn" id="f-reload">Обновить</button>
+    <button class="btn primary" id="f-sync">Прочитать сделки</button>
+  </div>
+  <div class="muted" id="f-note"></div>
+  <div class="muted" id="f-sync-state"></div>
+</section>
+
+<section class="settings-block">
+  <div id="f-tiles" class="journal-summary"></div>
+  <div class="muted" id="f-alltime"></div>
+</section>
+
+<section class="settings-block">
+  <h2>Закрытые сделки</h2>
+  <p class="muted">Куплено и продано. Дни — сколько скин был у нас, включая
+  блокировку обмена.</p>
+  <div id="f-closed"></div>
+</section>
+
+<section class="settings-block">
+  <h2>В наличии</h2>
+  <div class="muted" id="f-holding-note"></div>
+  <div id="f-holding"></div>
+</section>
+
+<section class="settings-block" id="f-unmatched-box" hidden>
+  <h2>Продажи без найденной покупки</h2>
+  <p class="muted">Скин продан, но его покупки нет среди сделок: куплен не на
+  CSFloat, получен иначе или куплен раньше, чем CSFloat отдаёт историю. В
+  профит не входят.</p>
+  <div id="f-unmatched"></div>
+</section>
+
+<section class="settings-block" id="f-pending-box" hidden>
+  <h2>Сделки в процессе</h2>
+  <div id="f-pending"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('common.js') }}"></script>
+<script src="{{ asset('profit.js') }}"></script>
+{% endblock %}

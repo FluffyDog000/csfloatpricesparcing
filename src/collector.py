@@ -949,6 +949,106 @@ class Collector:
                       "Network найди GET-запрос, который их возвращает, и "
                       "впиши его путь в «путь списка»"), tried
 
+    # -- earnings: the account's trades ---------------------------------------
+
+    def sync_trades(self, discover: bool = True, cap: int = 50) -> dict:
+        """Read the account's trades into the database, for the earnings tab.
+
+        On the main key, like everything about our own account. Reads page by
+        page, newest first, and stops at the first page that brings nothing
+        new: the trades below it were stored by an earlier pass and are
+        settled. Keeps the key paths of one trade - never its values - so a
+        reply that does not parse can be pinned from the page.
+        """
+        import json as _json
+
+        from .profit import (DONE, FAILED, ME_PATH, TRADES_CANDIDATES,
+                             key_paths, my_id, parse_trade, trade_rows)
+
+        base = self.config.http.base_url.rstrip("/")
+        result: dict[str, Any] = {"at": utcnow_iso(), "error": "", "tried": [],
+                                  "seen": 0, "new": 0, "unknown_role": 0}
+        me = self.db.get_setting("account_steam_id") or None
+        if not me:
+            try:
+                me = my_id(self.client.fetch_json(base + ME_PATH, account=True))
+                if me:
+                    self.db.set_setting("account_steam_id", me)
+            except Exception as exc:  # noqa: BLE001 - roles may still be in the trades
+                result["tried"].append(f"{ME_PATH} — {type(exc).__name__}: {exc}")
+
+        known = self.db.trade_states()
+        stored = self.db.get_setting("trades_path") or ""
+        paths = [stored] if stored else []
+        if discover or not stored:
+            paths += [p for p in TRADES_CANDIDATES if p != stored]
+
+        for path in paths:
+            try:
+                rows = self._trade_pages(base, path, known, cap, result)
+            except Exception as exc:  # noqa: BLE001 - a 404 here is an answer
+                result["tried"].append(f"{path} — {type(exc).__name__}: {exc}")
+                continue
+            if not rows:
+                result["tried"].append(f"{path} — ответил, но сделок в ответе нет")
+                continue
+            if path != stored:
+                self.db.set_setting("trades_path", path)
+            result["path"] = path
+            result["sample_keys"] = key_paths(rows[0])[:80]
+            for raw in rows:
+                t = parse_trade(raw, me)
+                if t is None:
+                    continue
+                result["seen"] += 1
+                if t["role"] is None:
+                    result["unknown_role"] += 1
+                if self.db.upsert_trade(t):
+                    result["new"] += 1
+            break
+        else:
+            result["error"] = ("не нашёл, где CSFloat отдаёт сделки аккаунта. "
+                               "Открой на сайте страницу своих сделок, в DevTools "
+                               "→ Network найди GET-запрос, который их "
+                               "возвращает, и пришли его путь")
+        if result["unknown_role"]:
+            result["error"] = (f"у {result['unknown_role']} сделок не понять, "
+                               "покупка это или продажа — пришли список полей "
+                               "ниже, парсер подстроится")
+        self.db.set_setting("trades_sync_result",
+                            _json.dumps(result, ensure_ascii=False))
+        self.db.set_setting("trades_sync_at", result["at"])
+        log.info("Trades: %d seen, %d new or changed%s", result["seen"],
+                 result["new"], f" — {result['error']}" if result["error"] else "")
+        return result
+
+    def _trade_pages(self, base: str, path: str, known: dict, cap: int,
+                     result: dict) -> list[dict]:
+        from .profit import DONE, FAILED, trade_rows
+
+        if "{page}" not in path:
+            return trade_rows(self.client.fetch_json(base + path, account=True))
+        out: list[dict] = []
+        seen: set[str] = set()
+        for page in range(cap):
+            rows = trade_rows(self.client.fetch_json(
+                base + path.format(page=page), account=True))
+            fresh = [r for r in rows if str(r.get("id")) not in seen]
+            seen.update(str(r.get("id")) for r in fresh)
+            out.extend(fresh)
+            if not rows or not fresh:
+                break
+            # Settled trades we already hold: nothing further down is news.
+            settled = all(known.get(str(r.get("id"))) in DONE | FAILED
+                          and known.get(str(r.get("id")))
+                          == str(r.get("state") or "").lower()
+                          for r in fresh)
+            if settled:
+                break
+        else:
+            log.warning("Stopped reading trades at %d pages", cap)
+        return out
+
     def _note_holding(self, change, kind: str) -> None:
         """One journal line per difference the account turned out to have."""
         row = change.ours or {}

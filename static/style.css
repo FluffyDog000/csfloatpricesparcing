@@ -549,3 +549,9 @@ a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
 .stat.queue tr.queue-out td { opacity: .55; }
 .stat.queue tr.queue-line td { text-align: center; color: var(--muted);
   font-size: 12px; border-top: 2px dashed var(--line); }
+
+/* Заработок */
+.pos { color: var(--good); }
+.neg { color: var(--bad); }
+.journal-tile b.pos { color: var(--good); }
+.journal-tile b.neg { color: var(--bad); }

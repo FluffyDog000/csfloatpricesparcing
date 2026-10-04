@@ -1634,6 +1634,107 @@ def journal_page():
                            admin_required=bool(config.web.admin_token))
 
 
+@app.route("/profit")
+def profit_page():
+    return render_template("profit.html",
+                           admin_required=bool(config.web.admin_token))
+
+
+@app.route("/api/profit")
+def api_profit():
+    """Earnings, worked out from the account's trades.
+
+    Each sale is paired with the purchase of the same skin - same name, float
+    and pattern - and the profit is what the sale brought after CSFloat's cut
+    less what the purchase cost. What was bought and not sold yet is valued at
+    the median of recent sales in its own hundredth of float."""
+    from src import profit as pf
+    from src.pacing import parse_iso
+
+    db = get_db()
+    fee = _analysis_params(db).fee
+    try:
+        days = float(request.args.get("days") or 0)
+    except (TypeError, ValueError):
+        days = 0.0
+    since = pf.since_iso(days) if days > 0 else ""
+
+    book = pf.pair(db.all_trades(), fee)
+    events = [e for e in db.order_events(limit=50000, include_dry=False)
+              if e["ok"] and e["kind"] in ("place", "raise")]
+
+    closed = [d for d in book.closed if (d["sold_at"] or "") >= since]
+    for d in closed:
+        d["by_bot"] = pf.by_bot({"market_hash_name": d["market_hash_name"],
+                                 "float_value": d["float_value"],
+                                 "price": d["bought"]}, events)
+
+    sales_cache: dict[str, list] = {}
+    holding = []
+    cutoff = pf.since_iso(pf.ESTIMATE_DAYS)
+    for t in book.holding:
+        name = t["market_hash_name"] or ""
+        if name not in sales_cache:
+            item_id = db.get_item_id(name) if name else None
+            sales_cache[name] = (db.query_sales(int(item_id), since_iso=cutoff)
+                                 if item_id is not None else [])
+        est, basis = pf.estimate(sales_cache[name], t["float_value"])
+        bought = float(t["price"] or 0)
+        bought_at = t.get("done_at") or t.get("created_at")
+        when = parse_iso(bought_at)
+        holding.append({
+            "market_hash_name": name, "float_value": t["float_value"],
+            "paint_seed": t["paint_seed"], "bought": bought,
+            "bought_at": bought_at,
+            "days": (round((datetime.now(timezone.utc) - when).total_seconds()
+                           / 86400.0, 1) if when else None),
+            "estimate": round(est, 2) if est is not None else None,
+            "basis": basis,
+            "est_profit": (round(est * (1 - fee) - bought, 2)
+                           if est is not None else None),
+            "by_bot": pf.by_bot(t, events),
+            "tracked": bool(sales_cache[name]),
+        })
+
+    valued = [h for h in holding if h["estimate"] is not None]
+    return jsonify({
+        "fee": fee,
+        "days": days,
+        "totals": pf.totals(closed),
+        "all_time": pf.totals(book.closed),
+        "closed": closed[:1000],
+        "holding": holding,
+        "holding_totals": {
+            "count": len(holding),
+            "spent": round(sum(h["bought"] for h in holding), 2),
+            "estimate": round(sum(h["estimate"] for h in valued), 2),
+            "est_profit": round(sum(h["est_profit"] for h in valued), 2),
+            "unvalued": len(holding) - len(valued),
+        },
+        "unmatched": [dict(t) for t in book.unmatched
+                      if ((t.get("done_at") or t.get("created_at") or "") >= since)],
+        "pending": [dict(t) for t in book.pending],
+        "trades": len(db.all_trades()),
+        "sync": _json_setting(db, "trades_sync_result"),
+        "sync_at": db.get_setting("trades_sync_at") or None,
+        "sync_pending": db.get_setting("trades_sync_requested") == "1",
+    })
+
+
+@app.route("/api/profit/sync", methods=["POST"])
+def api_profit_sync():
+    """Ask the collector to read the account's trades now."""
+    _require_admin()
+    db = get_db()
+    db.set_setting("trades_sync_requested", "1")
+    waiting = _why_waiting(db)
+    return jsonify({
+        "queued": True, "waiting": waiting,
+        "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
+                "Читаю сделки аккаунта — ответ через несколько секунд.",
+    })
+
+
 @app.route("/api/analysis/params", methods=["POST"])
 def api_analysis_params():
     _require_admin()

@@ -67,6 +67,7 @@ global.fetch = async (url) => ({
                                 test_amend: null, test_pending: false };
     }
     if (url.startsWith("/api/analysis/plan")) return plan;
+    if (url.startsWith("/api/profit")) return api;
     if (url.startsWith("/api/analysis")) return api;
     return { items: [] };
   },
@@ -114,6 +115,9 @@ function deepText(node) {
     })(),
     journalText: deepText(nodes["j-table"]),
     attention: deepText(nodes["j-attention"]),
+    profit: ["f-tiles", "f-alltime", "f-closed", "f-holding-note", "f-holding",
+             "f-unmatched", "f-sync-state"]
+      .map((id) => deepText(nodes[id])).join(" | "),
     tiles: (nodes["j-summary"] || el("div")).children.length,
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),

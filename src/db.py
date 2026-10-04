@@ -158,6 +158,25 @@ CREATE TABLE IF NOT EXISTS order_events (
 CREATE INDEX IF NOT EXISTS idx_order_events_at
     ON order_events(at DESC);
 
+-- The account's own trades, as CSFloat reports them: what we bought and
+-- what we sold. Earnings are worked out from these, never stored.
+CREATE TABLE IF NOT EXISTS trades (
+    trade_id            TEXT    PRIMARY KEY,
+    role                TEXT,               -- buy/sell; NULL when unknown
+    state               TEXT,
+    market_hash_name    TEXT,
+    float_value         REAL,
+    paint_seed          INTEGER,
+    asset_id            TEXT,
+    price               REAL,               -- USD
+    created_at          TEXT,
+    done_at             TEXT,
+    updated_at          TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_skin
+    ON trades(market_hash_name, float_value);
+
 CREATE TABLE IF NOT EXISTS poll_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id             INTEGER,
@@ -648,6 +667,39 @@ class Database:
             r["ok"] = bool(r["ok"])
             r["dry"] = bool(r["dry"])
         return rows
+
+    def upsert_trade(self, t: dict) -> bool:
+        """Store or update one trade. True when it is new or its state moved."""
+        row = self.conn.execute(
+            "SELECT state FROM trades WHERE trade_id = ?", (t["trade_id"],)
+        ).fetchone()
+        self.conn.execute(
+            "INSERT INTO trades (trade_id, role, state, market_hash_name, "
+            "float_value, paint_seed, asset_id, price, created_at, done_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(trade_id) DO UPDATE SET "
+            "role = COALESCE(excluded.role, trades.role), state = excluded.state, "
+            "market_hash_name = COALESCE(excluded.market_hash_name, trades.market_hash_name), "
+            "float_value = COALESCE(excluded.float_value, trades.float_value), "
+            "paint_seed = COALESCE(excluded.paint_seed, trades.paint_seed), "
+            "asset_id = COALESCE(excluded.asset_id, trades.asset_id), "
+            "price = COALESCE(excluded.price, trades.price), "
+            "created_at = COALESCE(excluded.created_at, trades.created_at), "
+            "done_at = COALESCE(excluded.done_at, trades.done_at), "
+            "updated_at = excluded.updated_at",
+            (t["trade_id"], t.get("role"), t.get("state"), t.get("market_hash_name"),
+             t.get("float_value"), t.get("paint_seed"), t.get("asset_id"),
+             t.get("price"), t.get("created_at"), t.get("done_at"), utcnow_iso()))
+        self.conn.commit()
+        return row is None or row["state"] != t.get("state")
+
+    def trade_states(self) -> dict[str, str]:
+        return {r["trade_id"]: r["state"] for r in self.conn.execute(
+            "SELECT trade_id, state FROM trades").fetchall()}
+
+    def all_trades(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM trades ORDER BY COALESCE(done_at, created_at)").fetchall()]
 
     def item_name(self, item_id: int) -> str | None:
         row = self.conn.execute(
