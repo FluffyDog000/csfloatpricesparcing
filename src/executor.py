@@ -100,6 +100,13 @@ class Limits:
     guard_share: float = 0.3
     # Room kept above the average money in use, in standard deviations.
     surge_z: float = BUDGET_Z
+    # Spend CSFloat's allowance rather than the money: orders up to ten times
+    # the budget, ranked as usual, with no check on what their fills would
+    # keep busy. More orders standing is more chances of a fill soon; the
+    # price is that once the balance runs out, whichever orders fill first
+    # take it and CSFloat drops the rest - the rank no longer decides where
+    # the money goes.
+    full_allowance: bool = False
 
     @property
     def allowance(self) -> float:
@@ -114,6 +121,15 @@ class Limits:
         return self.total_capital
 
     @property
+    def order_cap(self) -> float:
+        """The face value the plan may place: CSFloat's allowance, or - when
+        it is spent in full - ten times our own budget, so the limit typed on
+        the page still means something."""
+        if self.full_allowance:
+            return LEVERAGE * self.budget
+        return self.allowance
+
+    @property
     def capped_by_balance(self) -> bool:
         """Our limit is above what the account holds."""
         return self.balance > 0 and self.total_capital > self.balance
@@ -125,6 +141,9 @@ class Limits:
         out["allowance"] = None if self.balance <= 0 else round(self.allowance, 2)
         out["budget"] = round(self.budget, 2) if self.budget != float("inf") else None
         out["capped_by_balance"] = self.capped_by_balance
+        cap = self.order_cap
+        out["order_cap"] = round(cap, 2) if cap != float("inf") else None
+        out["full_allowance"] = bool(self.full_allowance)
         return out
 
 
@@ -300,7 +319,7 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     flow: dict[tuple, float] = {}
     budget = limits.budget
     item_cap = limits.per_item_capital or budget
-    allowance = limits.allowance
+    allowance = limits.order_cap
     # `spent` is the mean of the money in use; these are its variance and the
     # face value of the orders, for the two other checks.
     var = 0.0
@@ -337,6 +356,8 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
             return (f"лимит CSFloat: ордеров не больше чем на "
                     f"${allowance:.0f} (10× баланса)")
         need = band.bid * n
+        if limits.full_allowance:
+            return ""
         if peak(need, band.bid ** 2 * n) > budget + 1e-9:
             return (f"не хватает бюджета: с запасом на всплеск занято "
                     f"${peak():.0f} из ${budget:.0f}")

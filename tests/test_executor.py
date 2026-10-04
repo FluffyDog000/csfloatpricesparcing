@@ -396,3 +396,24 @@ def test_the_defence_does_not_take_down_an_order_that_is_first():
                      Limits(patience_minutes=0))
     assert [a.kind for a in acts] == [KEEP], acts[0].reason
     assert "первые" in acts[0].reason
+
+
+def test_the_full_allowance_places_ten_times_the_budget():
+    """Asked for in so many words: as many orders as CSFloat allows, because
+    more orders standing means items arrive sooner. Weekly-filling gloves
+    hold about their own bid each, so by the money only eight $119 orders
+    fit $960; on the allowance, eighty."""
+    from src.executor import select_portfolio
+
+    cands = [(f"G{i}", Band(float_min=0.15, float_max=0.25, bid=119.0,
+                            margin=0.066, lam=0.14, t_sell=1.0, take=True))
+             for i in range(100)]
+    money = select_portfolio(cands, Limits(total_capital=960.0, balance=960.0,
+                                           max_orders=1000))
+    full = select_portfolio(cands, Limits(total_capital=960.0, balance=960.0,
+                                          max_orders=1000, full_allowance=True))
+    face = lambda got: sum(b.bid for bands in got.values() for b in bands)
+    assert face(money) < 960.0
+    assert 9000.0 < face(full) <= 9600.0
+    assert Limits(balance=960.0, total_capital=960.0,
+                  full_allowance=True).as_dict()["order_cap"] == 9600.0

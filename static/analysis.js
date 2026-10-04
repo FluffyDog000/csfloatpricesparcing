@@ -866,9 +866,12 @@ float, который принимает ордер. Ниже «ожид.» — 
     const peak = lastTaken.peak || 0;
     sum.innerHTML = `По рангу, лучшее сверху. В план входит <b>${taken.length}</b> из `
       + `${queue.length}: ордеров на <b>${money(face)}</b>`
-      + (limits && limits.allowance ? ` (CSFloat разрешает до ${money(limits.allowance)})` : "")
+      + (limits && limits.order_cap ? ` из ${money(limits.order_cap)} разрешённых` : "")
       + `; исполнения держат в среднем <b>${money(used)}</b>, в неудачный день до `
-      + `<b>${money(peak)}</b> из бюджета ${money(limits && limits.budget)}; `
+      + `<b>${money(peak)}</b> при бюджете ${money(limits && limits.budget)}`
+      + (limits && limits.full_allowance
+        ? " — режим «весь лимит CSFloat»: ордеров больше, чем денег, исполнится то, что успеет первым; "
+        : "; ")
       + `ожидаемо ~<b>${money(profit)}</b> в сутки. `
       + "«Держит» — сколько денег ступень в среднем занимает: блокировка плюс "
       + "продажа. Редкая ступень держит меньше своей ставки — поэтому ордеров "
@@ -950,6 +953,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("l-balance").value = l.balance;
     $("l-guard").value = Math.round((l.guard_share || 0) * 1000) / 10;
     if ($("l-surge")) $("l-surge").value = l.surge_z ?? 1;
+    if ($("l-full")) $("l-full").checked = !!l.full_allowance;
     const note = $("l-allowance");
     if (!note) return;
     if (!l.balance) {
@@ -1252,6 +1256,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       an_balance: $("l-balance").value,
       an_guard_share: (parseFloat($("l-guard").value) || 0) / 100,
       an_surge_z: $("l-surge").value,
+      an_full_allowance: $("l-full").checked ? 1 : 0,
       scr_min_price: $("s-minprice").value,
       scr_max_price: $("s-maxprice").value,
       scr_min_flow: $("s-flow").value,

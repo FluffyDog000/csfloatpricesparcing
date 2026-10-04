@@ -146,6 +146,11 @@
         <input type="number" id="l-surge" class="input" step="0.5" min="0" max="3" value="1">
         <small class="muted">0 — планировать по среднему, 1 — денег хватит<br>
           в ~84% дней, 2 — в ~98%. Не хватило — CSFloat просто снимет ордер</small></label>
+      <label class="arm-line">
+        <input type="checkbox" id="l-full"> ставить на весь лимит CSFloat (10× баланса)
+        <small class="muted">больше ордеров — быстрее прилетают предметы. Деньги<br>
+          забирают те, что исполнятся первыми; кончились — CSFloat снимает<br>
+          остальные. Запас на всплеск тогда не учитывается</small></label>
     </div>
     <div class="muted" id="l-allowance"></div>
     <button class="btn" id="p-save">Сохранить пороги и лимиты</button>
