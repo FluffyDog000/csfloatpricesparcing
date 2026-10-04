@@ -339,3 +339,55 @@ def test_a_failure_reading_the_asks_does_not_abort_the_pass():
     out = col.defend_orders()
     assert out is not None, "the pass still ran"
     db.close()
+
+
+def test_the_defence_reads_the_books_of_its_items_at_the_same_time():
+    """Forty-seven items one after another took twenty minutes - longer than
+    the ten-minute interval - so the defence never stopped and an approved
+    plan waited behind it for an hour."""
+    import threading
+    import time
+
+    from src.keyring import KeyRing
+
+    col, db = _collector()
+    col.client.keyring = KeyRing([f"key-{i}" for i in range(8)], col.client.pool,
+                                 spacing=0.0)
+    col.sync_our_orders = lambda *a, **k: {}
+    for i in range(6):
+        item_id = (_stock(db)[0] if i == 0
+                   else db.add_item(f"Item {i} (Field-Tested)"))
+        db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                            remote_id=f"r{i}")
+    seen = set()
+
+    def slow(name, item_id):
+        seen.add(threading.get_ident())
+        time.sleep(0.3)
+        return {"bands": 0}
+
+    col.sweep_buy_orders = slow
+    col.refresh_held_asks = lambda *a, **k: None
+    col.client.send_json = lambda *a, **k: {}
+
+    started = time.monotonic()
+    col.defend_orders()
+    assert time.monotonic() - started < 1.2, "six items, not six in a row"
+    assert len(seen) > 1
+    db.close()
+
+
+def test_a_plan_approved_during_the_defence_goes_out_during_it():
+    col, db = _collector()
+    col.sync_our_orders = lambda *a, **k: {}
+    item_id, _ = _stock(db)
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    col.client.send_json = lambda *a, **k: {}
+    applied = []
+    col.apply_pending_actions = lambda: applied.append(1)
+
+    col.defend_orders()
+    assert applied, "the queued plan is looked at between the items"
+    db.close()

@@ -299,6 +299,12 @@ def _state_writer(collector, every: float = 10.0):
     last = [0.0]
 
     def report(_name, _result) -> None:
+        # A plan approved while a long sweep runs goes out between its items,
+        # not after the last of them.
+        try:
+            collector.apply_pending_actions()
+        except Exception as exc:  # noqa: BLE001 - the sweep goes on regardless
+            log.warning("Applying the approved plan mid-sweep failed: %s", exc)
         now = time.monotonic()
         with lock:
             if now - last[0] < every:

@@ -76,6 +76,9 @@ class Collector:
         self.db = db
         self.client = client
         self._dumped: set[str] = set()
+        # One approved plan is carried out once, whichever thread reaches it.
+        import threading
+        self._apply_lock = threading.Lock()
         # Resolve item images here (spaced via the client) so the dashboard only
         # reads cached URLs and never bursts the official API into a 429.
         self.images = ImageService(config, db, client=client)
@@ -642,6 +645,24 @@ class Collector:
         raw = self.db.get_setting("analysis_pending_actions")
         if not raw:
             return None
+        # Called from between the items of a sweep and of the defence as well
+        # as from the loop: one plan, carried out once, by whoever gets here
+        # first.
+        if not self._apply_lock.acquire(blocking=False):
+            return None
+        try:
+            return self._apply_pending(raw)
+        finally:
+            self._apply_lock.release()
+
+    def _apply_pending(self, raw: str) -> dict | None:
+        import json as _json
+
+        from .placement import PLACEMENT_KEY, load
+        from .sender import Sender
+
+        if self.db.get_setting("analysis_pending_actions") != raw:
+            return None          # another thread took it in the meantime
         try:
             pending = _json.loads(raw)
             # Only the action's own fields: the page's plan carries extras for
@@ -1191,23 +1212,14 @@ class Collector:
             by_item.setdefault(int(row["item_id"]), []).append(row)
 
         results: list[dict] = []
-        looked = 0
+        looked = self._read_held_books(by_item, defend_minutes(self.db))
         for item_id, rows in by_item.items():
             name = self.db.item_name(item_id)
             if not name:
                 continue
-            # The book has to be fresh: acting on an hour-old one would answer
-            # a fight that is already over, or miss one that is not.
-            self.sweep_buy_orders(name, item_id)
-            looked += 1
-            # And the sell side for the ranges we hold, which is what the
-            # ceiling is built from. Left to a sweep nobody runs except by
-            # hand, it goes stale and the ceiling stops moving with the market.
-            try:
-                self.refresh_held_asks(name, item_id, rows,
-                                       defend_minutes(self.db))
-            except Exception as exc:  # noqa: BLE001 - one half is not both
-                log.warning("Ask refresh for '%s' failed: %s", name, exc)
+            # A plan approved while the defence runs goes out now, not after
+            # it: a pass over fifty items is minutes of work.
+            self.apply_pending_actions()
             # Without this the defence sees itself standing above itself and
             # answers an outbid nobody made.
             book = strip_own(self.db.buy_orders(item_id), rows)
@@ -1275,6 +1287,50 @@ class Collector:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    def _read_held_books(self, by_item: dict, minutes: float) -> int:
+        """Fresh books and asks for every item we hold an order on, several
+        items at a time - one per analysis key, as the sweep button does.
+
+        The book has to be fresh: acting on an hour-old one answers a fight
+        that is over or misses one that is not. And the sell side for the
+        ranges we hold is what the ceiling is built from. Read one item after
+        another this was twenty-odd seconds an item: forty-seven items took
+        twenty minutes, longer than the ten-minute interval, so the defence
+        ran without pause and an approved plan waited behind it for an hour.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        from .parallel import workers_for
+
+        jobs = []
+        for item_id, rows in by_item.items():
+            name = self.db.item_name(item_id)
+            if name:
+                jobs.append((item_id, name, rows))
+        if not jobs:
+            return 0
+
+        def one(job) -> None:
+            item_id, name, rows = job
+            try:
+                self.sweep_buy_orders(name, item_id)
+            except Exception as exc:  # noqa: BLE001 - one item is not the pass
+                log.warning("Defence book for '%s' failed: %s", name, exc)
+            try:
+                self.refresh_held_asks(name, item_id, rows, minutes)
+            except Exception as exc:  # noqa: BLE001 - one half is not both
+                log.warning("Ask refresh for '%s' failed: %s", name, exc)
+
+        count = workers_for(self, len(jobs))
+        if count <= 1:
+            for job in jobs:
+                one(job)
+        else:
+            with ThreadPoolExecutor(max_workers=count,
+                                    thread_name_prefix="defend") as pool:
+                list(pool.map(one, jobs))
+        return len(jobs)
 
     def _log_order_event(self, result, source: str, dry: bool,
                          item_id: int | None = None) -> None:
