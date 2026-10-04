@@ -247,33 +247,37 @@ curl -s -b /tmp/cs.txt localhost:8000/api/diag | python3 -m json.tool
   боту в Telegram (принимается только с твоего `chat_id`).
 - Дополнительно можно копировать `data/` на другой хост (`rsync`/`scp`) по cron.
 
-### Бэкап в Google Drive (через rclone)
+### Бэкап на Яндекс Диск (через rclone)
 
 Telegram не принимает файлы больше 50 МБ. Бот сжимает базу и раз в сутки
 (04:00 МСК или время со страницы «Настройки») загружает её в облако, храня
-последние 30 копий. Пароли и токены остаются в настройках rclone на сервере.
+последние 30 копий. Токены остаются в настройках rclone на сервере.
+
+WebDAV с паролем приложения на бесплатном тарифе Яндекса не работает
+(«402 Payment Required»), поэтому подключение — через вход по аккаунту.
+Токен Яндекса живёт около года, rclone продлевает его сам; если доступ
+пропадёт (смена пароля, отзыв доступа), бот напишет об этом в Telegram, а
+чинится это одной командой `rclone config reconnect yadisk:`.
 
 1. **Узнать, от какого пользователя работает бот** — rclone настраивается от
    него же: `systemctl show -p User csfloat-collector` (пусто — значит `root`).
 2. **Поставить rclone:** `curl https://rclone.org/install.sh | sudo bash`
-3. **Подключить Google Drive** (от того же пользователя): `rclone config`
-   - `n` — новый, имя `gdrive`, тип `drive`;
-   - `client_id`, `client_secret` — пусто (Enter);
-   - scope — `3` (`drive.file`: rclone видит только свои файлы, остальной Drive
-     ему недоступен);
-   - `root_folder_id`, `service_account_file` — пусто; advanced — `n`;
-   - «Use web browser to automatically authenticate?» — **`n`** (на сервере
-     нет браузера). rclone покажет команду `rclone authorize "drive" "…"`;
-   - на **своём компьютере** скачать rclone (rclone.org/downloads, для Windows —
-     zip, распаковать), выполнить эту команду в терминале, войти в Google в
-     открывшемся браузере, скопировать выданный токен и вставить его на сервере;
-   - «Configure this as a Shared Drive?» — `n`, затем `y` — сохранить, `q` — выйти.
-4. **Проверить:** `rclone mkdir gdrive:csfloat-backup && rclone lsd gdrive:`
-5. **В `.env`:** `CSFLOAT_CLOUD_REMOTE=gdrive:csfloat-backup`, затем
+3. **Подключить Яндекс Диск:** `rclone config` → `n` → имя `yadisk` → тип
+   `yandex` → `client_id`, `client_secret` — Enter → advanced `n` →
+   «Use web browser…?» — **`n`**. rclone покажет команду `rclone authorize "yandex"`.
+4. **На своём компьютере** скачать rclone (rclone.org/downloads, для Windows —
+   zip), в его папке выполнить `rclone.exe authorize "yandex"`, войти в Яндекс,
+   разрешить доступ, скопировать выданную строку `{...}` и вставить её на
+   сервере в `config_token>` → `y` → `q`.
+5. **Проверить:** `rclone mkdir yadisk:csfloat-backup && rclone lsd yadisk:`
+6. **В `.env`:** `CSFLOAT_CLOUD_REMOTE=yadisk:csfloat-backup`, затем
    `sudo systemctl restart csfloat-collector csfloat-web`.
-6. **Первый бэкап сразу**, не дожидаясь ночи:
+7. **Первый бэкап сразу:**
    `.venv/bin/python -c "from src.config import load_config; from src.backup_service import export_db; print(export_db(load_config(), 'manual'))"`
-   — `True` и файл `csfloat-ДАТА.db.gz` в папке `csfloat-backup` на Drive.
+   — `True` и файл `csfloat-ДАТА.db.gz` в папке `csfloat-backup` на Диске.
+
+Подойдёт и любое другое хранилище, которое знает rclone (Backblaze B2,
+Yandex Object Storage, Google Drive…): меняется только `CSFLOAT_CLOUD_REMOTE`.
 
 **Восстановление из облака** (бот остановлен):
 
