@@ -293,9 +293,64 @@ def test_the_journal_page_script_renders_what_the_endpoint_returns():
     }
     got = _run_script("static/journal.js", reply)
     assert "Ошибка" not in got["status"], got["status"]
-    assert got["journalRows"] == 2, "both events must reach the table"
+    assert got["orderGroups"] == 1, "two events of one order are one row"
+    assert "поставлен" in got["journalText"] and "поднят" in got["journalText"], \
+        "and both are in its history"
     assert got["tiles"] >= 5, "the summary tiles must render"
     assert "60" in got["defence"], "the defence interval must be stated"
+
+
+def _event(id_, kind, ok=True, name="A (FT)", lo=0.15, hi=0.17, price=10.0,
+           detail="", at="2026-09-19T12:00:00"):
+    return {"id": id_, "at": at, "item_id": 1, "market_hash_name": name,
+            "float_min": lo, "float_max": hi, "kind": kind, "price": price,
+            "was": None, "ceiling": 20.0, "remote_id": None, "ok": ok,
+            "dry": False, "source": "plan", "reason": "", "detail": detail}
+
+
+def _journal(events, **extra):
+    body = {"events": events, "held": 0, "manual": 0, "items": [],
+            "defend": False, "defend_minutes": 60, "defend_at": None,
+            "sync": {"seen": 0, "error": "", "counts": {}},
+            "sync_at": "2026-09-20T10:00:00", "sync_pending": False}
+    body.update(extra)
+    return body
+
+
+def test_one_row_per_order_however_many_times_it_moved():
+    events = [_event(5, "raise", price=14.0), _event(4, "raise", price=13.0),
+              _event(3, "raise", price=12.0), _event(2, "place", price=11.0),
+              _event(1, "place", name="B (FT)", lo=0.2, hi=0.21)]
+    got = _run_script("static/journal.js", _journal(events))
+    assert got["orderGroups"] == 2
+    assert "поднят ×3" in got["journalText"]
+
+
+def test_an_unanswered_refusal_is_on_top_and_explained():
+    events = [_event(2, "place", ok=False,
+                     detail="HTTP 400 для /api/v1/buy-orders — price too low"),
+              _event(1, "place", ok=False, detail="HTTP 400")]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "не поставлен (2 раза подряд)" in got["attention"]
+    assert "отклонил параметры ордера: price too low" in got["attention"]
+
+
+def test_a_refusal_answered_since_is_history_not_a_problem():
+    events = [_event(2, "place"), _event(1, "place", ok=False, detail="HTTP 500")]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "Всё в порядке" in got["attention"]
+
+
+def test_an_order_outbid_past_its_ceiling_is_flagged():
+    got = _run_script("static/journal.js", _journal([], held=1, positions={
+        "outbid": 1, "checking": False,
+        "orders": [{"id": 1, "item": "A (FT)", "float_min": 0.15,
+                    "float_max": 0.17, "price": 10.0, "ceiling": 12.0,
+                    "state": "live", "remote_id": "r1", "top": 12.5,
+                    "ahead": 1, "first": False, "seen_in_book": True,
+                    "swept_at": "2026-09-20T10:00:00", "book": 3}]}))
+    assert "поднимать некуда" in got["attention"]
+    assert "автозащита выключена" in got["attention"]
 
 
 def test_the_journal_says_so_when_nothing_has_happened():
@@ -303,7 +358,8 @@ def test_the_journal_says_so_when_nothing_has_happened():
                       {"events": [], "held": 0, "items": [], "defend": False,
                        "defend_minutes": 60, "defend_at": None})
     assert "Ошибка" not in got["status"], got["status"]
-    assert got["journalRows"] == 0
+    assert got["orderGroups"] == 0
+    assert "Пока ничего не происходило" in got["journalText"]
     assert "выключена" in got["defence"]
 
 

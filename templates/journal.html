@@ -4,33 +4,64 @@
 <a class="back" href="{{ url_for('analysis_page') }}">← к анализу</a>
 <h1>Журнал ордеров</h1>
 <p class="muted">Что бот сделал и когда. План — это что он <em>собирается</em>
-сделать; здесь только то, что уже произошло, по времени сверху вниз.</p>
+сделать; здесь только то, что уже произошло.</p>
+
+<section class="settings-block attention-block">
+  <h2>Требует внимания</h2>
+  <div id="j-attention"></div>
+</section>
 
 <section class="settings-block">
   <div class="journal-controls">
-    <label>предмет
-      <select id="j-item" class="input"><option value="">все</option></select>
+    <label>период
+      <select id="j-period" class="input">
+        <option value="today">сегодня</option>
+        <option value="24" selected>24 часа</option>
+        <option value="168">7 дней</option>
+        <option value="720">30 дней</option>
+        <option value="0">всё время</option>
+      </select>
     </label>
-    <label>показывать
-      <select id="j-limit" class="input">
-        <option value="100">100 последних</option>
-        <option value="300" selected>300 последних</option>
-        <option value="1000">1000 последних</option>
+    <label>действие
+      <select id="j-kind" class="input">
+        <option value="">все</option>
+        <option value="place">поставлено</option>
+        <option value="raise">поднята цена</option>
+        <option value="cancel">снято</option>
+        <option value="fill">исполнено</option>
+        <option value="fail">отказы</option>
+      </select>
+    </label>
+    <label class="grow">поиск по названию
+      <input id="j-search" class="input" type="search" placeholder="например, Fade или Karambit">
+    </label>
+    <label>вид
+      <select id="j-view" class="input">
+        <option value="orders">по ордерам</option>
+        <option value="feed">лентой</option>
       </select>
     </label>
     <label class="arm-line">
-      <input type="checkbox" id="j-dry" checked> показывать холостые
+      <input type="checkbox" id="j-dry" checked> холостые
     </label>
     <button class="btn" id="j-reload">Обновить</button>
     <button class="btn primary" id="j-sync">Сверить с аккаунтом</button>
   </div>
-  <p class="muted">Сверка спрашивает у CSFloat, какие ордера реально стоят, и
-  приводит запись бота в соответствие: снятые вручную перестают числиться,
-  исполненные помечаются, поставленные руками становятся видны (но бот их не
-  ведёт). Защита делает это сама перед каждой проверкой.</p>
+  <details class="hint">
+    <summary class="muted">что делает сверка</summary>
+    <p class="muted">Сверка спрашивает у CSFloat, какие ордера реально стоят, и
+    приводит запись бота в соответствие: снятые вручную перестают числиться,
+    исполненные помечаются, поставленные руками становятся видны (но бот их не
+    ведёт). Защита делает это сама перед каждой проверкой.</p>
+  </details>
   <div class="muted" id="j-note"></div>
   <div class="muted" id="j-state"></div>
   <div class="muted" id="j-sync-state"></div>
+</section>
+
+<section class="settings-block">
+  <div id="j-summary" class="journal-summary"></div>
+  <div id="j-table"></div>
 </section>
 
 <section class="settings-block">
@@ -43,11 +74,6 @@
   </div>
   <div class="muted" id="p-note"></div>
   <div id="p-table"></div>
-</section>
-
-<section class="settings-block">
-  <div id="j-summary" class="journal-summary"></div>
-  <div id="j-table"></div>
 </section>
 {% endblock %}
 {% block scripts %}

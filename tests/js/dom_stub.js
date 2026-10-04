@@ -106,6 +106,14 @@ function deepText(node) {
     status: note.textContent,
     kind: note.className,
     journalRows: tableOf("j-table"),
+    // The journal's default view: one block per order, history folded in.
+    orderGroups: (() => {
+      const box = nodes["j-table"] || el("div");
+      const list = box.children[0];
+      return list && list.className === "order-groups" ? list.children.length : 0;
+    })(),
+    journalText: deepText(nodes["j-table"]),
+    attention: deepText(nodes["j-attention"]),
     tiles: (nodes["j-summary"] || el("div")).children.length,
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),

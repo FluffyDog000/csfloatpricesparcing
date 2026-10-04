@@ -1473,7 +1473,19 @@ def api_analysis_journal():
         limit = 200
     name = (request.args.get("item") or "").strip() or None
     include_dry = (request.args.get("dry") or "1") != "0"
-    events = db.order_events(limit=limit, name=name, include_dry=include_dry)
+    # A period rather than a row count: "what happened today" is the question
+    # the page is opened with, and three hundred rows is a day on a busy list
+    # and a month on a quiet one.
+    since = None
+    try:
+        hours = float(request.args.get("hours") or 0)
+    except (TypeError, ValueError):
+        hours = 0.0
+    if hours > 0:
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)) \
+            .replace(microsecond=0).isoformat()
+    events = db.order_events(limit=limit, name=name, include_dry=include_dry,
+                             since=since)
 
     # The same band, over time: the rows for one order are its history, and
     # the count is what says "it has been outbid nine times today".
@@ -1496,6 +1508,8 @@ def api_analysis_journal():
         "sync_at": db.get_setting("orders_sync_at") or None,
         "sync_pending": db.get_setting("orders_sync_requested") == "1",
         "items": sorted({e["market_hash_name"] for e in events}),
+        "since": since,
+        "truncated": len(events) >= limit,
         "defend": defending(db),
         "defend_minutes": defend_minutes(db),
         "defend_at": db.get_setting("defend_last_at") or None,

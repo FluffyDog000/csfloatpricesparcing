@@ -613,6 +613,17 @@ def test_the_journal_serves_newest_first_and_filters():
     one = c.get(f"/api/analysis/journal?item={name}").get_json()["events"]
     assert len(one) == 2 and all(e["market_hash_name"] == name for e in one)
 
+    recent = c.get("/api/analysis/journal?hours=1").get_json()
+    assert len(recent["events"]) == 3 and recent["since"]
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.conn.execute("UPDATE order_events SET at = '2020-01-01T00:00:00+00:00' "
+                    "WHERE market_hash_name = 'B (FT)'")
+    db.conn.commit()
+    db.close()
+    recent = c.get("/api/analysis/journal?hours=24").get_json()["events"]
+    assert {e["market_hash_name"] for e in recent} == {name}, \
+        "a period leaves out what happened before it"
+
 
 def test_the_journal_never_confuses_a_rehearsal_with_a_placement():
     """A dry run logged like a live one reads as money committed."""
