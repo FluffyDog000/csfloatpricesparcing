@@ -349,8 +349,8 @@ def test_an_order_outbid_past_its_ceiling_is_flagged():
                     "state": "live", "remote_id": "r1", "top": 12.5,
                     "ahead": 1, "first": False, "seen_in_book": True,
                     "swept_at": "2026-09-20T10:00:00", "book": 3}]}))
-    assert "поднимать некуда" in got["attention"]
-    assert "автозащита выключена" in got["attention"]
+    assert "выше потолка не поднимаем" in got["attention"]
+    assert "стоит позади" in got["attention"], "kept, not taken down"
 
 
 def test_the_journal_says_so_when_nothing_has_happened():
