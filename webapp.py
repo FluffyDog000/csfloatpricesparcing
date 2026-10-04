@@ -2155,6 +2155,33 @@ def api_set_key_proxies():
     return jsonify({"ok": True, "count": len(urls)})
 
 
+@app.route("/api/load/main_proxies", methods=["POST"])
+def api_set_main_proxies():
+    """The main key's own addresses. Empty: it takes a few fixed ones from the
+    main list. The collector applies the list within ~30 s."""
+    _require_admin()
+    from src.proxies import parse_proxy_list, split_proxy_flags, validate_proxy
+
+    data = request.get_json(silent=True) or {}
+    urls, bad, seen = [], [], set()
+    for line in parse_proxy_list(str(data.get("main_proxies") or "")):
+        ok, why = validate_proxy(line)
+        if not ok:
+            bad.append(f"{line} — {why}")
+        elif split_proxy_flags(line)[1]:
+            bad.append(f"{line} — ротационный прокси: каждый запрос с нового IP, "
+                       "для главного ключа это ровно то, за что CSFloat блокирует")
+        elif line not in seen:
+            seen.add(line)
+            urls.append(line)
+    if bad:
+        abort(400, description="Некорректные строки:\n" + "\n".join(bad[:10]))
+    db = get_db()
+    db.set_setting("main_proxies", "\n".join(urls))
+    log.info("Main key proxy list updated via web: %d address(es)", len(urls))
+    return jsonify({"ok": True, "count": len(urls)})
+
+
 def _key_ring_info(db) -> dict:
     """What the load page says about the analysis keys: how many there are,
     and where their addresses come from. The keys themselves never leave the
@@ -2175,6 +2202,8 @@ def _key_ring_info(db) -> dict:
             "key_ring": ring,
             "main_key_state": _json_setting(db, "main_key_state") or [],
             "main_key_routes": _json_setting(db, "main_key_routes") or [],
+            "main_proxies_text": db.get_setting("main_proxies") or "",
+            "main_proxy_state": _json_setting(db, "main_proxy_state") or [],
             "main_key": bool(config.http.api_key)}
 
 

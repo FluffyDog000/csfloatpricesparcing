@@ -225,6 +225,9 @@ class CSFloatClient:
         # for placing too many orders read as every address spent for
         # seventeen hours - and stopped the anonymous sales polls with it.
         self.main_quota: dict[str, Quota] = {}
+        # The main key's own addresses, set on the load page. None: it takes
+        # MAIN_KEY_ROUTES fixed addresses from the main pool.
+        self.main_pool: ProxyPool | None = None
         self.main_cooldown: dict[str, float] = {}   # monotonic
         self._last_request_ts = 0.0
         self._lock = threading.Lock()
@@ -475,7 +478,12 @@ class CSFloatClient:
                 or self.http.cookie or "session")
 
     def account_routes(self) -> list:
-        """The main key's own addresses (see MAIN_KEY_ROUTES)."""
+        """The main key's own addresses: the list set for it on the load page
+        when there is one, else MAIN_KEY_ROUTES fixed ones from the main pool.
+        Rotating proxies never: each request through one is another IP."""
+        own = self.main_pool
+        if own is not None and own.routes:
+            return [r for r in own.routes.values() if not r.rotating]
         return self.pool.account_routes(self._main_seed(), MAIN_KEY_ROUTES)
 
     def _account_route(self):
@@ -488,8 +496,9 @@ class CSFloatClient:
         now = time.monotonic()
         mine = self.account_routes()
         if not mine:
-            raise NoRouteAvailable("нет ни одного постоянного прокси для "
-                                   "главного ключа — добавь прокси на «Нагрузке»")
+            raise NoRouteAvailable(
+                "нет ни одного постоянного прокси для главного ключа — добавь "
+                "их на «Нагрузке» (ротационные для него не годятся)")
         usable = [r for r in mine if r.reachable(now)]
         if not usable:
             wait = min(r.reach_wait(now) for r in mine)

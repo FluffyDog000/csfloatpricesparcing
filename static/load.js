@@ -387,6 +387,29 @@ function renderKeyRing(d) {
   renderKeyStates(d.key_ring || []);
 }
 
+let mainProxiesDirty = false;
+const mainProxiesBox = document.getElementById("main-proxies-text");
+if (mainProxiesBox) {
+  mainProxiesBox.addEventListener("input", () => { mainProxiesDirty = true; });
+  document.getElementById("save-main-proxies").addEventListener("click", async () => {
+    const msg = document.getElementById("main-proxies-msg");
+    try {
+      const r = await postJSON("/api/load/main_proxies",
+        { main_proxies: mainProxiesBox.value }, token());
+      mainProxiesDirty = false;
+      msg.className = "settings-msg" + (r.count > 4 ? " err" : "");
+      msg.textContent = !r.count
+        ? "Список очищен — главный ключ возьмёт 3 постоянных адреса из общего списка."
+        : `Сохранено: ${r.count} адрес(ов) — сборщик подхватит за ~30 секунд.`
+          + (r.count > 4 ? " Это больше 4: CSFloat может снова пожаловаться на много IP." : "");
+      refresh();
+    } catch (e) {
+      msg.className = "settings-msg err";
+      msg.textContent = "Ошибка: " + e.message;
+    }
+  });
+}
+
 // The main key's counters, one row per kind of request it has made.
 function renderMainKey(d) {
   const box = document.getElementById("main-key-box");
@@ -397,10 +420,22 @@ function renderMainKey(d) {
     return;
   }
   const addrs = (d.main_key_routes || []);
+  const own = (d.main_proxies_text || "").trim();
   const where = addrs.length
-    ? `<p class="muted">Ходит только через ${addrs.length} адреса: `
+    ? `<p class="muted">Ходит только через ${addrs.length} адрес(а)`
+      + (own ? " из своего списка" : ", выбранных из общего списка") + ": "
       + addrs.map((a) => `<code>${esc(a)}</code>`).join(", ") + "</p>"
     : "";
+  const box2 = document.getElementById("main-proxies-text");
+  if (box2 && !mainProxiesDirty && document.activeElement !== box2) {
+    box2.value = d.main_proxies_text || "";
+  }
+  const table = document.getElementById("main-routes-table");
+  const state = d.main_proxy_state || [];
+  if (table) {
+    table.hidden = !state.length;
+    if (state.length) document.getElementById("main-routes-body").innerHTML = routeRows(state);
+  }
   if (!rows.length) {
     box.innerHTML = where + '<p class="muted">Ключ задан. Лимиты появятся после первого '
       + "запроса им с момента запуска сборщика — чтение сделок идёт через минуту.</p>";

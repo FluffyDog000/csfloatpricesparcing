@@ -99,6 +99,21 @@
      снимает ордера, сверяет аккаунт и читает сделки. Его лимиты считаются на
      ключ, а не на адрес, поэтому прокси их не увеличивают.</p>
   <div id="main-key-box"></div>
+  <p class="muted" style="margin-top:10px">Свои адреса для главного ключа —
+     по одному на строку. Лучше 2–4 постоянных (не ротационных): столько
+     разрешила поддержка CSFloat на ключ. Пусто — бот сам берёт 3 постоянных
+     из общего списка выше.</p>
+  <textarea id="main-proxies-text" class="input bulk-input" rows="4"
+            placeholder="http://user:pass@host:8080"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button class="btn btn-primary" id="save-main-proxies">Сохранить прокси главного ключа</button>
+  </div>
+  <div class="settings-msg" id="main-proxies-msg"></div>
+  <table class="stat" id="main-routes-table" hidden style="margin-top:10px">
+    <thead><tr><th>адрес</th><th class="num">осталось</th><th class="num">лимит</th>
+      <th>сброс</th><th>состояние</th></tr></thead>
+    <tbody id="main-routes-body"></tbody>
+  </table>
 </section>
 
 <section class="settings-block">

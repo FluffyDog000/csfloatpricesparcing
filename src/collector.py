@@ -1684,13 +1684,14 @@ class Collector:
         if raw is None:
             # The main list was never saved from the page; the keys' own may
             # have been, and is applied all the same.
+            main_changed = self._sync_main_proxies()
             if self._sync_key_proxies():
                 ring = getattr(self.client, "keyring", None)
                 if ring is not None:
                     ring.pool = self.key_pool_or_main()
                     ring.bind()
                 return True
-            return False
+            return main_changed
         urls = parse_proxy_list(raw)
         use_direct = (self.db.get_setting("use_direct", "1") or "1") != "0"
         if not urls and not use_direct:
@@ -1698,6 +1699,7 @@ class Collector:
         changed = self.client.pool.replace(urls, use_direct=use_direct,
                                            rotating_limit=self.rotating_limit())
         changed = self._sync_key_proxies() or changed
+        changed = self._sync_main_proxies() or changed
         if changed:
             # Keys are bound to addresses by name. Left bound to the old list,
             # a key whose three addresses were edited away was "ready" with
@@ -1734,6 +1736,23 @@ class Collector:
             return True
         return pool.replace(urls, use_direct=False,
                             rotating_limit=self.rotating_limit())
+
+    def _sync_main_proxies(self) -> bool:
+        """The main key's own addresses, from the load page. Returns True
+        when they changed. No list: it takes a few from the main pool."""
+        from .proxies import ProxyPool
+
+        urls = parse_proxy_list(self.db.get_setting("main_proxies") or "")
+        pool = getattr(self.client, "main_pool", None)
+        if not urls:
+            if pool is None:
+                return False
+            self.client.main_pool = None
+            return True
+        if pool is None:
+            self.client.main_pool = ProxyPool(urls, use_direct=False)
+            return True
+        return pool.replace(urls, use_direct=False)
 
     def key_pool_or_main(self):
         """Where the key ring's addresses come from right now."""
@@ -1816,6 +1835,9 @@ class Collector:
                                 json.dumps(main(), ensure_ascii=False))
             self.db.set_setting("main_key_routes", json.dumps(
                 [r.key for r in self.client.account_routes()]))
+            own = getattr(self.client, "main_pool", None)
+            self.db.set_setting("main_proxy_state",
+                                own.to_json() if own is not None else "[]")
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())

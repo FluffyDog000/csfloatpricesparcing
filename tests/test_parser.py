@@ -2087,3 +2087,61 @@ def test_the_main_key_speaks_from_three_addresses_and_no_more():
             >= {r.key for r in client.account_routes()} - {None}) or \
         len({r.key for r in again.account_routes()}
             & {r.key for r in client.account_routes()}) >= MAIN_KEY_ROUTES - 1
+
+
+
+def test_the_main_key_can_be_given_addresses_of_its_own():
+    """Set on the load page: the main key speaks from those and nothing else,
+    and the forty addresses polling the sales history are left to that."""
+    import logging, os, tempfile
+    logging.disable(logging.WARNING)
+    from src.collector import Collector
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+    from src.db import Database
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    db.set_setting("proxies", "\n".join(f"http://u:p@gate:{10000 + i}"
+                                        for i in range(40)))
+    db.set_setting("use_direct", "0")
+    db.set_setting("main_proxies", "http://u:p@mine:1\nhttp://u:p@mine:2")
+    col.sync_proxies()
+
+    client = col.client
+    client._respect_spacing = lambda: None
+    used = []
+
+    def request(method, url, **kw):
+        used.append(kw["proxies"]["https"])
+        return _StubResp(200, "{}", {"Content-Type": "application/json"})
+
+    client.session.request = request
+    for _ in range(10):
+        client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
+    assert set(used) == {"http://u:p@mine:1", "http://u:p@mine:2"}
+
+    # Cleared: back to three of the main list.
+    db.set_setting("main_proxies", "")
+    col.sync_proxies()
+    assert client.main_pool is None and len(client.account_routes()) == 3
+    db.close()
+
+
+def test_a_rotating_proxy_is_refused_for_the_main_key():
+    import importlib, os, tempfile
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    import webapp
+    importlib.reload(webapp)
+    webapp.app.config["TESTING"] = True
+    c = webapp.app.test_client()
+    r = c.post("/api/load/main_proxies",
+               json={"main_proxies": "http://u:p@gate:7000 #rotating"})
+    assert r.status_code == 400 and "ротационный" in r.get_json()["error"]
+    r = c.post("/api/load/main_proxies",
+               json={"main_proxies": "http://u:p@a:1\nhttp://u:p@b:2"})
+    assert r.get_json()["count"] == 2
+    assert c.get("/api/load").get_json()["main_proxies_text"].count("\n") == 1
