@@ -246,3 +246,40 @@ curl -s -b /tmp/cs.txt localhost:8000/api/diag | python3 -m json.tool
 - Восстановление: загрузить `*.db` на странице «Настройки» **или** прислать файл
   боту в Telegram (принимается только с твоего `chat_id`).
 - Дополнительно можно копировать `data/` на другой хост (`rsync`/`scp`) по cron.
+
+### Бэкап в Google Drive (через rclone)
+
+Telegram не принимает файлы больше 50 МБ. Бот сжимает базу и раз в сутки
+(04:00 МСК или время со страницы «Настройки») загружает её в облако, храня
+последние 30 копий. Пароли и токены остаются в настройках rclone на сервере.
+
+1. **Узнать, от какого пользователя работает бот** — rclone настраивается от
+   него же: `systemctl show -p User csfloat-collector` (пусто — значит `root`).
+2. **Поставить rclone:** `curl https://rclone.org/install.sh | sudo bash`
+3. **Подключить Google Drive** (от того же пользователя): `rclone config`
+   - `n` — новый, имя `gdrive`, тип `drive`;
+   - `client_id`, `client_secret` — пусто (Enter);
+   - scope — `3` (`drive.file`: rclone видит только свои файлы, остальной Drive
+     ему недоступен);
+   - `root_folder_id`, `service_account_file` — пусто; advanced — `n`;
+   - «Use web browser to automatically authenticate?» — **`n`** (на сервере
+     нет браузера). rclone покажет команду `rclone authorize "drive" "…"`;
+   - на **своём компьютере** скачать rclone (rclone.org/downloads, для Windows —
+     zip, распаковать), выполнить эту команду в терминале, войти в Google в
+     открывшемся браузере, скопировать выданный токен и вставить его на сервере;
+   - «Configure this as a Shared Drive?» — `n`, затем `y` — сохранить, `q` — выйти.
+4. **Проверить:** `rclone mkdir gdrive:csfloat-backup && rclone lsd gdrive:`
+5. **В `.env`:** `CSFLOAT_CLOUD_REMOTE=gdrive:csfloat-backup`, затем
+   `sudo systemctl restart csfloat-collector csfloat-web`.
+6. **Первый бэкап сразу**, не дожидаясь ночи:
+   `.venv/bin/python -c "from src.config import load_config; from src.backup_service import export_db; print(export_db(load_config(), 'manual'))"`
+   — `True` и файл `csfloat-ДАТА.db.gz` в папке `csfloat-backup` на Drive.
+
+**Восстановление из облака** (бот остановлен):
+
+```bash
+sudo systemctl stop csfloat-collector csfloat-web
+.venv/bin/python tools/cloud_restore.py --list
+.venv/bin/python tools/cloud_restore.py --get latest --apply
+sudo systemctl start csfloat-collector csfloat-web
+```

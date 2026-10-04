@@ -38,31 +38,97 @@ S_OFFSET = "tg_update_offset"    # int as str
 POLL_EVERY = 20.0     # seconds between Telegram polls
 SCHED_EVERY = 30.0    # seconds between export-schedule checks
 RETRY_DELAY = timedelta(minutes=10)
+CLOUD_DEFAULT_TIME = "04:00"     # МСК, when only the cloud is configured
 
 
 def now_msk() -> datetime:
     return datetime.now(MSK)
 
 
+# Telegram refuses documents over 50 MB; a little under, for the multipart
+# overhead.
+TG_MAX_BYTES = 49 * 1024 * 1024
+LOCAL_PACKED_KEEP = 5
+
+
 def export_db(config: AppConfig, reason: str = "manual") -> bool:
-    """Snapshot the DB and send it to Telegram as a document. Standalone so both
-    the collector's scheduler and the web "Export now" button can call it."""
+    """Snapshot the DB, pack it, and send it wherever backups go: the cloud
+    (CSFLOAT_CLOUD_REMOTE, see src/cloud.py) and Telegram, if it fits.
+
+    The raw database went to Telegram until it passed 50 MB, and from then on
+    every export failed with 413 and nothing was backed up anywhere. Packed it
+    is several times smaller; the cloud takes it whatever its size.
+    Standalone so both the scheduler and the web "Export now" button call it.
+    Returns True when at least one destination took the copy.
+    """
+    from . import cloud
+
     tg = TelegramClient(config.telegram)
-    if not tg.configured():
-        log.warning("Export requested (%s) but Telegram is not configured.", reason)
+    to_tg, to_cloud = tg.configured(), cloud.configured()
+    if not (to_tg or to_cloud):
+        log.warning("Export requested (%s) but neither Telegram nor the cloud "
+                    "is configured.", reason)
         return False
+    stamp = now_msk().strftime("%Y-%m-%d_%H-%M")
     try:
-        ts = now_msk().strftime("%Y%m%d-%H%M")
-        snap = config.backups_dir / f"export-{ts}.db"
+        snap = config.backups_dir / f"export-{stamp}.db"
         snapshot_db(config.db_path, snap)
+        packed = cloud.gzip_file(
+            snap, config.backups_dir / f"{cloud.PREFIX}{stamp}{cloud.SUFFIX}")
+        raw = snap.stat().st_size
+        snap.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001
         log.exception("Snapshot for export failed: %s", exc)
+        if to_tg:
+            tg.send_message(f"⚠️ Бэкап базы не сделан: {exc}")
         return False
-    caption = f"CSFloat tracker DB — {now_msk().strftime('%Y-%m-%d %H:%M МСК')} ({reason})"
-    ok = tg.send_document(snap, caption=caption)
+    size = packed.stat().st_size
+    done, trouble = [], []
+
+    if to_cloud:
+        ok, what = cloud.upload(packed)
+        if ok:
+            gone = cloud.prune()
+            done.append(f"облако ({what}" + (f", удалено старых: {gone}" if gone else "")
+                        + ")")
+        else:
+            trouble.append(f"облако: {what}")
+
+    if to_tg:
+        if size <= TG_MAX_BYTES:
+            caption = (f"CSFloat tracker DB — {now_msk().strftime('%Y-%m-%d %H:%M МСК')}"
+                       f" ({reason}), {cloud.human(size)} сжато")
+            if tg.send_document(packed, caption=caption):
+                done.append("Telegram")
+            else:
+                trouble.append("Telegram не принял файл")
+        else:
+            trouble.append(f"в Telegram не влезает: {cloud.human(size)} даже сжатой")
+        # The file itself says it arrived; the rest is said in words, so a
+        # backup that went only to the cloud - or nowhere - is not silent.
+        if trouble or "Telegram" not in done:
+            tg.send_message(
+                ("✅ Бэкап базы: " + ", ".join(done) if done else "⚠️ Бэкап базы НЕ сохранён")
+                + f" · {cloud.human(raw)} → {cloud.human(size)}"
+                + ("\n" + "\n".join(trouble) if trouble else ""))
+
+    _prune_packed(config.backups_dir)
     prune_backups(config.backups_dir)
-    log.info("DB export to Telegram %s (%s).", "succeeded" if ok else "FAILED", reason)
-    return ok
+    log.info("DB export (%s): %s%s", reason, ", ".join(done) or "nowhere",
+             (" — " + "; ".join(trouble)) if trouble else "")
+    return bool(done)
+
+
+def _prune_packed(backups_dir: Path, keep: int = LOCAL_PACKED_KEEP) -> None:
+    """The packed copies kept on the server itself: the last few."""
+    from . import cloud
+    try:
+        files = sorted(backups_dir.glob(f"{cloud.PREFIX}*{cloud.SUFFIX}"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[keep:]:
+            old.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("Local packed backup prune failed: %s", exc)
 
 
 class BackupService:
@@ -72,6 +138,7 @@ class BackupService:
         self.tg = TelegramClient(config.telegram)
         self._last_poll = 0.0
         self._last_sched = 0.0
+        self._export = None
 
     @property
     def db(self):
@@ -83,8 +150,15 @@ class BackupService:
         return export_db(self.config, reason)
 
     def _check_schedule(self) -> None:
+        from . import cloud
         enabled = (self.db.get_setting(S_ENABLED, "0") == "1")
         target = self.db.get_setting(S_TIME, "")
+        # The cloud is turned on by its line in .env; it needs no switch on
+        # the settings page as well, and backs up at four in the morning
+        # Moscow time unless a time is set there.
+        if cloud.configured():
+            enabled = True
+            target = target or CLOUD_DEFAULT_TIME
         if not enabled or not target:
             return
         try:
@@ -107,14 +181,25 @@ class BackupService:
         if not due:
             return
 
-        ok = self.export_now("scheduled")
-        if ok:
-            self.db.set_setting(S_LAST, today)
-            self.db.set_setting(S_RETRY, None)
-        else:
-            retry = (datetime.now(timezone.utc) + RETRY_DELAY).isoformat()
-            self.db.set_setting(S_RETRY, retry)
-            log.warning("Scheduled export failed; will retry after %s", retry)
+        # In the background: packing and uploading a large database takes a
+        # minute or two, and the loop it would hold up places and defends
+        # orders.
+        if self._export is not None and self._export.is_alive():
+            return
+        import threading
+
+        def run() -> None:
+            ok = self.export_now("scheduled")
+            if ok:
+                self.db.set_setting(S_LAST, today)
+                self.db.set_setting(S_RETRY, None)
+            else:
+                retry = (datetime.now(timezone.utc) + RETRY_DELAY).isoformat()
+                self.db.set_setting(S_RETRY, retry)
+                log.warning("Scheduled export failed; will retry after %s", retry)
+
+        self._export = threading.Thread(target=run, name="db-export", daemon=True)
+        self._export.start()
 
     # -- inbound restore via Telegram ---------------------------------------
 
@@ -231,9 +316,21 @@ class BackupService:
             log.info("Received DB document '%s' from authorized chat; restoring.", fname)
             self.config.backups_dir.mkdir(parents=True, exist_ok=True)
             tmp = self.config.backups_dir / f"incoming-{now_msk().strftime('%Y%m%d-%H%M%S')}.db"
-            if not self.tg.download_file(doc["file_id"], tmp):
+            got = tmp.with_suffix(".db.gz") if fname.endswith(".gz") else tmp
+            if not self.tg.download_file(doc["file_id"], got):
                 self.tg.send_message("Не удалось скачать файл из Telegram.")
                 continue
+            if got != tmp:
+                # The exports go out packed now; one sent back to restore from
+                # is unpacked first.
+                from . import cloud
+                try:
+                    cloud.gunzip_file(got, tmp)
+                except OSError as exc:
+                    self.tg.send_message(f"Не удалось распаковать «{fname}»: {exc}")
+                    continue
+                finally:
+                    got.unlink(missing_ok=True)
             try:
                 self._do_restore(tmp)
                 when = now_msk().strftime("%Y-%m-%d %H:%M МСК")
@@ -250,10 +347,12 @@ class BackupService:
     # -- called from the collector loop -------------------------------------
 
     def tick(self) -> None:
-        if not self.tg.configured():
+        from . import cloud
+        tg_on = self.tg.configured()
+        if not (tg_on or cloud.configured()):
             return
         mono = time.monotonic()
-        if mono - self._last_poll >= POLL_EVERY:
+        if tg_on and mono - self._last_poll >= POLL_EVERY:
             self._last_poll = mono
             try:
                 self._poll_telegram()
