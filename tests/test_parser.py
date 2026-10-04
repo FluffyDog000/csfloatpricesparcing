@@ -2145,3 +2145,39 @@ def test_a_rotating_proxy_is_refused_for_the_main_key():
                json={"main_proxies": "http://u:p@a:1\nhttp://u:p@b:2"})
     assert r.get_json()["count"] == 2
     assert c.get("/api/load").get_json()["main_proxies_text"].count("\n") == 1
+
+
+
+def test_a_minute_limit_on_placing_is_waited_out_not_reported():
+    """66 orders, a per-minute window on placing them: one went out and the
+    other 65 were refused with "resets in 59 s" without being sent."""
+    import logging, time as _time
+    logging.disable(logging.WARNING)
+    from src import csfloat_client as cc
+    from src.config import load_config
+
+    cfg = load_config()
+    client = cc.CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["http://u:p@a:1", "http://u:p@b:2"], use_direct=False)
+    client._respect_spacing = lambda: None
+    sent = []
+
+    def request(method, url, **kw):
+        sent.append(_time.monotonic())
+        left = 1 if len(sent) % 2 else 0
+        return _StubResp(200, "{}", {"Content-Type": "application/json",
+                                     "x-ratelimit-limit": "2",
+                                     "x-ratelimit-remaining": str(left),
+                                     "x-ratelimit-reset": str(_time.time() + 0.3)})
+
+    client.session.request = request
+    slept = []
+    real_sleep = _time.sleep
+    cc.time.sleep = lambda s: (slept.append(s), real_sleep(min(s, 0.4)))
+    try:
+        for _ in range(4):
+            client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
+    finally:
+        cc.time.sleep = real_sleep
+    assert len(sent) == 4, "every order went out"
+    assert slept, "after waiting for the window, not instead of it"

@@ -55,6 +55,12 @@ KIND_LABELS = {"listings": "листинги (200/час на ключ)",
 # locked for most of a day.
 MAIN_KEY_ROUTES = 3
 
+# A main-key limit that resets within this long is waited out rather than
+# reported. Placing orders runs on a window of a minute: refusing the rest of
+# a plan the moment it filled turned 66 orders into one placed and 65
+# "limit, resets in 59 s".
+MAIN_KEY_WAIT_MAX = 180.0
+
 # The longest a main-key refusal holds that kind of request back, whatever the
 # header says.
 MAIN_KEY_HOLD_MAX = 24 * 3600.0
@@ -544,6 +550,12 @@ class CSFloatClient:
         """
         if self.keyring is None or account:
             held = self.main_key_wait(kind)
+            deadline = time.monotonic() + MAIN_KEY_WAIT_MAX
+            while 0 < held and time.monotonic() + held <= deadline:
+                log.info("Main key: %s limit, waiting %.0f s for the reset",
+                         KIND_LABELS.get(kind, kind), held)
+                time.sleep(held + 0.5)
+                held = self.main_key_wait(kind)
             if held > 0:
                 minutes = held / 60.0
                 raise NoRouteAvailable(
