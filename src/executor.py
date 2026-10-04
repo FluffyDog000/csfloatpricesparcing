@@ -57,9 +57,19 @@ KEEP = "keep"
 # balance, on the reasoning that they will not all fill at once. The allowance
 # is real, but it is not money: an order whose turn comes while the balance is
 # short is removed, not queued. So what the plan spends is the money the fills
-# keep busy, against the balance (`tied_up`); the allowance is shown, and
-# never binds before it.
+# keep busy, against the balance (`tied_up`), and the face value of the orders
+# against the allowance.
 LEVERAGE = 10.0
+
+# How sure the plan wants to be that the fills never need more than the
+# budget. Fills arrive at random, so the money they keep busy is a sum of
+# random amounts: its mean is what `tied_up` adds up, and the plan also keeps
+# this many standard deviations of room above it (Limits.surge_z): one is
+# about 84% of days, two about 98%, none plans on the average alone. Past it
+# nothing is lost - CSFloat drops the order that cannot be paid - and the
+# guard (`guard_share`) still takes everything down on a day that fills far
+# more than the model expected.
+BUDGET_Z = 1.0
 MAX_ORDERS_CSFLOAT = 1000
 
 # How far down from a band's estimated return to rank it. One standard error
@@ -88,6 +98,8 @@ class Limits:
     # The brake: fills worth more than this share of the balance within a day
     # take every order down and disarm. See `guard`. 0 turns it off.
     guard_share: float = 0.3
+    # Room kept above the average money in use, in standard deviations.
+    surge_z: float = BUDGET_Z
 
     @property
     def allowance(self) -> float:
@@ -168,29 +180,45 @@ def rank(band: Band) -> float:
     return band.margin / (LOCK_DAYS + (band.t_sell or 0.0))
 
 
-def tied_up(band: Band, extra_lam: float = 0.0) -> float:
-    """Money a band keeps busy, on average, while it runs.
+def held_count(band: Band, extra_lam: float = 0.0) -> float:
+    """How many of this band's purchases are ours at once, on average.
 
-    Little's law: it buys `lam` a day, each for `bid`, and each purchase is
-    money until it is sold - the lock, then the days on sale. Never less than
-    one bid, because a single fill has to be paid for in full whenever it
-    comes.
+    Little's law: it buys `lam` a day, and each purchase stays ours for the
+    lock and then the days on sale. Infinite when the lot band cannot sell
+    what we would buy into it; one when the fill rate was never measured,
+    which is the cautious reading of "we do not know".
 
     `extra_lam` is what other bands of ours already buy into the same lot
     band; they stand in the same queue, so the wait is worked out again with
-    them in it, and a band that could not sell the sum costs more than any
-    budget.
+    them in it.
     """
     if band.bid is None:
         return float("inf")
-    lam = band.lam or 0.0
+    if band.lam is None:
+        return 1.0
+    lam = band.lam
     t = band.t_sell or 0.0
     if extra_lam and band.sell_rate:
         spare = band.sell_rate - lam - extra_lam
         if spare <= 1e-12:
             return float("inf")
         t = (band.own_queue + 1) / spare
-    return band.bid * max(1.0, lam * (LOCK_DAYS + t))
+    return lam * (LOCK_DAYS + t)
+
+
+def tied_up(band: Band, extra_lam: float = 0.0) -> float:
+    """Money a band keeps busy, on average, while it runs: the bid times how
+    many of its purchases are ours at once.
+
+    An average, and it can be well under one bid: a band that fills once a
+    month holds its money a fraction of the time. That was floored at one
+    bid, so the face value of the orders could never pass the balance - which
+    left nine tenths of what CSFloat allows unused, on orders that almost
+    never all fill together. What a single fill costs in full is the
+    variance's job (`select_portfolio`), not the mean's.
+    """
+    n = held_count(band, extra_lam)
+    return float("inf") if n == float("inf") else band.bid * n
 
 
 def _lot_key(item: str, band: Band) -> tuple | None:
@@ -227,11 +255,14 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     and the replacement may not fill at all. Churn is a real expense, and
     "slightly better on paper" does not cover it.
 
-    What is spent is the money the fills keep busy (`tied_up`), against the
-    budget and the per-item cap, because that is what runs out. The face
-    value of the orders is not counted: CSFloat allows ten times the balance
-    of it, every band keeps at least its own bid busy, and the budget is never
-    more than the balance - so the face value is always the slack one.
+    What is spent is the money the fills keep busy, against the budget,
+    because that is what runs out. Fills are random, so the plan holds the
+    mean of it (`tied_up`) plus `surge_z` standard deviations under the
+    budget: each band's purchases are a Poisson count of its bid, mean and
+    variance both `held_count`. A rare, expensive band adds little to the
+    mean and a lot to the spread, which is the right way round. The face
+    value of the orders is held under CSFloat's allowance (ten times the
+    balance), and no single bid may exceed the budget.
 
     Bands of one item selling into the same lot band share its buyers, so
     each one taken lengthens the wait of the next, and one the band cannot
@@ -246,10 +277,23 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     flow: dict[tuple, float] = {}
     budget = limits.budget
     item_cap = limits.per_item_capital or budget
+    allowance = limits.allowance
+    # `spent` is the mean of the money in use; these are its variance and the
+    # face value of the orders, for the two other checks.
+    var = 0.0
+    face = 0.0
+
+    def count(item: str, band: Band) -> float:
+        key = _lot_key(item, band)
+        return held_count(band, flow.get(key, 0.0) if key else 0.0)
 
     def cost(item: str, band: Band) -> float:
-        key = _lot_key(item, band)
-        return tied_up(band, flow.get(key, 0.0) if key else 0.0)
+        n = count(item, band)
+        return float("inf") if n == float("inf") else band.bid * n
+
+    def peak(extra_mean: float = 0.0, extra_var: float = 0.0) -> float:
+        """The money in use on a bad day: mean plus BUDGET_Z deviations."""
+        return spent + extra_mean + limits.surge_z * (var + extra_var) ** 0.5
 
     def why_not(item: str, band: Band) -> str:
         """Empty when the band fits; otherwise the first limit it hits."""
@@ -259,13 +303,20 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
             return f"лимит ордеров ({limits.max_orders})"
         if len(chosen.get(item, ())) >= limits.max_orders_per_item:
             return f"не больше {limits.max_orders_per_item} на предмет"
-        need = cost(item, band)
-        if need == float("inf"):
+        n = count(item, band)
+        if n == float("inf"):
             return "полоса не продаст столько вместе с другими ступенями"
-        if spent + need > budget + 1e-9:
-            return ("бюджет не задан" if budget <= 0
-                    else f"не хватает бюджета: нужно ${need:.0f}, "
-                         f"осталось ${max(budget - spent, 0):.0f}")
+        if budget <= 0:
+            return "бюджет не задан"
+        if band.bid > budget + 1e-9:
+            return f"одна покупка (${band.bid:.0f}) дороже бюджета"
+        if face + band.bid > allowance + 1e-9:
+            return (f"лимит CSFloat: ордеров не больше чем на "
+                    f"${allowance:.0f} (10× баланса)")
+        need = band.bid * n
+        if peak(need, band.bid ** 2 * n) > budget + 1e-9:
+            return (f"не хватает бюджета: с запасом на всплеск занято "
+                    f"${peak():.0f} из ${budget:.0f}")
         if per_item_spent.get(item, 0.0) + need > item_cap + 1e-9:
             return "лимит денег на предмет"
         return ""
@@ -274,12 +325,15 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
         return not why_not(item, band)
 
     def take(item: str, band: Band, already: bool = False) -> None:
-        nonlocal spent, placed
-        need = cost(item, band)
-        outcome[id(band)] = {"taken": True, "reason": "", "cost": need,
-                             "held": already}
+        nonlocal spent, placed, var, face
+        n = count(item, band)
+        need = band.bid * n
         chosen.setdefault(item, []).append(band)
         spent += need
+        var += band.bid ** 2 * n
+        face += band.bid
+        outcome[id(band)] = {"taken": True, "reason": "", "cost": need,
+                             "held": already, "peak": peak(), "face": face}
         per_item_spent[item] = per_item_spent.get(item, 0.0) + need
         key = _lot_key(item, band)
         if key:

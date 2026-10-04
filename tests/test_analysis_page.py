@@ -305,14 +305,14 @@ def test_a_bot_with_no_budget_plans_nothing():
 def test_a_budget_turns_the_scored_bands_into_placements():
     c, name = _stocked()
     c.post("/api/analysis/params",
-           json={"an_total_capital": "1000", "an_max_per_item": "2"})
+           json={"an_total_capital": "2000", "an_max_per_item": "2"})
     plan = c.get("/api/analysis/plan").get_json()
 
     places = [a for a in plan["actions"] if a["kind"] == "place"]
     assert places, "a funded bot plans the bands that passed"
     assert len(places) <= 2, "the per-item cap is honoured"
     assert all(a["price"] <= a["ceiling"] for a in places)
-    assert sum(a["price"] for a in places) <= 1000.0
+    assert sum(a["price"] for a in places) <= 2000.0
 
 
 def test_limits_are_clamped_like_the_thresholds():
@@ -326,7 +326,7 @@ def test_limits_are_clamped_like_the_thresholds():
 
 def test_an_order_we_hold_is_reconciled_rather_than_duplicated():
     c, name = _stocked()
-    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
     plan = c.get("/api/analysis/plan").get_json()
     first = [a for a in plan["actions"] if a["kind"] == "place"][0]
 
@@ -394,7 +394,7 @@ def test_the_plan_says_how_the_capital_would_be_split():
     when that market moves. The plan has to show that, not just the total."""
     c, name = _stocked()
     c.post("/api/analysis/params",
-           json={"an_total_capital": "1000", "an_max_per_item": "3"})
+           json={"an_total_capital": "2000", "an_max_per_item": "3"})
     plan = c.get("/api/analysis/plan").get_json()
 
     assert plan["by_item"], "the split is reported, not only the sum"
@@ -410,7 +410,7 @@ def test_the_plan_says_how_the_capital_would_be_split():
 def test_the_binding_limit_is_visible_in_the_plan():
     c, _ = _stocked()
     c.post("/api/analysis/params",
-           json={"an_total_capital": "1000", "an_max_per_item": "1"})
+           json={"an_total_capital": "2000", "an_max_per_item": "1"})
     plan = c.get("/api/analysis/plan").get_json()
 
     places = [a for a in plan["actions"] if a["kind"] == "place"]
@@ -423,7 +423,7 @@ def test_applying_requires_arming_and_spends_it():
     """Arming is separate from configuring and from planning, and one arming
     applies one plan: the next one has to be approved on its own."""
     c, _ = _stocked()
-    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
     c.post("/api/analysis/placement",
            json=c.get("/api/analysis/placement").get_json()["suggested"])
 
@@ -445,7 +445,7 @@ def test_what_is_queued_is_what_was_shown():
     import json as _json
 
     c, _ = _stocked()
-    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
     c.post("/api/analysis/placement",
            json=c.get("/api/analysis/placement").get_json()["suggested"])
     shown = [a for a in c.get("/api/analysis/plan").get_json()["actions"]
@@ -464,7 +464,7 @@ def test_what_is_queued_is_what_was_shown():
 
 def test_arming_cannot_outlive_a_change_to_the_request():
     c, _ = _stocked()
-    c.post("/api/analysis/params", json={"an_total_capital": "1000"})
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
     suggested = c.get("/api/analysis/placement").get_json()["suggested"]
     c.post("/api/analysis/placement", json=suggested)
     c.post("/api/analysis/arm", json={"armed": True})

@@ -861,10 +861,18 @@ float, который принимает ордер. Ниже «ожид.» — 
     box.appendChild(head);
     const sum = document.createElement("p");
     sum.className = "muted";
+    const lastTaken = taken.length ? taken[taken.length - 1] : {};
+    const face = lastTaken.face || 0;
+    const peak = lastTaken.peak || 0;
     sum.innerHTML = `По рангу, лучшее сверху. В план входит <b>${taken.length}</b> из `
-      + `${queue.length}: держат <b>${money(used)}</b> из бюджета `
-      + `${money(limits && limits.budget)}, ожидаемо ~<b>${money(profit)}</b> в сутки. `
-      + "«Держит» — сколько денег ступень в среднем занимает: блокировка плюс продажа.";
+      + `${queue.length}: ордеров на <b>${money(face)}</b>`
+      + (limits && limits.allowance ? ` (CSFloat разрешает до ${money(limits.allowance)})` : "")
+      + `; исполнения держат в среднем <b>${money(used)}</b>, в неудачный день до `
+      + `<b>${money(peak)}</b> из бюджета ${money(limits && limits.budget)}; `
+      + `ожидаемо ~<b>${money(profit)}</b> в сутки. `
+      + "«Держит» — сколько денег ступень в среднем занимает: блокировка плюс "
+      + "продажа. Редкая ступень держит меньше своей ставки — поэтому ордеров "
+      + "может стоять больше, чем баланс.";
     box.appendChild(sum);
 
     const t = document.createElement("table");
@@ -941,6 +949,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("l-patience").value = l.patience_minutes;
     $("l-balance").value = l.balance;
     $("l-guard").value = Math.round((l.guard_share || 0) * 1000) / 10;
+    if ($("l-surge")) $("l-surge").value = l.surge_z ?? 1;
     const note = $("l-allowance");
     if (!note) return;
     if (!l.balance) {
@@ -1242,6 +1251,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       an_patience_min: $("l-patience").value,
       an_balance: $("l-balance").value,
       an_guard_share: (parseFloat($("l-guard").value) || 0) / 100,
+      an_surge_z: $("l-surge").value,
       scr_min_price: $("s-minprice").value,
       scr_max_price: $("s-maxprice").value,
       scr_min_flow: $("s-flow").value,

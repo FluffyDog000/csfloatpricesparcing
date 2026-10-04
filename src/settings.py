@@ -39,6 +39,7 @@ LIMIT_BOUNDS = {
     "patience_minutes": (0.0, 525_600.0),
     "balance": (0.0, 1_000_000.0),
     "guard_share": (0.0, 1.0),
+    "surge_z": (0.0, 3.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
@@ -48,6 +49,7 @@ LIMIT_KEYS = (
     ("an_patience_min", "patience_minutes", float),
     ("an_balance", "balance", float),
     ("an_guard_share", "guard_share", float),
+    ("an_surge_z", "surge_z", float),
 )
 
 # The free pass over sales history, before any request is spent. Wide by

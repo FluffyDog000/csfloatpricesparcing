@@ -26,14 +26,15 @@ def test_nothing_is_placed_without_a_budget():
 
 
 def test_one_item_cannot_crowd_out_the_rest():
-    # lam 0.1: under one fill per lock, so each band keeps one bid busy.
+    # lam 0.1: 0.7 of a purchase held at a time; with room for a bad day,
+    # the first costs ~$196, two ~$317, three ~$427.
     bands = [band(round(0.15 + i / 100, 4), round(0.16 + i / 100, 4),
                   100.0, 110.0, margin=1 - i / 10, lam=0.1) for i in range(6)]
     got = select(bands, Limits(total_capital=1000.0, max_orders_per_item=3))
     assert len(got) == 3, "the per-item cap binds before the money does"
     assert [b.float_min for b in got] == [0.15, 0.16, 0.17], "best first"
 
-    tight = select(bands, Limits(total_capital=250.0, max_orders_per_item=3))
+    tight = select(bands, Limits(total_capital=350.0, max_orders_per_item=3))
     assert len(tight) == 2, "and the money binds when it is the smaller cap"
 
 
@@ -175,10 +176,11 @@ def test_selection_spends_the_balance_not_the_asked_budget():
     bands = [Band(float_min=0.0 + i / 100, float_max=0.01 + i / 100,
                   bid=100.0, margin=1.0 - i / 100, take=True)
              for i in range(10)]
-    # Asked for $5000, the account holds $300.
-    got = select(bands, Limits(total_capital=5000.0, balance=300.0,
+    # Asked for $5000, the account holds $500. Fill rates unknown: each band
+    # is read as one purchase held, and three of them with room for a bad
+    # day come to ~$473, four to $600.
+    got = select(bands, Limits(total_capital=5000.0, balance=500.0,
                                max_orders=10, max_orders_per_item=10))
-    assert sum(b.bid for b in got) <= 300.0
     assert len(got) == 3
 
 
@@ -197,7 +199,7 @@ def test_the_budget_goes_to_the_best_bands_not_the_first_item_listed():
 
     poor = [_cand("A", 0.10 + i / 100, 100.0, 0.04) for i in range(3)]
     rich = [_cand("Z", 0.10 + i / 100, 100.0, 0.40) for i in range(3)]
-    limits = Limits(total_capital=300.0, max_orders=3, max_orders_per_item=3)
+    limits = Limits(total_capital=450.0, max_orders=3, max_orders_per_item=3)
 
     got = select_portfolio(poor + rich, limits)
     assert list(got) == ["Z"], "the better item wins whatever order it arrived in"
@@ -223,7 +225,7 @@ def test_a_standing_order_is_not_dropped_for_a_marginally_better_one():
 
     mine = _cand("A", 0.10, 100.0, 0.20)
     better = _cand("B", 0.10, 100.0, 0.22)
-    limits = Limits(total_capital=100.0, max_orders=1, max_orders_per_item=1)
+    limits = Limits(total_capital=200.0, max_orders=1, max_orders_per_item=1)
 
     without = select_portfolio([mine, better], limits)
     assert list(without) == ["B"], "with nothing held, the better one wins"
@@ -265,7 +267,7 @@ def test_the_rank_is_what_a_dollar_earns_not_how_often_it_turns():
 
 
 def test_a_fast_band_does_not_eat_the_money_of_better_ones():
-    """$60 in the account. The fast band would keep $145 busy on its own -
+    """$110 in the account. The fast band would keep $145 busy on its own -
     ranked first, it takes everything and fills only until the money runs
     out. Ranked by return per dollar, the two better ones fit and earn more."""
     from src.executor import select_portfolio, tied_up
@@ -275,10 +277,11 @@ def test_a_fast_band_does_not_eat_the_money_of_better_ones():
     slow_fat = ("C", _turn(0.15, 0.0625, 2.0))
     assert tied_up(fast_thin[1]) == 20.0 * 1.0 * 7.25
     assert tied_up(middle[1]) == 20.0 * 0.25 * 8.0
-    assert tied_up(slow_fat[1]) == 20.0, "never less than one bid"
+    assert tied_up(slow_fat[1]) == 20.0 * 0.0625 * 9.0, \
+        "a band that rarely fills holds its money a fraction of the time"
 
     got = select_portfolio([fast_thin, middle, slow_fat],
-                           Limits(total_capital=60.0, max_orders=10,
+                           Limits(total_capital=110.0, max_orders=10,
                                   max_orders_per_item=3))
     assert sorted(got) == ["B", "C"]
 
@@ -304,3 +307,60 @@ def test_a_band_with_no_measured_flow_ranks_at_nothing():
 
     assert rank(Band(float_min=0.15, float_max=0.17, bid=100.0,
                      margin=0.5, lam=0.0, take=True)) == 0.0
+
+
+# -- the face value may pass the balance ---------------------------------------
+
+def _slow(i, bid=20.0, lam=0.01, item=None):
+    return (item or f"I{i}", Band(float_min=0.10, float_max=0.12, bid=bid,
+                                  margin=0.2, lam=lam, t_sell=3.0, take=True))
+
+
+def test_orders_worth_more_than_the_balance_when_they_rarely_fill():
+    """$960 on the account. Forty $20 orders that each fill about once in a
+    hundred days hold ~$80 between them on an average day: placing $800 of
+    them is not a bet of $800. Floored at one bid each, the plan stopped at
+    the balance and left the allowance CSFloat gives unused."""
+    from src.executor import select_portfolio
+
+    cands = [_slow(i) for i in range(80)]
+    got = select_portfolio(cands, Limits(total_capital=960.0, balance=960.0,
+                                         max_orders=200, max_orders_per_item=3))
+    face = sum(b.bid for bands in got.values() for b in bands)
+    assert face > 960.0, face
+
+
+def test_the_face_value_stops_at_ten_times_the_balance():
+    from src.executor import select_portfolio
+
+    cands = [_slow(i, lam=0.0001) for i in range(80)]
+    trace = []
+    got = select_portfolio(cands, Limits(total_capital=100.0, balance=100.0,
+                                         max_orders=500, max_orders_per_item=3),
+                           trace=trace)
+    face = sum(b.bid for bands in got.values() for b in bands)
+    assert face <= 1000.0 and len(got) == 50
+    assert "10× баланса" in [t for t in trace if not t["taken"]][0]["reason"]
+
+
+def test_a_bid_dearer_than_the_budget_is_never_placed():
+    """However rarely it fills, one fill has to be paid for in full."""
+    from src.executor import select_portfolio
+
+    trace = []
+    got = select_portfolio([_slow(0, bid=500.0, lam=0.0001)],
+                           Limits(total_capital=400.0, max_orders=5),
+                           trace=trace)
+    assert got == {} and "дороже бюджета" in trace[0]["reason"]
+
+
+def test_a_rare_dear_band_pays_for_its_spread_not_only_its_mean():
+    """Mean $34 each, but one fill is $300: three of them are far likelier
+    to need $600 on some day than three cheap bands with the same mean."""
+    from src.executor import select_portfolio
+
+    dear = [_slow(i, bid=300.0, lam=0.0113) for i in range(3)]
+    cheap = [_slow(i + 10, bid=30.0, lam=0.113) for i in range(3)]
+    limits = Limits(total_capital=250.0, max_orders=10, max_orders_per_item=3)
+    assert len(select_portfolio(cheap, limits)) == 3
+    assert len(select_portfolio(dear, limits)) < 3

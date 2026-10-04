@@ -1277,6 +1277,10 @@ def _placement_queue(trace: list) -> list[dict]:
             "profit_day": round(profit, 2) if profit is not None else None,
             "taken": row["taken"], "held": row["held"],
             "reason": row["reason"],
+            # Running, for the taken: the money in use on a bad day, and the
+            # face value of the orders - what CSFloat's 10× rule counts.
+            "peak": round(row["peak"], 2) if row.get("peak") is not None else None,
+            "face": round(row["face"], 2) if row.get("face") is not None else None,
         })
     return out
 

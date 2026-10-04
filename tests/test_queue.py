@@ -21,7 +21,7 @@ def test_the_trace_is_in_rank_order_and_says_why_the_rest_did_not_fit():
     cands = [("A", band(0.10, 100.0, 0.10)), ("B", band(0.10, 100.0, 0.30)),
              ("B", band(0.12, 100.0, 0.20)), ("C", band(0.10, 100.0, 0.05))]
     trace = []
-    got = select_portfolio(cands, Limits(total_capital=250.0, max_orders=10,
+    got = select_portfolio(cands, Limits(total_capital=350.0, max_orders=10,
                                          max_orders_per_item=1), trace=trace)
     assert [(t["item"], t["band"].margin) for t in trace] == \
         [("B", 0.30), ("B", 0.20), ("A", 0.10), ("C", 0.05)]
