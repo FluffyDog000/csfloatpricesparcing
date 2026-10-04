@@ -59,7 +59,14 @@ def make_backup(db_path: Path, backups_dir: Path, label: str = "backup") -> Path
     return snapshot_db(db_path, dest)
 
 
-def prune_backups(backups_dir: Path, keep: int = 20) -> None:
+# Whole, unpacked copies of the database on the server's own disk. Twenty of
+# them at 185 MB came to 3.4 GB of a 19 GB disk, and grew with the database;
+# the daily copies go to the cloud packed, so a few here are enough to undo a
+# restore.
+LOCAL_RAW_KEEP = 3
+
+
+def prune_backups(backups_dir: Path, keep: int = LOCAL_RAW_KEEP) -> None:
     try:
         files = sorted(
             backups_dir.glob("*.db"), key=lambda p: p.stat().st_mtime, reverse=True
