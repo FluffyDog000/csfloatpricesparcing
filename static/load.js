@@ -375,6 +375,12 @@ function renderKeyRing(d) {
   const n = (d.key_proxies_text || "").split("\n").filter((s) => s.trim()).length;
   parts.push(n ? `своих адресов: ${n}` + (d.keys ? ` (~${(d.keys * 3 / n).toFixed(1)} ключа на адрес)` : "")
                : "своих адресов нет — ключи ходят через общий список");
+  (d.main_key_state || []).forEach((m) => {
+    if (m.remaining == null && !m.wait_sec) return;
+    parts.push(`главный ключ, ${m.label}: `
+      + (m.remaining != null ? `${m.remaining}/${m.limit ?? "?"}` : "")
+      + (m.wait_sec > 0 ? ` — лимит, сброс через ${fmtLeft(m.wait_sec)}` : ""));
+  });
   info.textContent = parts.join(" · ");
   const box = document.getElementById("key-proxies-text");
   if (box && !keyProxiesDirty && document.activeElement !== box) {

@@ -714,6 +714,10 @@ def _why_waiting(db) -> list[str]:
     left = _cooldown_left(db)
     if left > 0:
         reasons.append(f"пауза после 429, осталось {left / 60:.0f} мин")
+    for row in _json_setting(db, "main_key_state") or []:
+        if (row.get("wait_sec") or 0) > 0:
+            reasons.append(f"главный ключ: лимит CSFloat на {row.get('label')}, "
+                           f"сброс через {row['wait_sec'] / 60:.0f} мин")
     _, remaining, reset = _quota_numbers(db)
     if remaining is not None and remaining <= 0:
         if reset:
@@ -2169,6 +2173,7 @@ def _key_ring_info(db) -> dict:
     return {"keys": len(keys), "keys_file": bool(config.http.keys_file),
             "key_proxies_text": text, "key_routes": routes,
             "key_ring": ring,
+            "main_key_state": _json_setting(db, "main_key_state") or [],
             "main_key": bool(config.http.api_key)}
 
 

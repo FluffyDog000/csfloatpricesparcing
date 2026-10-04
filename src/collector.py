@@ -1810,6 +1810,10 @@ class Collector:
         ring = getattr(self.client, "keyring", None)
         self.db.set_setting("key_ring_state",
                             json.dumps(ring.snapshot()) if ring is not None else "[]")
+        main = getattr(self.client, "main_key_snapshot", None)
+        if main is not None:
+            self.db.set_setting("main_key_state",
+                                json.dumps(main(), ensure_ascii=False))
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())
@@ -1939,6 +1943,12 @@ class Collector:
             consecutive = int(self.db.get_setting("cooldown_consecutive") or 0)
         except ValueError:
             consecutive = 0
+        # Never more than the longest backoff a sales poll arms. A pause of
+        # hours here came from the main key's limit written onto the
+        # addresses - which the polls never spend - and re-armed on every
+        # restart it would stop them all over again.
+        from .csfloat_client import COOLDOWN_MAX_SECONDS
+        remaining = min(remaining, COOLDOWN_MAX_SECONDS)
         self.client.restore_cooldown(remaining, consecutive)
         log.warning("Restored 429 cooldown from previous run: %.1f min left",
                     remaining / 60.0)

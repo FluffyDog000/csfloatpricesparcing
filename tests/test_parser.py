@@ -1290,27 +1290,52 @@ def test_a_rate_limit_stops_the_sweep_instead_of_deepening_it():
     db.close()
 
 
-def test_side_requests_arm_the_same_cooldown_as_a_poll():
-    """The limit is on the account and the IP, not on the endpoint: a 429 from
-    the rate or orders lookup has to back the collector off like any other."""
+def test_a_main_key_refusal_holds_back_that_kind_and_not_the_sales_polls():
+    """A request with a key is counted against the key. One refusal for
+    placing too many orders, written onto the addresses the key spoke from,
+    read as every address spent for seventeen hours and stopped the anonymous
+    sales polls with it."""
     import logging
+    import time as _time
     logging.disable(logging.WARNING)
     from src.config import load_config
-    from src.csfloat_client import CSFloatClient, RateLimited
+    from src.csfloat_client import CSFloatClient, NoRouteAvailable, RateLimited
 
     cfg = load_config()
     client = CSFloatClient(cfg.http, cfg.polling)
     client._respect_spacing = lambda: None
-    client.session.get = lambda url, **kw: _StubResp(
-        429, '{"error": "rate limited"}', {"Content-Type": "application/json"})
+    sent = []
+    reset = str(int(_time.time()) + 17 * 3600)
 
-    assert client.cooldown_remaining() == 0
+    def post(method, url, **kw):
+        sent.append(url)
+        return _StubResp(429, '{"error": "rate limited"}',
+                         {"Content-Type": "application/json",
+                          "x-ratelimit-limit": "100",
+                          "x-ratelimit-remaining": "0",
+                          "x-ratelimit-reset": reset})
+
+    client.session.request = post
     try:
-        client.fetch_json("https://csfloat.com/api/v1/anything")
+        client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
         assert False, "a 429 must be raised, not swallowed"
-    except RateLimited:
-        pass
-    assert client.cooldown_remaining() > 0, "the cooldown must be armed"
+    except RateLimited as exc:
+        assert "выставление" in str(exc)
+
+    # The next write is refused here, without spending a request on it.
+    try:
+        client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
+        assert False
+    except NoRouteAvailable as exc:
+        assert "главный ключ" in str(exc)
+    assert len(sent) == 1
+    assert client.main_key_wait("write") > 16 * 3600
+
+    # Reading the account and the sales polls go on.
+    assert client.main_key_wait("me") == 0
+    assert client.cooldown_remaining() == 0
+    assert all(r.available(client.pool.reserve, _time.monotonic())
+               for r in client.pool.routes.values())
 
 
 def test_a_stale_order_error_cannot_pass_for_a_fresh_one():

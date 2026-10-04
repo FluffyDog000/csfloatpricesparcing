@@ -18,7 +18,7 @@ import requests
 
 from .config import HttpConfig, PollingConfig
 from .db import utcnow_iso
-from .keyring import kind_of, reset_epoch
+from .keyring import Quota, kind_of, reset_epoch
 from .proxies import ProxyPool
 
 log = logging.getLogger("csfloat.client")
@@ -45,7 +45,22 @@ KEY_COOLDOWN_DEFAULT = 60.0
 
 KIND_LABELS = {"listings": "листинги (200/час на ключ)",
                "book": "стакан ордеров (20/мин на ключ)",
+               "me": "чтение своего аккаунта",
+               "write": "выставление, правка и снятие ордеров",
                "other": "запросы"}
+
+# The longest a main-key refusal holds that kind of request back, whatever the
+# header says.
+MAIN_KEY_HOLD_MAX = 24 * 3600.0
+
+
+def account_kind(method: str, url: str) -> str:
+    """Which of the main key's counters a request is counted against."""
+    if method.upper() != "GET":
+        return "write"
+    if "/api/v1/me" in url.split("?", 1)[0]:
+        return "me"
+    return kind_of(url)
 
 
 class AuthError(Exception):
@@ -199,6 +214,12 @@ class CSFloatClient:
         # the keys share the main pool, as before. Kept apart, a sweep's burst
         # cannot spend the addresses the sales polls and our own orders use.
         self.key_pool: ProxyPool | None = None
+        # The main key's own counters, per kind of request. Its limits belong
+        # to the key: written onto the addresses it spoke from, one refusal
+        # for placing too many orders read as every address spent for
+        # seventeen hours - and stopped the anonymous sales polls with it.
+        self.main_quota: dict[str, Quota] = {}
+        self.main_cooldown: dict[str, float] = {}   # monotonic
         self._last_request_ts = 0.0
         self._lock = threading.Lock()
         # Global 429 cooldown shared by every item: when CSFloat rate-limits us
@@ -443,6 +464,24 @@ class CSFloatClient:
             "seen_at": time.time(),
         }
 
+    def main_key_wait(self, kind: str) -> float:
+        """Seconds until the main key may make this kind of request."""
+        q = self.main_quota.get(kind)
+        quota = q.wait(time.time()) if q else 0.0
+        cool = self.main_cooldown.get(kind, 0.0) - time.monotonic()
+        return max(quota, cool, 0.0)
+
+    def main_key_snapshot(self) -> list[dict]:
+        """The main key's counters, for the load page."""
+        out = []
+        for kind in sorted(set(self.main_quota) | set(self.main_cooldown)):
+            q = self.main_quota.get(kind) or Quota()
+            out.append({"kind": kind, "label": KIND_LABELS.get(kind, kind),
+                        "limit": q.limit, "remaining": q.remaining,
+                        "reset": q.reset,
+                        "wait_sec": round(self.main_key_wait(kind))})
+        return out
+
     def _lease(self, account: bool = False, kind: str = "other"):
         """Who speaks, from where, and after what wait.
 
@@ -452,6 +491,13 @@ class CSFloatClient:
         clock paces, and the credential is the one `.env` configured.
         """
         if self.keyring is None or account:
+            held = self.main_key_wait(kind)
+            if held > 0:
+                minutes = held / 60.0
+                raise NoRouteAvailable(
+                    f"главный ключ (.env): лимит CSFloat на "
+                    f"{KIND_LABELS.get(kind, kind)}, сброс через "
+                    + (f"{minutes:.0f} мин" if minutes >= 1 else f"{held:.0f} с"))
             route = self.pool.pick()
             if route is None:
                 wait = self.pool.wait_seconds()
@@ -514,7 +560,8 @@ class CSFloatClient:
         """
         if self.keyring is not None and not account:
             return self._fetch_on_ring(url, headers)
-        route, key = self._lease(account)
+        kind = account_kind("GET", url)
+        route, key = self._lease(account, kind)
         headers = (self._account_headers(headers) if account
                    else self._with_key(headers, key))
         try:
@@ -525,7 +572,7 @@ class CSFloatClient:
             # dropping connections leaves rotation instead of failing forever.
             self.pool.record_failure(route, exc)
             raise
-        return self._read(resp, route, url, key)
+        return self._read(resp, route, url, key, kind)
 
     def _fetch_on_ring(self, url: str, headers=None) -> object:
         """A read on one of the analysis keys, moving on to the next key when
@@ -575,7 +622,8 @@ class CSFloatClient:
         attached this used to take whichever ring key was free, and an order
         goes to the account of the key that placed it.
         """
-        route, key = self._lease(account=True)
+        kind = account_kind(method, url)
+        route, key = self._lease(account=True, kind=kind)
         headers = self._account_headers(headers)
         try:
             resp = self.session.request(
@@ -584,7 +632,7 @@ class CSFloatClient:
         except requests.RequestException as exc:
             self.pool.record_failure(route, exc)
             raise
-        return self._read(resp, route, url, key)
+        return self._read(resp, route, url, key, kind)
 
     def _account_headers(self, headers):
         """The main account's credentials: CSFLOAT_API_KEY from .env, when it
@@ -620,6 +668,43 @@ class CSFloatClient:
                                 h.get("x-ratelimit-remaining"),
                                 h.get("x-ratelimit-reset"))
 
+    def _feed_main(self, kind: str, resp) -> None:
+        h = resp.headers or {}
+
+        def num(name):
+            try:
+                return int(float(h.get(name))) if h.get(name) is not None else None
+            except (TypeError, ValueError):
+                return None
+        limit, remaining = num("x-ratelimit-limit"), num("x-ratelimit-remaining")
+        if limit is None and remaining is None:
+            return
+        q = self.main_quota.setdefault(kind, Quota())
+        if limit is not None:
+            q.limit = limit
+        if remaining is not None:
+            q.remaining = remaining
+        when = reset_epoch(h.get("x-ratelimit-reset"))
+        if when is not None:
+            q.reset = when
+
+    def _main_cooldown(self, kind: str, resp, retry_after) -> float:
+        """Hold the main key back from this kind of request, and only this
+        kind: a limit on placing orders says nothing about reading the
+        account, and nothing at all about the anonymous sales polls."""
+        wait = retry_after or 0.0
+        when = reset_epoch((resp.headers or {}).get("x-ratelimit-reset"))
+        if when is not None:
+            wait = max(wait, when - time.time())
+        if wait <= 0:
+            wait = KEY_COOLDOWN_DEFAULT
+        wait = min(wait, MAIN_KEY_HOLD_MAX)
+        self.main_cooldown[kind] = max(self.main_cooldown.get(kind, 0.0),
+                                       time.monotonic() + wait)
+        log.warning("Main key refused for %s; held back %.0f min",
+                    KIND_LABELS.get(kind, kind), wait / 60.0)
+        return wait
+
     def _key_cooldown(self, key, kind: str, resp, retry_after) -> float:
         """Hold one key back from one kind of request until CSFloat's own
         reset for it - not the escalating guess, which would park a key whose
@@ -640,8 +725,9 @@ class CSFloatClient:
         if ring:
             self._feed_key(key, kind, resp)
         else:
-            self._capture_rate_headers(resp)
-            self._feed_pool(route, resp)
+            # Everything through here carries a credential - the main key or
+            # the session - so its counters are the key's, not the address's.
+            self._feed_main(kind, resp)
 
         if resp.status_code == 429:
             # A 429 counts the same whichever endpoint drew it: the limit is on
@@ -665,10 +751,10 @@ class CSFloatClient:
                 raise RateLimited(
                     f"ключ {key.tail}: лимит — {KIND_LABELS.get(kind, kind)}, "
                     f"ждёт {wait / 60:.1f} мин")
-            wait = self._enter_cooldown(retry_after, key)
-            self.pool.record_429(route, wait)
+            wait = self._main_cooldown(kind, resp, retry_after)
             raise RateLimited(
-                f"429 on a side request; polling paused for {wait / 60:.1f} min")
+                f"главный ключ (.env): лимит CSFloat на "
+                f"{KIND_LABELS.get(kind, kind)}, сброс через {wait / 60:.0f} мин")
 
         # Check who answered BEFORE raising: a 403 from Cloudflare means the
         # exit IP was screened and another route may well work, while
