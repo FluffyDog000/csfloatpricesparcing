@@ -274,7 +274,9 @@ def _attach_keyring(collector) -> None:
     if len(keys) < 2:
         return
     collector.sync_proxies()
-    ring = KeyRing(keys, collector.client.pool,
+    # The keys' own addresses when the load page lists some, the main pool
+    # otherwise - and sync_proxies moves the ring between them as that changes.
+    ring = KeyRing(keys, collector.key_pool_or_main(),
                    spacing=collector.config.polling.min_seconds_between_requests)
     collector.client.keyring = ring
     log.info("Key ring: %d key(s), %d route(s) each, %d sweep(s) at once",

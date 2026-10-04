@@ -174,6 +174,10 @@ class CSFloatClient:
         # single-key setup this has always been - the pool and the shared
         # clock below behave exactly as before.
         self.keyring = keyring
+        # Addresses for the analysis keys only, set on the load page. Empty:
+        # the keys share the main pool, as before. Kept apart, a sweep's burst
+        # cannot spend the addresses the sales polls and our own orders use.
+        self.key_pool: ProxyPool | None = None
         self._last_request_ts = 0.0
         self._lock = threading.Lock()
         # Global 429 cooldown shared by every item: when CSFloat rate-limits us
@@ -418,14 +422,15 @@ class CSFloatClient:
             "seen_at": time.time(),
         }
 
-    def _lease(self):
+    def _lease(self, account: bool = False):
         """Who speaks, from where, and after what wait.
 
-        Returns (route, key, applied_headers). Without a ring this is the old
-        behaviour spelled out: the pool picks, the shared clock paces, and the
-        key is whatever `.env` configured.
+        Returns (route, key). Without a ring - or for a request about our own
+        account, which the ring must never carry - this is the old behaviour
+        spelled out: the main pool picks (honouring a pinned route), the shared
+        clock paces, and the credential is the one `.env` configured.
         """
-        if self.keyring is None:
+        if self.keyring is None or account:
             route = self.pool.pick()
             if route is None:
                 wait = self.pool.wait_seconds()
@@ -470,15 +475,21 @@ class CSFloatClient:
                 time.sleep(wait)
             self._last_request_ts = time.monotonic()
 
-    def fetch_json(self, url: str, headers: dict[str, str] | None = None) -> object:
+    def fetch_json(self, url: str, headers: dict[str, str] | None = None,
+                   account: bool = False) -> object:
         """One-off GET for a small side endpoint (currently the FX rate).
 
         Goes through the pool and the request spacing like any other call, and
         a 429 arms the same cooldown a sales poll would — the limit belongs to
         the account, not to the endpoint. It does not retry, though: nothing
-        here is worth delaying the sales polling for."""
-        route, key = self._lease()
-        headers = self._with_key(headers, key)
+        here is worth delaying the sales polling for.
+
+        `account` marks a read about OUR account - its own buy orders - which
+        has to go out on the main key, never one from the analysis ring.
+        """
+        route, key = self._lease(account)
+        headers = (self._account_headers(headers) if account
+                   else self._with_key(headers, key))
         try:
             resp = self.session.get(url, timeout=self.http.timeout_seconds,
                                     proxies=route.proxies(), headers=headers)
@@ -498,9 +509,14 @@ class CSFloatClient:
         Held to the same pool, spacing and limits as a read, because CSFloat
         counts them against the same account and the same address. Writes are
         never retried: a request that may already have placed an order is not
-        one to send twice on a guess."""
-        route, key = self._lease()
-        headers = self._with_key(headers, key)
+        one to send twice on a guess.
+
+        Always on the main account (see `_account_headers`). With a key ring
+        attached this used to take whichever ring key was free, and an order
+        goes to the account of the key that placed it.
+        """
+        route, key = self._lease(account=True)
+        headers = self._account_headers(headers)
         try:
             resp = self.session.request(
                 method.upper(), url, json=body, headers=headers,
@@ -511,6 +527,18 @@ class CSFloatClient:
                 self.keyring.note_failure(key.key)
             raise
         return self._read(resp, route, url, key)
+
+    def _account_headers(self, headers):
+        """The main account's credentials: CSFLOAT_API_KEY from .env, when it
+        is set, over whatever Authorization the session carries. The keys in
+        keys.txt are for reading the market; which account an order lands on
+        is decided here and nowhere else."""
+        key = getattr(self.http, "api_key", None)
+        if not key:
+            return headers
+        out = dict(headers or {})
+        out["Authorization"] = key
+        return out
 
     def _with_key(self, headers, key):
         """Send the leased key rather than the one `.env` happens to hold.

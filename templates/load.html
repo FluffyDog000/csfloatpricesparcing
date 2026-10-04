@@ -94,6 +94,28 @@
 </section>
 
 <section class="settings-block">
+  <h2>Прокси для ключей анализа</h2>
+  <p class="muted">Отдельные адреса для ключей из <code>keys.txt</code> — ими читаются
+     стаканы и листинги при обходе. Пусто — ключи ходят через общий список выше.
+     История продаж и всё, что касается твоего аккаунта (выставление, снятие,
+     сверка ордеров), идёт <b>только</b> через общий список и только с главным
+     ключом из <code>.env</code> (<code>CSFLOAT_API_KEY</code>). Каждый ключ
+     закрепляется за 3 адресами из этого списка.</p>
+  <div class="muted" id="keys-info"></div>
+  <textarea id="key-proxies-text" class="input bulk-input" rows="5"
+            placeholder="http://user:pass@host:8080"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button class="btn btn-primary" id="save-key-proxies">Сохранить прокси для ключей</button>
+  </div>
+  <div class="settings-msg" id="key-proxies-msg"></div>
+  <table class="stat" id="key-routes-table" hidden style="margin-top:10px">
+    <thead><tr><th>адрес</th><th class="num">осталось</th><th class="num">лимит</th>
+      <th>сброс</th><th>состояние</th></tr></thead>
+    <tbody id="key-routes-body"></tbody>
+  </table>
+</section>
+
+<section class="settings-block">
   <h2>Диагностика лимита</h2>
   <div class="muted" id="diag"></div>
 </section>

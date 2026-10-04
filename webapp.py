@@ -1885,6 +1885,7 @@ def api_load():
             "config_spacing": config.polling.min_seconds_between_requests,
             "routes": routes,
             "proxies_text": db.get_setting("proxies") or "",
+            **_key_ring_info(db),
             "use_direct": (db.get_setting("use_direct", "1") or "1") != "0",
             "rotating_daily_limit": int(db.get_setting("rotating_daily_limit")
                                         or ROTATING_DEFAULT_LIMIT),
@@ -1956,6 +1957,46 @@ def _usage_forecast(db, reqs_per_min: float, day_iso: str,
         "traffic_day_mb": round(bytes_day / 1_048_576, 1),
         "traffic_month_mb": round(bytes_day * 30 / 1_048_576, 1),
     }
+
+
+@app.route("/api/load/key_proxies", methods=["POST"])
+def api_set_key_proxies():
+    """The analysis keys' own addresses (keys.txt). Empty puts them back on
+    the main pool. The collector applies the list within ~30 s."""
+    _require_admin()
+    from src.proxies import parse_proxy_list, validate_proxy
+
+    data = request.get_json(silent=True) or {}
+    urls, bad, seen = [], [], set()
+    for line in parse_proxy_list(str(data.get("key_proxies") or "")):
+        ok, why = validate_proxy(line)
+        if not ok:
+            bad.append(f"{line} — {why}")
+        elif line not in seen:
+            seen.add(line)
+            urls.append(line)
+    if bad:
+        abort(400, description="Некорректные строки:\n" + "\n".join(bad[:10]))
+    db = get_db()
+    db.set_setting("key_proxies", "\n".join(urls))
+    log.info("Key proxy list updated via web: %d address(es)", len(urls))
+    return jsonify({"ok": True, "count": len(urls)})
+
+
+def _key_ring_info(db) -> dict:
+    """What the load page says about the analysis keys: how many there are,
+    and where their addresses come from. The keys themselves never leave the
+    file."""
+    from src.keyring import read_keys
+    keys = read_keys(config.http.keys_file) if config.http.keys_file else []
+    try:
+        routes = json.loads(db.get_setting("key_proxy_state") or "[]")
+    except ValueError:
+        routes = []
+    text = db.get_setting("key_proxies") or ""
+    return {"keys": len(keys), "keys_file": bool(config.http.keys_file),
+            "key_proxies_text": text, "key_routes": routes,
+            "main_key": bool(config.http.api_key)}
 
 
 @app.route("/api/load/proxies", methods=["POST"])

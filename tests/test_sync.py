@@ -32,7 +32,7 @@ def _collector(list_path="/api/v1/buy-orders"):
 
 
 def _answers(col, payload):
-    col.client.fetch_json = lambda url, headers=None: payload
+    col.client.fetch_json = lambda url, headers=None, account=False: payload
 
 
 NAME = "★ Gloves | Fade (Field-Tested)"
@@ -163,7 +163,7 @@ def test_a_failed_request_never_empties_our_record():
     db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 160.0, state="live",
                         remote_id="r1")
 
-    def refuse(url, headers=None):
+    def refuse(url, headers=None, account=False):
         raise requests.HTTPError("HTTP 403")
 
     col.client.fetch_json = refuse
@@ -190,7 +190,7 @@ def test_the_listing_endpoint_is_looked_for_when_the_configured_one_refuses():
 
     asked = []
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         asked.append(url)
         if url.endswith("/api/v1/buy-orders"):
             raise requests.HTTPError("HTTP 405 для " + url)
@@ -222,7 +222,7 @@ def test_a_path_that_answers_with_nothing_is_not_taken_for_the_right_one():
     db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 160.0, state="live",
                         remote_id="r1")
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         if url.endswith("/api/v1/buy-orders"):
             raise requests.HTTPError("HTTP 405")
         return {"data": []}        # every candidate answers, none with orders
@@ -244,7 +244,7 @@ def test_the_unattended_pass_does_not_go_probing():
     col, db = _collector()
     asked = []
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         asked.append(url)
         raise requests.HTTPError("HTTP 405")
 
@@ -260,7 +260,7 @@ def test_a_configured_path_that_works_is_not_second_guessed():
     col, db = _collector(list_path="/api/v1/me/buy-orders")
     asked = []
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         asked.append(url)
         return []
 
@@ -294,7 +294,7 @@ def test_every_page_of_orders_is_read():
     }
     asked = []
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         asked.append(url)
         page = int(url.split("page=")[1].split("&")[0])
         return {"data": pages.get(page, [])}
@@ -316,7 +316,7 @@ def test_a_page_parameter_the_server_ignores_does_not_loop():
     db.add_item(NAME)
     asked = []
 
-    def answer(url, headers=None):
+    def answer(url, headers=None, account=False):
         asked.append(url)
         return {"data": [_site_order("r0"), _site_order("r1")]}
 

@@ -882,13 +882,15 @@ class Collector:
         from .placement import parse_order_list
 
         if "{page}" not in path:
-            return parse_order_list(self.client.fetch_json(base + path))
+            return parse_order_list(self.client.fetch_json(base + path,
+                                                           account=True))
 
         out: list[dict] = []
         seen: set[str] = set()
         for page in range(cap):
             rows = parse_order_list(
-                self.client.fetch_json(base + path.format(page=page)))
+                self.client.fetch_json(base + path.format(page=page),
+                                       account=True))
             fresh = [r for r in rows if r["remote_id"] not in seen]
             seen.update(r["remote_id"] for r in fresh)
             out.extend(fresh)
@@ -1494,6 +1496,14 @@ class Collector:
         when the pool changed (called periodically, so web edits apply live)."""
         raw = self.db.get_setting("proxies")
         if raw is None:
+            # The main list was never saved from the page; the keys' own may
+            # have been, and is applied all the same.
+            if self._sync_key_proxies():
+                ring = getattr(self.client, "keyring", None)
+                if ring is not None:
+                    ring.pool = self.key_pool_or_main()
+                    ring.bind()
+                return True
             return False
         urls = parse_proxy_list(raw)
         use_direct = (self.db.get_setting("use_direct", "1") or "1") != "0"
@@ -1501,6 +1511,7 @@ class Collector:
             use_direct = True          # never leave the pool empty
         changed = self.client.pool.replace(urls, use_direct=use_direct,
                                            rotating_limit=self.rotating_limit())
+        changed = self._sync_key_proxies() or changed
         if changed:
             # Keys are bound to addresses by name. Left bound to the old list,
             # a key whose three addresses were edited away was "ready" with
@@ -1509,6 +1520,7 @@ class Collector:
             # names, so this keeps whatever survived.
             ring = getattr(self.client, "keyring", None)
             if ring is not None:
+                ring.pool = self.key_pool_or_main()
                 ring.bind()
             self.restore_rotating_usage()
             # A quarantine in force has to cover routes added while it runs.
@@ -1517,6 +1529,30 @@ class Collector:
             # CSFloat had just complained about.
             self.restore_account_block()
         return changed
+
+    def _sync_key_proxies(self) -> bool:
+        """The analysis keys' own addresses, from the load page. Returns True
+        when they changed. No list: the keys use the main pool."""
+        from .proxies import ProxyPool
+
+        urls = parse_proxy_list(self.db.get_setting("key_proxies") or "")
+        pool = getattr(self.client, "key_pool", None)
+        if not urls:
+            if pool is None:
+                return False
+            self.client.key_pool = None
+            return True
+        if pool is None:
+            self.client.key_pool = ProxyPool(urls, use_direct=False,
+                                             rotating_limit=self.rotating_limit())
+            return True
+        return pool.replace(urls, use_direct=False,
+                            rotating_limit=self.rotating_limit())
+
+    def key_pool_or_main(self):
+        """Where the key ring's addresses come from right now."""
+        pool = getattr(self.client, "key_pool", None)
+        return pool if pool is not None and pool.routes else self.client.pool
 
     def apply_quarantine_clear(self) -> int:
         """Honour a "lift the quarantine" request made from the dashboard.
@@ -1582,6 +1618,9 @@ class Collector:
 
     def store_rate_state(self) -> None:
         """Persist the latest quota snapshot so the dashboard can show it."""
+        key_pool = getattr(self.client, "key_pool", None)
+        self.db.set_setting("key_proxy_state",
+                            key_pool.to_json() if key_pool is not None else "[]")
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())

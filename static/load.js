@@ -261,6 +261,7 @@ async function refresh() {
     document.getElementById("stats-body").innerHTML =
       statsRow("за час", d.stats_hour) + statsRow("за сутки", d.stats_day);
     renderRoutes(d.routes || []);
+    renderKeyRing(d);
     renderWarnings(d.gap_warnings);
     renderRecent(d.recent);
   } catch (e) {
@@ -328,14 +329,9 @@ document.getElementById("reset-pace-mult").addEventListener("click", async () =>
   }
 });
 
-// Per-route quota (only shown when proxies are configured).
-function renderRoutes(routes) {
-  const sec = document.getElementById("routes-section");
-  if (!sec) return;
-  // Show as soon as a proxy exists; a lone direct route has nothing to compare.
-  sec.hidden = routes.length < 2 && !routes.some((r) => !r.direct);
-  if (sec.hidden) return;
-  document.getElementById("routes-body").innerHTML = routes.map((r) => {
+// One row per route: quota left, reset, and whether it can be used now.
+function routeRows(routes) {
+  return routes.map((r) => {
     let state = "готов", cls = "";
     if (r.parked_sec > 0) { state = `недоступен ${fmtLeft(r.parked_sec)}`; cls = "hi-min"; }
     else if (r.cooldown_sec > 0) { state = `пауза ${fmtLeft(r.cooldown_sec)}`; cls = "hi-min"; }
@@ -351,6 +347,63 @@ function renderRoutes(routes) {
       <td>${reset}</td>
       <td class="${cls}">${state}</td></tr>`;
   }).join("");
+}
+
+// Per-route quota (only shown when proxies are configured).
+function renderRoutes(routes) {
+  const sec = document.getElementById("routes-section");
+  if (!sec) return;
+  // Show as soon as a proxy exists; a lone direct route has nothing to compare.
+  sec.hidden = routes.length < 2 && !routes.some((r) => !r.direct);
+  if (sec.hidden) return;
+  document.getElementById("routes-body").innerHTML = routeRows(routes);
+}
+
+// -- the analysis keys' own addresses ---------------------------------------
+
+let keyProxiesDirty = false;
+
+function renderKeyRing(d) {
+  const info = document.getElementById("keys-info");
+  if (!info) return;
+  const routes = d.key_routes || [];
+  const parts = [];
+  parts.push(d.main_key ? "главный ключ (.env): задан"
+                        : "главный ключ (.env): НЕ задан — ордера пойдут с cookie/токеном");
+  if (!d.keys_file) parts.push("CSFLOAT_KEYS_FILE не задан — ключей анализа нет");
+  else parts.push(`ключей в keys.txt: ${d.keys}`);
+  const n = (d.key_proxies_text || "").split("\n").filter((s) => s.trim()).length;
+  parts.push(n ? `своих адресов: ${n}` + (d.keys ? ` (~${(d.keys * 3 / n).toFixed(1)} ключа на адрес)` : "")
+               : "своих адресов нет — ключи ходят через общий список");
+  info.textContent = parts.join(" · ");
+  const box = document.getElementById("key-proxies-text");
+  if (box && !keyProxiesDirty && document.activeElement !== box) {
+    box.value = d.key_proxies_text || "";
+  }
+  const table = document.getElementById("key-routes-table");
+  table.hidden = !routes.length;
+  if (routes.length) document.getElementById("key-routes-body").innerHTML = routeRows(routes);
+}
+
+const keyProxiesBox = document.getElementById("key-proxies-text");
+if (keyProxiesBox) {
+  keyProxiesBox.addEventListener("input", () => { keyProxiesDirty = true; });
+  document.getElementById("save-key-proxies").addEventListener("click", async () => {
+    const msg = document.getElementById("key-proxies-msg");
+    try {
+      const r = await postJSON("/api/load/key_proxies",
+        { key_proxies: keyProxiesBox.value }, token());
+      keyProxiesDirty = false;
+      msg.className = "settings-msg";
+      msg.textContent = r.count
+        ? `Сохранено: ${r.count} адрес(ов) для ключей — сборщик подхватит за ~30 секунд.`
+        : "Список очищен — ключи будут ходить через общий список прокси.";
+      refresh();
+    } catch (e) {
+      msg.className = "settings-msg err";
+      msg.textContent = "Ошибка: " + e.message;
+    }
+  });
 }
 
 // -- proxy editor -----------------------------------------------------------
