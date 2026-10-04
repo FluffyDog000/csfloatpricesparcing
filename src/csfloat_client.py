@@ -61,6 +61,9 @@ MAIN_KEY_ROUTES = 3
 # "limit, resets in 59 s".
 MAIN_KEY_WAIT_MAX = 180.0
 
+# How many times one write is sent when CSFloat answers 429.
+WRITE_TRIES = 3
+
 # The longest a main-key refusal holds that kind of request back, whatever the
 # header says.
 MAIN_KEY_HOLD_MAX = 24 * 3600.0
@@ -552,8 +555,10 @@ class CSFloatClient:
             held = self.main_key_wait(kind)
             deadline = time.monotonic() + MAIN_KEY_WAIT_MAX
             while 0 < held and time.monotonic() + held <= deadline:
-                log.info("Main key: %s limit, waiting %.0f s for the reset",
-                         KIND_LABELS.get(kind, kind), held)
+                q = self.main_quota.get(kind)
+                log.info("Main key: %s limit (%s of %s left), waiting %.0f s "
+                         "for the reset", KIND_LABELS.get(kind, kind),
+                         q.remaining if q else "?", q.limit if q else "?", held)
                 time.sleep(held + 0.5)
                 held = self.main_key_wait(kind)
             if held > 0:
@@ -673,24 +678,39 @@ class CSFloatClient:
 
         Held to the same pool, spacing and limits as a read, because CSFloat
         counts them against the same account and the same address. Writes are
-        never retried: a request that may already have placed an order is not
-        one to send twice on a guess.
+        never retried on a guess: a request that may already have placed an
+        order is not one to send twice. The exception is a 429 - "too many,
+        slow down" means the request was not carried out - which is sent again
+        once the window it names has passed. CSFloat sends no counter with
+        order placement, only the refusal, so without this every refusal cost
+        an order: a plan of 66 lost one a minute while the bot waited.
 
         Always on the main account (see `_account_headers`). With a key ring
         attached this used to take whichever ring key was free, and an order
         goes to the account of the key that placed it.
         """
         kind = account_kind(method, url)
-        route, key = self._lease(account=True, kind=kind)
         headers = self._account_headers(headers)
-        try:
-            resp = self.session.request(
-                method.upper(), url, json=body, headers=headers,
-                timeout=self.http.timeout_seconds, proxies=route.proxies())
-        except requests.RequestException as exc:
-            self.pool.record_failure(route, exc)
-            raise
-        return self._read(resp, route, url, key, kind)
+        for attempt in range(WRITE_TRIES):
+            # Waits out a short window itself; a long one is raised from here.
+            route, key = self._lease(account=True, kind=kind)
+            try:
+                resp = self.session.request(
+                    method.upper(), url, json=body, headers=headers,
+                    timeout=self.http.timeout_seconds, proxies=route.proxies())
+            except requests.RequestException as exc:
+                self.pool.record_failure(route, exc)
+                raise
+            try:
+                return self._read(resp, route, url, key, kind)
+            except NoRouteAvailable:
+                raise
+            except RateLimited:
+                if resp.status_code != 429 or attempt + 1 >= WRITE_TRIES:
+                    raise
+                log.info("Write refused with 429; sending it again after the "
+                         "window (%d/%d)", attempt + 2, WRITE_TRIES)
+        raise RateLimited("unreachable")
 
     def _account_headers(self, headers):
         """The main account's credentials: CSFLOAT_API_KEY from .env, when it

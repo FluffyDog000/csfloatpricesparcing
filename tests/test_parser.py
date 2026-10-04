@@ -2181,3 +2181,35 @@ def test_a_minute_limit_on_placing_is_waited_out_not_reported():
         cc.time.sleep = real_sleep
     assert len(sent) == 4, "every order went out"
     assert slept, "after waiting for the window, not instead of it"
+
+
+
+def test_a_write_refused_with_429_is_sent_again_after_the_window():
+    """Placing orders comes back with a bare 429 and no counter. That order
+    was not placed; refusing it for good lost one order a minute."""
+    import logging, time as _time
+    logging.disable(logging.WARNING)
+    from src import csfloat_client as cc
+    from src.config import load_config
+
+    cfg = load_config()
+    client = cc.CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["http://u:p@a:1"], use_direct=False)
+    client._respect_spacing = lambda: None
+    answers = [_StubResp(429, '{"message":"slow down"}',
+                         {"Content-Type": "application/json", "Retry-After": "0.2"}),
+               _StubResp(200, '{"id":"o1"}', {"Content-Type": "application/json"})]
+    sent = []
+
+    def request(method, url, **kw):
+        sent.append(url)
+        return answers.pop(0)
+
+    client.session.request = request
+    real_sleep = _time.sleep
+    cc.time.sleep = lambda s: real_sleep(min(s, 0.3))
+    try:
+        out = client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
+    finally:
+        cc.time.sleep = real_sleep
+    assert len(sent) == 2 and out is not None

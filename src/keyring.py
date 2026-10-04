@@ -76,12 +76,15 @@ def kind_of(url: str) -> str:
 
 
 def reserve_for(limit: int | None) -> int:
-    """Requests to leave unspent: five percent, at least one.
+    """Requests to leave unspent: five percent, rounded down.
 
     A flat fifteen was sized for a daily 500 and stopped the order book - 20 a
-    minute - after its fifth request.
+    minute - after its fifth request. And "at least one" is a fifth of a
+    window of five: on a small per-minute limit for placing orders it left a
+    request unspent every minute for nothing. A window of under twenty is
+    spent to the last request; CSFloat's own refusal is the stop.
     """
-    return max(1, int(limit or 0) // 20)
+    return int(limit or 0) // 20
 
 
 @dataclass

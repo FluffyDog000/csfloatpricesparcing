@@ -108,6 +108,7 @@ def test_quota_is_counted_per_key_and_per_kind():
     from src.keyring import reserve_for
 
     assert reserve_for(20) == 1
+    assert reserve_for(10) == 0, "a small window is spent to the last"
     assert reserve_for(200) == 10
     client, ring = _client(keys=["first-key-abcdefghij", "second-key-klmnopqrst"],
                            spacing=0.0)
