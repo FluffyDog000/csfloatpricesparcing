@@ -417,3 +417,95 @@ def test_the_full_allowance_places_ten_times_the_budget():
     assert 9000.0 < face(full) <= 9600.0
     assert Limits(balance=960.0, total_capital=960.0,
                   full_allowance=True).as_dict()["order_cap"] == 9600.0
+
+
+# -- several items per order ------------------------------------------------------
+
+def test_an_order_asks_for_as_many_items_as_it_fills_over_its_life():
+    """Two fills a day over four days is eight - capped at three. Half a fill
+    a day is two. One a fortnight is one. One create out of CSFloat's 200 a
+    day then buys several items where they come fast."""
+    from src.executor import size_orders
+
+    fast, mid, slow = (Band(float_min=0.15, float_max=0.18, bid=30.0, lam=lam,
+                            take=True) for lam in (2.0, 0.5, 0.07))
+    size_orders([fast, mid, slow], Limits(max_quantity=3, order_days=4.0))
+    assert (fast.quantity, mid.quantity, slow.quantity) == (3, 2, 1)
+
+    size_orders([fast], Limits(max_quantity=1, order_days=4.0))
+    assert fast.quantity == 1, "one is one"
+
+
+def test_a_placement_carries_its_quantity_and_the_face_value_counts_it():
+    from src.executor import select_portfolio
+
+    b = Band(float_min=0.15, float_max=0.17, bid=100.0, ceiling=120.0,
+             margin=0.2, lam=0.001, take=True, quantity=3)
+    acts = reconcile("A", [b], [], [], Limits())
+    assert acts[0].kind == PLACE and acts[0].quantity == 3
+    got = select_portfolio([("A", b)], Limits(total_capital=200.0, balance=20.0,
+                                              max_orders=5))
+    assert got == {}, "three of $100 is $300 of face value against $200 allowed"
+
+
+# -- coming down when the rival below has left ---------------------------------
+
+def test_an_order_first_by_far_more_than_it_takes_comes_down():
+    """Ours at $100, the $99 bid gone, the best left at $90: every fill paid
+    ten dollars for a fight that was over."""
+    from src.executor import LOWER
+
+    book = [{"price": 90.0, "qty": 1, "float_min": 0.10, "float_max": 0.20}]
+    acts = reconcile("A", [band(0.15, 0.17, 95.0, 120.0)],
+                     [dict(row(0.15, 0.17, 100.0, 120.0), quantity=2)], book,
+                     Limits())
+    assert acts[0].kind == LOWER
+    assert 90.0 < acts[0].price < 91.0 and acts[0].was == 100.0
+    assert acts[0].quantity == 2, "the order's own quantity is kept"
+
+
+def test_a_few_cents_over_the_lead_is_left_alone():
+    book = [{"price": 99.8, "qty": 1, "float_min": 0.10, "float_max": 0.20}]
+    acts = reconcile("A", [band(0.15, 0.17, 100.0, 120.0)],
+                     [row(0.15, 0.17, 100.0, 120.0)], book, Limits())
+    assert [a.kind for a in acts] == [KEEP]
+
+
+def test_with_nobody_below_there_is_nothing_to_come_down_to():
+    acts = reconcile("A", [band(0.15, 0.17, 100.0, 120.0)],
+                     [row(0.15, 0.17, 100.0, 120.0)], [], Limits())
+    assert [a.kind for a in acts] == [KEEP]
+
+
+def test_a_rival_scoped_below_our_top_is_not_what_we_come_down_to():
+    """A $60 bid on 0.15-0.16 never takes the 0.17 we are handed."""
+    book = [{"price": 60.0, "qty": 1, "float_min": 0.15, "float_max": 0.16},
+            {"price": 97.0, "qty": 1, "float_min": 0.10, "float_max": 0.20}]
+    acts = reconcile("A", [band(0.15, 0.17, 100.0, 120.0)],
+                     [row(0.15, 0.17, 100.0, 120.0)], book, Limits())
+    assert acts[0].kind != "lower" or acts[0].price > 97.0
+
+
+
+def test_the_quantity_goes_out_on_create_and_stays_on_every_amend():
+    """An amend sending a default of one would shrink a three-item order."""
+    from src.executor import LOWER, RAISE, Action
+    from src.placement import SUGGESTED
+    from src.sender import Sender
+
+    sent = []
+
+    def send(method, url, body, headers=None):
+        sent.append(body)
+        return {"id": "o1", "price": int(body.get("max_price", 0)),
+                "qty": body.get("qty") or body.get("quantity")}
+
+    s = Sender("https://csfloat.com", SUGGESTED, send, dry_run=False)
+    s.perform(Action(PLACE, "A", 0.15, 0.17, 30.0, 40.0, "", quantity=3))
+    s.perform(Action(RAISE, "A", 0.15, 0.17, 31.0, 40.0, "", remote_id="o1",
+                     was=30.0, quantity=3))
+    s.perform(Action(LOWER, "A", 0.15, 0.17, 29.0, 40.0, "", remote_id="o1",
+                     was=31.0, quantity=3))
+    assert sent[0]["qty"] == 3
+    assert sent[1]["quantity"] == 3 and sent[2]["quantity"] == 3
+    assert sent[2]["max_price"] == 2900, "coming down is an amend like going up"

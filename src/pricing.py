@@ -172,6 +172,10 @@ class Band:
     take: bool = False
     reason: str = ""
 
+    # How many items one order asks for. One create out of the day's 200
+    # buys up to this many; set from the fill rate (executor.size_orders).
+    quantity: int = 1
+
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
 

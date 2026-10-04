@@ -396,3 +396,19 @@ def test_orders_written_off_by_a_half_read_list_come_back():
     assert [r["state"] for r in rows] == ["live"]
     assert out["counts"].get("adopted", 0) == 0
     db.close()
+
+
+def test_an_order_for_three_that_bought_one_is_still_standing():
+    """Called filled, the bot would stop tending it and open the band again."""
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 160.0, state="live",
+                        remote_id="r1", quantity=3)
+    order = _site_order("r1", bought=1)
+    order["qty"] = 3
+    _answers(col, [order])
+    out = col.sync_our_orders()
+    assert out["counts"].get("filled", 0) == 0
+    rows = db.our_orders()
+    assert len(rows) == 1 and rows[0]["quantity"] == 3
+    db.close()

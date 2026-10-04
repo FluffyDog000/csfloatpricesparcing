@@ -391,3 +391,27 @@ def test_a_plan_approved_during_the_defence_goes_out_during_it():
     col.defend_orders()
     assert applied, "the queued plan is looked at between the items"
     db.close()
+
+
+def test_the_defence_brings_an_order_down_when_the_rival_below_has_left():
+    """Ours at $175, the only bid left at $150: first at $150.x, so every
+    fill at $175 overpaid. Amended in place, like a raise."""
+    col, db = _collector()
+    rival = [{"price": 150.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=rival)
+    db.upsert_our_order(item_id, 0.35, 0.38, 175.0, 190.0, state="live",
+                        remote_id="r1", quantity=2)
+    _quiet_sweep(col)
+    sent = []
+    col.client.send_json = lambda m, u, b=None, h=None: sent.append((m, u, b)) or {}
+
+    out = col.defend_orders()
+    kinds = [r["action"]["kind"] for r in out["results"]]
+    assert kinds == ["lower"], kinds
+    assert sent and sent[0][0] == "PATCH" and sent[0][1].endswith("/r1")
+    assert sent[0][2]["quantity"] == 2
+    held = db.our_orders(item_id)[0]
+    assert 150.0 < held["price"] < 152.0 and held["quantity"] == 2
+    ev = [e for e in db.order_events() if e["kind"] == "lower"]
+    assert ev and ev[0]["was"] == 175.0
+    db.close()

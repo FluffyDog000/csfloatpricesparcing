@@ -142,6 +142,14 @@
         <input type="number" id="l-guard" class="input" step="5" min="0" max="100" value="30">
         <small class="muted">исполнилось больше — снять все ордера бота<br>
           и выключить выставление до ручного сброса. 0 — выключена</small></label>
+      <label>штук в ордере, не больше
+        <input type="number" id="l-maxqty" class="input" step="1" min="1" max="50" value="3">
+        <small class="muted">ликвидной ступени — несколько штук одним ордером:<br>
+          одно создание из 200 в сутки покупает до стольких</small></label>
+      <label>срок ордера для количества, дней
+        <input type="number" id="l-days" class="input" step="0.5" min="0.5" max="30" value="4">
+        <small class="muted">штук = налив × срок, округлено вниз:<br>
+          налив 0.5/сут × 4 дня = 2 штуки</small></label>
       <label>запас на всплеск исполнений
         <input type="number" id="l-surge" class="input" step="0.5" min="0" max="3" value="1">
         <small class="muted">0 — планировать по среднему, 1 — денег хватит<br>

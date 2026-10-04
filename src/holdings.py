@@ -86,9 +86,13 @@ def reconcile_holdings(ours: Sequence[dict], theirs: Sequence[dict],
             continue
         used.add(id(match))
 
-        if int(match.get("bought") or 0) > 0:
+        # Filled is all of it. An order for three that has bought one is still
+        # standing with two to go: calling it filled would stop the bot
+        # tending it, and the plan would open the same band a second time.
+        bought = int(match.get("bought") or 0)
+        if bought > 0 and bought >= int(match.get("qty") or 1):
             changes.append(Change(
-                FILLED, f"куплено {int(match['bought'])} шт.",
+                FILLED, f"куплено {bought} шт.",
                 ours=row, theirs=match))
             continue
 

@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .executor import CANCEL, KEEP, PLACE, RAISE, Action
+from .executor import CANCEL, KEEP, LOWER, PLACE, RAISE, Action
 from .placement import NotConfigured, Spec, endpoint, parse_order, render
 
 log = logging.getLogger("csfloat.sender")
@@ -65,7 +65,8 @@ class Sender:
         if not self.spec.can_place:
             return Result(action, False, "запрос создания не настроен")
         body = render(self.spec.create_body, name=name, price=action.price,
-                      float_min=action.float_min, float_max=action.float_max)
+                      float_min=action.float_min, float_max=action.float_max,
+                      quantity=action.quantity)
         url = self._url(self.spec.create_path)
         if self.dry_run:
             return Result(action, True,
@@ -90,8 +91,11 @@ class Sender:
             return Result(action, False, "запрос правки не настроен")
         if not action.remote_id:
             return Result(action, False, "нет id ордера на сайте — нечего править")
+        # The order's own quantity, not a default of one: an amend that sent
+        # 1 would shrink a three-item order to one item as it raised it.
         body = render(self.spec.update_body, name=name, price=action.price,
-                      float_min=action.float_min, float_max=action.float_max)
+                      float_min=action.float_min, float_max=action.float_max,
+                      quantity=action.quantity)
         url = self._url(self.spec.update_path, action.remote_id)
         if self.dry_run:
             return Result(action, True,
@@ -149,7 +153,7 @@ class Sender:
         try:
             if action.kind == PLACE:
                 return self.place(action, action.item)
-            if action.kind == RAISE:
+            if action.kind in (RAISE, LOWER):
                 return self.amend(action, action.item)
             if action.kind == CANCEL:
                 return self.cancel(action, action.item)

@@ -1176,13 +1176,19 @@ def api_analysis_plan():
         orders = strip_own(orders, mine)
         books[name] = orders
         mine_by_item[name] = mine
-        held[name] = sum(float(r["price"]) for r in mine)
+        held[name] = sum(float(r["price"]) * int(r.get("quantity") or 1)
+                         for r in mine)
         holding += [(name, float(r["float_min"]), float(r["float_max"]))
                     for r in mine]
         candidates += [(name, b) for b in cap_bids(_refuse_unread_book(
             db, item_id,
             plan_bands(sales, orders, wear_range(name), depth, params,
                        own=_locked_tops(db, item_id))), screen)]
+
+    # How many items each new order asks for, before the money is shared
+    # out: an order for three holds three bids of face value.
+    from src.executor import size_orders
+    size_orders([b for _, b in candidates], limits)
 
     trace: list = []
     wanted_by_item = select_portfolio(candidates, limits, holding, trace=trace)
@@ -1284,6 +1290,7 @@ def _placement_queue(trace: list) -> list[dict]:
             "n": n, "item": row["item"],
             "float_min": b.float_min, "float_max": b.float_max,
             "bid": b.bid, "ceiling": b.ceiling, "margin": b.margin,
+            "quantity": b.quantity,
             "margin_expected": b.margin_expected, "lam": b.lam,
             "t_sell": b.t_sell, "rank": rank_of(b),
             "tied_up": round(cost, 2) if finite else None,
@@ -1595,6 +1602,7 @@ def api_analysis_positions():
         rows.append({
             "id": row["id"], "item": name, "float_min": lo, "float_max": hi,
             "price": price, "ceiling": float(row["ceiling"]),
+            "quantity": int(row.get("quantity") or 1),
             "state": row["state"], "remote_id": row["remote_id"],
             "placed_at": row["placed_at"], "note": row["note"],
             "top": top, "ahead": ahead,

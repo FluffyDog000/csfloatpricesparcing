@@ -16,6 +16,7 @@
   const KIND = {
     place: ["поставлен", "act-place"],
     raise: ["поднят", "act-raise"],
+    lower: ["снижен", "act-keep"],
     cancel: ["снят", "act-cancel"],
     keep: ["оставлен", "act-keep"],
     fill: ["исполнен", "act-place"],
@@ -131,6 +132,7 @@
       ["ручных", d.manual || 0],
       ["поставлено", counts.place || 0],
       ["поднято", counts.raise || 0],
+      ["снижено", counts.lower || 0],
       ["снято", counts.cancel || 0],
       ["исполнено", counts.fill || 0],
       ["отказов", counts.fail || 0],
@@ -299,6 +301,7 @@
       const parts = [];
       if (counts.place) parts.push(`поставлен ${counts.place}`);
       if (counts.raise) parts.push(`поднят ×${counts.raise}`);
+      if (counts.lower) parts.push(`снижен ×${counts.lower}`);
       if (counts.cancel) parts.push(`снят ${counts.cancel}`);
       if (counts.fill) parts.push(`исполнен ${counts.fill}`);
       if (counts.fail) parts.push(`отказов ${counts.fail}`);
@@ -470,7 +473,7 @@
       };
       cell("предмет", r.item + (r.state === "manual" ? "  (вручную)" : ""));
       cell("float", Number(r.float_min).toFixed(4) + "–" + Number(r.float_max).toFixed(4), "mono");
-      cell("наша цена", cash(r.price));
+      cell("наша цена", cash(r.price) + ((r.quantity || 1) > 1 ? ` ×${r.quantity}` : ""));
       cell("потолок", cash(r.ceiling));
       cell("верх стакана", r.top ? cash(r.top) : "—");
       cell("положение", !r.book ? "стакан не читан"

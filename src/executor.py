@@ -49,8 +49,14 @@ def human_wait(days: float) -> str:
 
 PLACE = "place"
 RAISE = "raise"
+LOWER = "lower"
 CANCEL = "cancel"
 KEEP = "keep"
+
+# How far above the cheapest price that still leads we may stand before the
+# defence brings the order down: two grid steps. Closer than that, a rival
+# coming and going would have the price moved on every pass for cents.
+LOWER_STEPS = 2
 
 
 # CSFloat lets the outstanding value of your buy orders run to ten times your
@@ -100,6 +106,11 @@ class Limits:
     guard_share: float = 0.3
     # Room kept above the average money in use, in standard deviations.
     surge_z: float = BUDGET_Z
+    # Items per order: up to max_quantity, as many as the band is expected
+    # to fill over order_days. One create out of CSFloat's 200 a day then
+    # buys several items where they come fast.
+    max_quantity: int = 3
+    order_days: float = 4.0
     # Spend CSFloat's allowance rather than the money: orders up to ten times
     # the budget, ranked as usual, with no check on what their fills would
     # keep busy. More orders standing is more chances of a fill soon; the
@@ -168,9 +179,26 @@ class Action:
     # "the saved request was fixed" looking identical from the outside, and only
     # the second one is what travels.
     sent: dict[str, Any] | None = None
+    # Items the order asks for. Sent on create and kept on every amend.
+    quantity: int = 1
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
+
+
+def size_orders(bands: Iterable[Band], limits: Limits) -> None:
+    """How many items each band's order asks for.
+
+    As many as it is expected to fill over `order_days`, at least one and at
+    most `max_quantity`: a band filling twice a day gets three, one filling
+    once a fortnight gets one. Rounded down - a band that would fill 1.9
+    times is asked for one, not two.
+    """
+    cap = max(int(limits.max_quantity or 1), 1)
+    days = max(float(limits.order_days or 0.0), 0.0)
+    for band in bands:
+        expected = (band.lam or 0.0) * days
+        band.quantity = max(1, min(cap, int(expected)))
 
 
 def _key(row: Any) -> tuple[float, float]:
@@ -238,6 +266,17 @@ def tied_up(band: Band, extra_lam: float = 0.0) -> float:
     """
     n = held_count(band, extra_lam)
     return float("inf") if n == float("inf") else band.bid * n
+
+
+def lowest_lead(book: Iterable[dict], hi: float) -> float | None:
+    """The cheapest price that still leads every bid for the item at our top
+    float: one step over the best of them. None when nobody bids for it -
+    then there is nothing to measure a lower price against."""
+    from .ladder import price_step, rival_bid, snap_up
+    rival = rival_bid(list(book), hi)
+    if rival <= 0:
+        return None
+    return snap_up(rival + price_step(rival), price_step(rival))
 
 
 def ahead_of(book: Iterable[dict], lo: float, hi: float,
@@ -352,7 +391,7 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
             return "бюджет не задан"
         if band.bid > budget + 1e-9:
             return f"одна покупка (${band.bid:.0f}) дороже бюджета"
-        if face + band.bid > allowance + 1e-9:
+        if face + band.bid * band.quantity > allowance + 1e-9:
             return (f"лимит CSFloat: ордеров не больше чем на "
                     f"${allowance:.0f} (10× баланса)")
         need = band.bid * n
@@ -375,7 +414,7 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
         chosen.setdefault(item, []).append(band)
         spent += need
         var += band.bid ** 2 * n
-        face += band.bid
+        face += band.bid * band.quantity
         outcome[id(band)] = {"taken": True, "reason": "", "cost": need,
                              "held": already, "peak": peak(), "face": face}
         per_item_spent[item] = per_item_spent.get(item, 0.0) + need
@@ -451,11 +490,24 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
                 order_id=row.get("id"), remote_id=row.get("remote_id")))
             continue
 
+        qty = int(row.get("quantity") or 1)
         if not ahead:
+            # First - and maybe by more than it takes. A rival who stood just
+            # under us and left leaves us paying for a fight that is over: at
+            # $100 over a $90 book, every fill costs ten dollars it need not.
+            lead = lowest_lead(book, key[1])
+            if lead is not None and price - lead >= LOWER_STEPS * increment(lead) - 1e-9:
+                actions.append(Action(
+                    LOWER, item, key[0], key[1], lead, new_ceiling,
+                    f"первыми будем и за ${lead:.2f}: выше нас никого, "
+                    f"лучший соперник ниже — снижаем с ${price:.2f}",
+                    order_id=row.get("id"), remote_id=row.get("remote_id"),
+                    was=price, quantity=qty))
+                continue
             actions.append(Action(
                 KEEP, item, key[0], key[1], price, new_ceiling,
                 "мы первые в полосе", order_id=row.get("id"),
-                remote_id=row.get("remote_id")))
+                remote_id=row.get("remote_id"), quantity=qty))
             continue
 
         # Outbid. Patience first: the queue clears by itself, and only the
@@ -480,14 +532,14 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
                 CANCEL, item, key[0], key[1], price, new_ceiling,
                 f"перебили до ${top:.2f}, ответ ${answer:.2f} выше того, "
                 f"что позволяет маржа (${limit:.2f})", order_id=row.get("id"),
-                remote_id=row.get("remote_id")))
+                remote_id=row.get("remote_id"), quantity=qty))
             continue
 
         actions.append(Action(
             RAISE, item, key[0], key[1], answer, new_ceiling,
             f"ждать {human_wait(wait)} дольше терпения — перебиваем ${top:.2f}",
             order_id=row.get("id"), remote_id=row.get("remote_id"),
-            was=price))
+            was=price, quantity=qty))
 
     for key, band in by_band.items():
         if key in seen:
@@ -506,9 +558,12 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
             PLACE, item, key[0], key[1], band.bid, band.ceiling,
             f"маржа {(band.margin or 0) * 100:.1f}%{expected}, "
             f"налив {(band.lam or 0.0):.2f}/день, "
-            f"запас ${room:.2f} = {steps} перебив."))
+            f"запас ${room:.2f} = {steps} перебив."
+            + (f" Количество {band.quantity}: столько придёт примерно за "
+               f"срок ордера." if band.quantity > 1 else ""),
+            quantity=band.quantity))
 
-    order = {CANCEL: 0, RAISE: 1, PLACE: 2, KEEP: 3}
+    order = {CANCEL: 0, RAISE: 1, LOWER: 1, PLACE: 2, KEEP: 3}
     actions.sort(key=lambda a: (order[a.kind], a.float_min))
     return actions
 
@@ -519,9 +574,9 @@ def exposure(actions: Iterable[Action], existing_by_item: dict[str, float]
     out = dict(existing_by_item)
     for a in actions:
         if a.kind == PLACE:
-            out[a.item] = out.get(a.item, 0.0) + a.price
+            out[a.item] = out.get(a.item, 0.0) + a.price * a.quantity
         elif a.kind == CANCEL:
-            out[a.item] = out.get(a.item, 0.0) - a.price
-        elif a.kind == RAISE and a.was is not None:
-            out[a.item] = out.get(a.item, 0.0) + (a.price - a.was)
+            out[a.item] = out.get(a.item, 0.0) - a.price * a.quantity
+        elif a.kind in (RAISE, LOWER) and a.was is not None:
+            out[a.item] = out.get(a.item, 0.0) + (a.price - a.was) * a.quantity
     return out

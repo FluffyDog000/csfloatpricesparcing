@@ -562,6 +562,7 @@ float, который принимает ордер. Ниже «ожид.» — 
   const KIND = {
     place: ["поставить", "act-place"],
     raise: ["перебить", "act-raise"],
+    lower: ["снизить", "act-keep"],
     cancel: ["снять", "act-cancel"],
     keep: ["оставить", "act-keep"],
   };
@@ -629,16 +630,18 @@ float, который принимает ордер. Ниже «ожид.» — 
     let need = 0;
     let tied = 0;
     d.actions.forEach((a) => {
-      if (a.kind === "place") need += a.price;
+      if (a.kind === "place") need += a.price * (a.quantity || 1);
       if (a.kind === "place") tied += a.tied_up || 0;
-      if (a.kind === "raise" && a.was) need += a.price - a.was;
+      if ((a.kind === "raise" || a.kind === "lower") && a.was) {
+        need += (a.price - a.was) * (a.quantity || 1);
+      }
       const [label, cls] = KIND[a.kind] || [a.kind, ""];
       const tr = document.createElement("tr");
       tr.className = cls;
       tr.innerHTML = `<td><b>${label}</b></td>
         <td>${a.item}</td>
         <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
-        <td><b>${money(a.price)}</b>${
+        <td><b>${money(a.price)}</b>${(a.quantity || 1) > 1 ? ` <span class="muted">×${a.quantity}</span>` : ""}${
           a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
         <td>${money(a.ceiling)}</td>
         <td><b>${a.rank ? a.rank.toFixed(4) : "—"}</b></td>
@@ -782,7 +785,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       tr.innerHTML = `<td><b>${(KIND[a.kind] || [a.kind])[0]}</b></td>
         <td>${a.item}</td>
         <td>${a.float_min.toFixed(4)}–${a.float_max.toFixed(4)}</td>
-        <td><b>${money(a.price)}</b>${
+        <td><b>${money(a.price)}</b>${(a.quantity || 1) > 1 ? ` <span class="muted">×${a.quantity}</span>` : ""}${
           a.was ? ` <span class="muted">было ${money(a.was)}</span>` : ""}</td>
         <td class="muted"></td>`;
       // The last cell now carries whatever the server said, verbatim, plus the
@@ -908,7 +911,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       tr.innerHTML = `<td>${q.n}</td>
         <td>${esc(q.item)}</td>
         <td>${q.float_min.toFixed(2)}–${q.float_max.toFixed(2)}</td>
-        <td>${money(q.bid)}</td>
+        <td>${money(q.bid)}${q.quantity > 1 ? ` <span class="muted">×${q.quantity}</span>` : ""}</td>
         <td>${pct(m)}</td>
         <td>${q.lam === null || q.lam === undefined ? "—" : q.lam.toFixed(2)}</td>
         <td>${q.rank ? q.rank.toFixed(4) : "—"}</td>
@@ -959,6 +962,8 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("l-guard").value = Math.round((l.guard_share || 0) * 1000) / 10;
     if ($("l-surge")) $("l-surge").value = l.surge_z ?? 1;
     if ($("l-full")) $("l-full").checked = !!l.full_allowance;
+    if ($("l-maxqty")) $("l-maxqty").value = l.max_quantity ?? 3;
+    if ($("l-days")) $("l-days").value = l.order_days ?? 4;
     const note = $("l-allowance");
     if (!note) return;
     if (!l.balance) {
@@ -1262,6 +1267,8 @@ float, который принимает ордер. Ниже «ожид.» — 
       an_guard_share: (parseFloat($("l-guard").value) || 0) / 100,
       an_surge_z: $("l-surge").value,
       an_full_allowance: $("l-full").checked ? 1 : 0,
+      an_max_quantity: $("l-maxqty").value,
+      an_order_days: $("l-days").value,
       scr_min_price: $("s-minprice").value,
       scr_max_price: $("s-maxprice").value,
       scr_min_flow: $("s-flow").value,

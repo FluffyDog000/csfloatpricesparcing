@@ -255,6 +255,12 @@ class Database:
     def _migrate(self) -> None:
         """Additive migrations (safe to run repeatedly). Adds columns the web
         dashboard needs without touching existing data."""
+        order_cols = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(our_orders)").fetchall()}
+        if order_cols and "quantity" not in order_cols:
+            # Items one order asks for; every order before this asked for one.
+            self.conn.execute("ALTER TABLE our_orders ADD COLUMN quantity "
+                              "INTEGER NOT NULL DEFAULT 1")
         cols = {
             r["name"]
             for r in self.conn.execute("PRAGMA table_info(items)").fetchall()
@@ -710,7 +716,8 @@ class Database:
     def our_orders(self, item_id: int | None = None,
                    live_only: bool = True) -> list[dict[str, Any]]:
         sql = ("SELECT id, item_id, float_min, float_max, price, ceiling, "
-               "remote_id, state, placed_at, updated_at, note FROM our_orders")
+               "remote_id, state, placed_at, updated_at, note, quantity "
+               "FROM our_orders")
         where, args = [], []
         if item_id is not None:
             where.append("item_id = ?")
@@ -725,7 +732,8 @@ class Database:
     def upsert_our_order(self, item_id: int, float_min: float, float_max: float,
                          price: float, ceiling: float, state: str,
                          remote_id: str | None = None,
-                         note: str | None = None) -> int:
+                         note: str | None = None,
+                         quantity: int | None = None) -> int:
         """One row per item and float band: two orders on the same band would
         only bid against each other."""
         now = utcnow_iso()
@@ -736,17 +744,18 @@ class Database:
         if row:
             self.conn.execute(
                 "UPDATE our_orders SET price = ?, ceiling = ?, state = ?, "
-                "remote_id = COALESCE(?, remote_id), note = ?, updated_at = ? "
-                "WHERE id = ?",
-                (price, ceiling, state, remote_id, note, now, row["id"]))
+                "remote_id = COALESCE(?, remote_id), note = ?, updated_at = ?, "
+                "quantity = COALESCE(?, quantity) WHERE id = ?",
+                (price, ceiling, state, remote_id, note, now, quantity,
+                 row["id"]))
             self.conn.commit()
             return int(row["id"])
         cur = self.conn.execute(
             "INSERT INTO our_orders (item_id, float_min, float_max, price, "
-            "ceiling, remote_id, state, placed_at, updated_at, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "ceiling, remote_id, state, placed_at, updated_at, note, quantity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (item_id, float_min, float_max, price, ceiling, remote_id, state,
-             now if state == "live" else None, now, note))
+             now if state == "live" else None, now, note, quantity or 1))
         self.conn.commit()
         return int(cur.lastrowid)
 

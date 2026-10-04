@@ -714,7 +714,8 @@ class Collector:
                     self.db.upsert_our_order(
                         item_id, action.float_min, action.float_max,
                         action.price, action.ceiling, state="live",
-                        remote_id=out.remote_id, note=out.detail)
+                        remote_id=out.remote_id, note=out.detail,
+                        quantity=action.quantity)
         finally:
             self.client.pool.unpin()
 
@@ -1184,7 +1185,7 @@ class Collector:
         """
         import json as _json
 
-        from .executor import CANCEL, RAISE, reconcile
+        from .executor import CANCEL, LOWER, RAISE, reconcile
         from .holdings import locked_tops, strip_own
         from .ladder import LOCK_DAYS
         from .placement import PLACEMENT_KEY, load
@@ -1247,7 +1248,7 @@ class Collector:
                     sales, book, span, depth, params, own=own))
 
             actions = [a for a in reconcile(name, wanted, rows, book, limits)
-                       if a.kind in (RAISE, CANCEL)]
+                       if a.kind in (RAISE, LOWER, CANCEL)]
             if not actions:
                 continue
             self.client.pool.pin(for_orders=True)

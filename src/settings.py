@@ -41,6 +41,8 @@ LIMIT_BOUNDS = {
     "guard_share": (0.0, 1.0),
     "surge_z": (0.0, 3.0),
     "full_allowance": (0, 1),
+    "max_quantity": (1, 50),
+    "order_days": (0.5, 30.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
@@ -52,6 +54,8 @@ LIMIT_KEYS = (
     ("an_guard_share", "guard_share", float),
     ("an_surge_z", "surge_z", float),
     ("an_full_allowance", "full_allowance", int),
+    ("an_max_quantity", "max_quantity", int),
+    ("an_order_days", "order_days", float),
 )
 
 # The free pass over sales history, before any request is spent. Wide by
