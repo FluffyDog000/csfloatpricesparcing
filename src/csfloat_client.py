@@ -633,18 +633,27 @@ class CSFloatClient:
         if self.keyring is not None and not account:
             return self._fetch_on_ring(url, headers)
         kind = account_kind("GET", url)
-        route, key = self._lease(account, kind)
-        headers = (self._account_headers(headers) if account
-                   else self._with_key(headers, key))
-        try:
-            resp = self.session.get(url, timeout=self.http.timeout_seconds,
-                                    proxies=route.proxies(), headers=headers)
-        except requests.RequestException as exc:
-            # Fault the route like a sales poll does, so a proxy that keeps
-            # dropping connections leaves rotation instead of failing forever.
-            self.pool.record_failure(route, exc)
-            raise
-        return self._read(resp, route, url, key, kind)
+        # A read is safe to send again, so a dead address costs a retry on the
+        # next of the main key's own few rather than the whole request: one
+        # proxy answering "host unreachable" read as "CSFloat has no trades".
+        tries = max(len(self.account_routes()), 1)
+        for attempt in range(tries):
+            route, key = self._lease(account, kind)
+            sent = (self._account_headers(headers) if account
+                    else self._with_key(headers, key))
+            try:
+                resp = self.session.get(url, timeout=self.http.timeout_seconds,
+                                        proxies=route.proxies(), headers=sent)
+            except requests.RequestException as exc:
+                # Fault the route like a sales poll does, so a proxy that
+                # keeps dropping connections leaves rotation.
+                self.pool.record_failure(route, exc)
+                log.warning("Read through %s failed: %s", route.key, exc)
+                if attempt + 1 >= tries:
+                    raise
+                continue
+            return self._read(resp, route, url, key, kind)
+        raise RuntimeError("unreachable")
 
     def _fetch_on_ring(self, url: str, headers=None) -> object:
         """A read on one of the analysis keys, moving on to the next key when

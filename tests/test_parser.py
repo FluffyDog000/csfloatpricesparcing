@@ -2215,3 +2215,29 @@ def test_a_write_refused_with_429_is_sent_again_after_the_window():
     finally:
         cc.time.sleep = real_sleep
     assert len(sent) == 2 and out is not None
+
+
+def test_an_account_read_moves_to_the_next_address_when_one_is_dead():
+    import logging
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.csfloat_client import CSFloatClient
+
+    cfg = load_config()
+    client = CSFloatClient(cfg.http, cfg.polling)
+    client.pool.replace(["http://u:p@a:1", "http://u:p@b:2", "http://u:p@c:3"],
+                        use_direct=False)
+    client._respect_spacing = lambda: None
+    used = []
+
+    def get(url, **kw):
+        used.append(kw["proxies"]["https"])
+        if len(used) == 1:
+            raise requests.exceptions.ProxyError("0x04: Host unreachable")
+        return _StubResp(200, '{"trades": []}', {"Content-Type": "application/json"})
+
+    client.session.get = get
+    assert client.fetch_json("https://csfloat.com/api/v1/me/trades",
+                             account=True) is not None
+    assert len(used) == 2 and used[0] != used[1]

@@ -54,6 +54,25 @@ MAX_QUOTA_PAUSE_SECONDS = 3600.0   # re-check at least hourly while waiting
 
 
 
+NETWORK_MARKS = ("ConnectionError", "ProxyError", "Timeout", "SSLError",
+                 "Host unreachable", "Max retries exceeded")
+
+
+def network_failure(line: str) -> bool:
+    """Whether a "path - what happened" line is the network failing before
+    CSFloat answered, rather than CSFloat answering no."""
+    return any(mark in line for mark in NETWORK_MARKS)
+
+
+def _last_reason(tried: list[str]) -> str:
+    text = tried[-1]
+    for mark in ("Host unreachable", "timed out", "Connection refused",
+                 "Connection reset", "ProxyError"):
+        if mark in text:
+            return mark
+    return text.split(" — ", 1)[-1][:80]
+
+
 class IncompleteList(Exception):
     """The account's order list could not be read to its end. Reconciling
     against part of it would mark every order past the cut as gone."""
@@ -1047,6 +1066,11 @@ class Collector:
                 return orders, "", path
             tried.append(f"{path} — ответил, но ордеров в ответе нет")
 
+        if tried and all(network_failure(t) for t in tried):
+            return None, ("CSFloat недоступен через адреса главного ключа — "
+                          "прокси не соединяется (" + _last_reason(tried)
+                          + "). Проверь или замени прокси главного ключа на "
+                          "«Нагрузке»"), tried
         return None, ("не нашёл, где CSFloat отдаёт список ордеров. "
                       "Открой на сайте страницу своих ордеров, в DevTools → "
                       "Network найди GET-запрос, который их возвращает, и "
@@ -1110,10 +1134,18 @@ class Collector:
                     result["new"] += 1
             break
         else:
-            result["error"] = ("не нашёл, где CSFloat отдаёт сделки аккаунта. "
-                               "Открой на сайте страницу своих сделок, в DevTools "
-                               "→ Network найди GET-запрос, который их "
-                               "возвращает, и пришли его путь")
+            if result["tried"] and all(network_failure(t) for t in result["tried"]):
+                # Every attempt died before CSFloat answered: the proxies, not
+                # the path. Sending the user to DevTools for this was wrong.
+                result["error"] = (
+                    "CSFloat недоступен через адреса главного ключа — прокси "
+                    "не соединяется (" + _last_reason(result["tried"]) + "). "
+                    "Проверь или замени прокси главного ключа на «Нагрузке»")
+            else:
+                result["error"] = (
+                    "не нашёл, где CSFloat отдаёт сделки аккаунта. Открой на "
+                    "сайте страницу своих сделок, в DevTools → Network найди "
+                    "GET-запрос, который их возвращает, и пришли его путь")
         if result["unknown_role"]:
             result["error"] = (f"у {result['unknown_role']} сделок не понять, "
                                "покупка это или продажа — пришли список полей "

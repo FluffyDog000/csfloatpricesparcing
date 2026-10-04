@@ -282,3 +282,20 @@ def test_the_earnings_script_renders_what_the_endpoint_returns():
     assert "+$7.80" in text, text
     assert "AK-47 | Redline (FT)" in text, "a sale with no purchase is listed apart"
     assert "Сделки ещё не читались" in text
+
+
+def test_a_dead_proxy_is_not_reported_as_a_missing_trades_path():
+    """Every attempt died at the proxy - 'Host unreachable' - and the page
+    sent the user to DevTools to find a path the bot already had."""
+    col, db = _collector()
+
+    def fetch(url, headers=None, account=False):
+        raise RuntimeError("ConnectionError: SOCKSHTTPSConnectionPool(host="
+                           "'csfloat.com', port=443): Max retries exceeded "
+                           "(0x04: Host unreachable)")
+
+    col.client.fetch_json = fetch
+    db.set_setting("account_steam_id", ME)
+    out = col.sync_trades()
+    assert "прокси" in out["error"] and "Host unreachable" in out["error"]
+    assert "DevTools" not in out["error"]
