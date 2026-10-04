@@ -1,10 +1,11 @@
 """Проверка API-ключа CSFloat, в окне.
 
-Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ЧЕТЫРЕ
+Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ПЯТЬ
 запроса — одно объявление из /api/v1/listings, стакан ордеров к нему, чтение
 своего аккаунта (/api/v1/me) и снятие ордера с несуществующим id (CSFloat
-ответит «не найдено», ничего не меняется) — и покажет лимиты CSFloat для
-каждого: у них разные счётчики. Ключ и пароль прокси не сохраняются и
+ответит «не найдено», ничего не меняется), и создание ордера с пустым телом
+(отвергается как неверное, ничего не создаётся) — и покажет лимиты CSFloat
+для каждого: у них разные счётчики. Ключ и пароль прокси не сохраняются и
 целиком не печатаются; ответ аккаунта не печатается вовсе.
 
 Нужен только Python 3 — ничего ставить не надо:
@@ -41,6 +42,9 @@ ME = "https://csfloat.com/api/v1/me"
 # exist. CSFloat answers "not found", but the reply carries the counter that
 # placing, raising and cancelling orders are counted against.
 WRITE = "https://csfloat.com/api/v1/buy-orders/0"
+# Creating an order has its own counter (200 a day). An empty body is
+# refused as invalid - nothing is created - but the reply should carry it.
+CREATE = "https://csfloat.com/api/v1/buy-orders"
 
 
 def masked(proxy: str) -> str:
@@ -49,8 +53,10 @@ def masked(proxy: str) -> str:
     return re.sub(r"//([^:/@]+):([^@]+)@", r"//\1:***@", proxy)
 
 
-def _get(opener, url: str, key: str, timeout: float, method: str = "GET"):
-    req = urllib.request.Request(url, method=method, headers={
+def _get(opener, url: str, key: str, timeout: float, method: str = "GET",
+         data: bytes | None = None):
+    req = urllib.request.Request(url, method=method, data=data, headers={
+        "Content-Type": "application/json",
         "Authorization": key,
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (key test)",
@@ -85,7 +91,32 @@ def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0,
     у них разные лимиты. Возвращает отчёт текстом."""
     text = _market(key, proxy, url, timeout, book_url)
     return (text + "\n\n" + _account(key, proxy, me_url, timeout)
-            + "\n\n" + _write(key, proxy, timeout))
+            + "\n\n" + _write(key, proxy, timeout)
+            + "\n\n" + _create(key, proxy, timeout))
+
+
+def _create(key: str, proxy: str, timeout: float, url: str = CREATE) -> str:
+    """Создание ордера с пустым телом: CSFloat отвергнет его как неверное,
+    ничего не создаст, но покажет счётчик создания ордеров."""
+    handlers = []
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        status, headers, body = _get(opener, url, key, timeout, method="POST",
+                                     data=b"{}")
+    except Exception as exc:
+        return f"5. Создание ордеров — не дошёл: {type(exc).__name__}: {exc}"
+    lines = [f"5. Создание ордеров — HTTP {status}"
+             + (": пустой ордер отвергнут, как и задумано — ничего не создано"
+                if status in (400, 422) else
+                ": ЛИМИТ — создавать с этого ключа сейчас нельзя" if status == 429
+                else f": {MEANING.get(status, 'неожиданный ответ')}")]
+    lines += _limits(headers)
+    if status not in (400, 422):
+        lines.append("  ответ: " + (body.decode("utf-8", "replace").strip()[:300]
+                                    or "(пусто)"))
+    return "\n".join(lines)
 
 
 def _write(key: str, proxy: str, timeout: float, url: str = WRITE) -> str:
@@ -234,7 +265,7 @@ def main() -> None:
             return
         button.config(state="disabled")
         out.delete("1.0", "end")
-        out.insert("end", "Отправляю четыре запроса…")
+        out.insert("end", "Отправляю пять запросов…")
         proxy = proxy_entry.get().strip()
         # В отдельном потоке, чтобы окно не зависало, пока ждём ответ.
         threading.Thread(

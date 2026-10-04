@@ -1320,18 +1320,20 @@ def test_a_main_key_refusal_holds_back_that_kind_and_not_the_sales_polls():
         client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
         assert False, "a 429 must be raised, not swallowed"
     except RateLimited as exc:
-        assert "выставление" in str(exc)
+        assert "создание" in str(exc)
 
-    # The next write is refused here, without spending a request on it.
+    # The next one is refused here, without spending a request on it.
     try:
         client.send_json("POST", "https://csfloat.com/api/v1/buy-orders", {})
         assert False
     except NoRouteAvailable as exc:
         assert "главный ключ" in str(exc)
     assert len(sent) == 1
-    assert client.main_key_wait("write") > 16 * 3600
+    assert client.main_key_wait("create") > 16 * 3600
 
-    # Reading the account and the sales polls go on.
+    # Raising and taking down orders, reading the account, and the sales
+    # polls all go on: a spent day of creating must not stop the brake.
+    assert client.main_key_wait("write") == 0
     assert client.main_key_wait("me") == 0
     assert client.cooldown_remaining() == 0
     assert all(r.available(client.pool.reserve, _time.monotonic())

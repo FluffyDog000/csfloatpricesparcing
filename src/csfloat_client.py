@@ -46,7 +46,8 @@ KEY_COOLDOWN_DEFAULT = 60.0
 KIND_LABELS = {"listings": "листинги (200/час на ключ)",
                "book": "стакан ордеров (20/мин на ключ)",
                "me": "чтение своего аккаунта",
-               "write": "выставление, правка и снятие ордеров",
+               "create": "создание новых ордеров (200 в сутки)",
+               "write": "поднятие цены и снятие ордеров",
                "other": "запросы"}
 
 # How many addresses the main key may speak from. CSFloat's support allowed
@@ -70,7 +71,15 @@ MAIN_KEY_HOLD_MAX = 24 * 3600.0
 
 
 def account_kind(method: str, url: str) -> str:
-    """Which of the main key's counters a request is counted against."""
+    """Which of the main key's counters a request is counted against.
+
+    Creating an order has a counter of its own - 200 a day from the first
+    one - apart from amending and taking down, which share the account's
+    50,000. Held together, a spent day of creating also stopped the defence
+    raising prices and the brake taking orders down, for twenty hours.
+    """
+    if method.upper() == "POST":
+        return "create"
     if method.upper() != "GET":
         return "write"
     if "/api/v1/me" in url.split("?", 1)[0]:
