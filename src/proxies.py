@@ -117,6 +117,15 @@ class RouteState:
                 and self.parked_until <= now_mono
                 and not self.quota_exhausted(reserve))
 
+    def reachable(self, now_mono: float) -> bool:
+        """Up, whatever its quota says: for requests counted against an API
+        key rather than against this address."""
+        return self.cooldown_until <= now_mono and self.parked_until <= now_mono
+
+    def reach_wait(self, now_mono: float) -> float:
+        return max(self.cooldown_until - now_mono,
+                   self.parked_until - now_mono, 0.0)
+
     def wait_seconds(self, reserve: int, now_mono: float) -> float:
         """How long until this address may be used again; 0 if it may now."""
         if self.available(reserve, now_mono):

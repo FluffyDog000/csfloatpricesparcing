@@ -18,6 +18,7 @@ import requests
 
 from .config import HttpConfig, PollingConfig
 from .db import utcnow_iso
+from .keyring import kind_of, reset_epoch
 from .proxies import ProxyPool
 
 log = logging.getLogger("csfloat.client")
@@ -34,6 +35,18 @@ COOLDOWN_MAX_SECONDS = 900.0
 # jam rather than hanging in it.
 LEASE_WAIT_SECONDS = 120.0
 
+# How many keys one request may go through before giving up. A key that is out
+# of quota or refused is the key's problem, not the request's: the next key
+# answers it, and the band is not lost.
+RING_TRIES = 4
+
+# A ring key's 429 that names no reset: hold it this long.
+KEY_COOLDOWN_DEFAULT = 60.0
+
+KIND_LABELS = {"listings": "листинги (200/час на ключ)",
+               "book": "стакан ордеров (20/мин на ключ)",
+               "other": "запросы"}
+
 
 class AuthError(Exception):
     """Raised on 401/403 — the session cookie/token needs manual refresh.
@@ -49,6 +62,14 @@ class AuthError(Exception):
 
 class RateLimited(Exception):
     """Raised when 429 persists past the configured retry budget."""
+
+
+class KeyRejected(AuthError):
+    """CSFloat refused one of the analysis keys from keys.txt.
+
+    An AuthError, so existing handlers stop the same way, but named apart: the
+    message used to blame CSFLOAT_API_KEY in .env, which was never sent, and
+    left the operator nothing to find the bad key by."""
 
 
 class NoRouteAvailable(RateLimited):
@@ -422,7 +443,7 @@ class CSFloatClient:
             "seen_at": time.time(),
         }
 
-    def _lease(self, account: bool = False):
+    def _lease(self, account: bool = False, kind: str = "other"):
         """Who speaks, from where, and after what wait.
 
         Returns (route, key). Without a ring - or for a request about our own
@@ -445,20 +466,24 @@ class CSFloatClient:
         # has come round, so there is no global gap to respect.
         deadline = time.monotonic() + LEASE_WAIT_SECONDS
         while True:
-            leased = self.keyring.lease()
+            leased = self.keyring.lease(kind)
             if leased is not None:
                 state, route = leased
                 return route, state
-            wait = self.keyring.wait_seconds()
+            wait = self.keyring.wait_seconds(kind)
             if wait == float("inf"):
+                if not self.keyring.live():
+                    raise NoRouteAvailable(
+                        "все ключи из keys.txt отклонены CSFloat — список на "
+                        "вкладке «Нагрузка»")
                 raise NoRouteAvailable(
                     "ни у одного ключа нет адреса из текущего списка прокси — "
                     "проверь список на вкладке «Нагрузка»")
             if time.monotonic() + wait > deadline:
                 minutes = wait / 60.0
                 raise NoRouteAvailable(
-                    "адреса всех ключей исчерпали часовой лимит или остывают "
-                    "после отказа; ближайший освободится через "
+                    f"у всех ключей кончился лимит: {KIND_LABELS.get(kind, kind)}; "
+                    "ближайший освободится через "
                     + (f"{minutes:.0f} мин" if minutes >= 1 else f"{wait:.0f} с"))
             if time.monotonic() >= deadline:
                 raise NoRouteAvailable("все ключи заняты другими потоками обхода")
@@ -487,6 +512,8 @@ class CSFloatClient:
         `account` marks a read about OUR account - its own buy orders - which
         has to go out on the main key, never one from the analysis ring.
         """
+        if self.keyring is not None and not account:
+            return self._fetch_on_ring(url, headers)
         route, key = self._lease(account)
         headers = (self._account_headers(headers) if account
                    else self._with_key(headers, key))
@@ -497,10 +524,43 @@ class CSFloatClient:
             # Fault the route like a sales poll does, so a proxy that keeps
             # dropping connections leaves rotation instead of failing forever.
             self.pool.record_failure(route, exc)
-            if key is not None and self.keyring is not None:
-                self.keyring.note_failure(key.key)
             raise
         return self._read(resp, route, url, key)
+
+    def _fetch_on_ring(self, url: str, headers=None) -> object:
+        """A read on one of the analysis keys, moving on to the next key when
+        this one is out of quota or refused.
+
+        Either way it is the key that failed, not the request: with a hundred
+        keys the next one answers it. Giving up on the first 429 lost the band,
+        and with it half the item - "стакан прочитан, листинги нет".
+        """
+        kind = kind_of(url)
+        last: Exception | None = None
+        for _ in range(RING_TRIES):
+            try:
+                route, key = self._lease(kind=kind)
+            except NoRouteAvailable:
+                # The refusal that just took out the last key says more than
+                # "no keys left" does: it names the key.
+                if isinstance(last, KeyRejected):
+                    raise last
+                raise
+            try:
+                resp = self.session.get(url, timeout=self.http.timeout_seconds,
+                                        proxies=route.proxies(),
+                                        headers=self._with_key(headers, key))
+            except requests.RequestException as exc:
+                self.pool.record_failure(route, exc)
+                self.keyring.note_failure(key.key, f"{type(exc).__name__}: {exc}")
+                raise
+            try:
+                return self._read(resp, route, url, key, kind)
+            except (KeyRejected, RateLimited) as exc:
+                last = exc
+                continue
+        assert last is not None
+        raise last
 
     def send_json(self, method: str, url: str, body: object | None = None,
                   headers: dict[str, str] | None = None) -> object:
@@ -523,8 +583,6 @@ class CSFloatClient:
                 timeout=self.http.timeout_seconds, proxies=route.proxies())
         except requests.RequestException as exc:
             self.pool.record_failure(route, exc)
-            if key is not None and self.keyring is not None:
-                self.keyring.note_failure(key.key)
             raise
         return self._read(resp, route, url, key)
 
@@ -553,10 +611,37 @@ class CSFloatClient:
         out["Authorization"] = key.key
         return out
 
-    def _read(self, resp, route, url: str, key=None) -> object:
+    def _feed_key(self, key, kind: str, resp) -> None:
+        """A ring key's counters are the key's own: kept on the key, apart
+        from the address's and from the account-wide snapshot the dashboard
+        reads, which the anonymous sales polls describe."""
+        h = resp.headers or {}
+        self.keyring.note_quota(key.key, kind, h.get("x-ratelimit-limit"),
+                                h.get("x-ratelimit-remaining"),
+                                h.get("x-ratelimit-reset"))
+
+    def _key_cooldown(self, key, kind: str, resp, retry_after) -> float:
+        """Hold one key back from one kind of request until CSFloat's own
+        reset for it - not the escalating guess, which would park a key whose
+        order-book window refills in a minute for a quarter of an hour."""
+        wait = retry_after or 0.0
+        when = reset_epoch((resp.headers or {}).get("x-ratelimit-reset"))
+        if when is not None:
+            wait = max(wait, when - time.time())
+        if wait <= 0:
+            wait = KEY_COOLDOWN_DEFAULT
+        wait = min(wait, ACCOUNT_BLOCK_SECONDS)
+        return self.keyring.note_rate_limit(key.key, wait, kind)
+
+    def _read(self, resp, route, url: str, key=None,
+              kind: str = "other") -> object:
         """Shared handling: the limits and refusals are the same either way."""
-        self._capture_rate_headers(resp)
-        self._feed_pool(route, resp)
+        ring = key is not None and self.keyring is not None
+        if ring:
+            self._feed_key(key, kind, resp)
+        else:
+            self._capture_rate_headers(resp)
+            self._feed_pool(route, resp)
 
         if resp.status_code == 429:
             # A 429 counts the same whichever endpoint drew it: the limit is on
@@ -575,6 +660,11 @@ class CSFloatClient:
             # left nothing behind - and a refusal with no headers and no body
             # cannot be told apart from a quota that simply ran out.
             self._remember_429(resp)
+            if ring:
+                wait = self._key_cooldown(key, kind, resp, retry_after)
+                raise RateLimited(
+                    f"ключ {key.tail}: лимит — {KIND_LABELS.get(kind, kind)}, "
+                    f"ждёт {wait / 60:.1f} мин")
             wait = self._enter_cooldown(retry_after, key)
             self.pool.record_429(route, wait)
             raise RateLimited(
@@ -592,6 +682,17 @@ class CSFloatClient:
             raise VpnBlocked(
                 "CSFloat не отдаёт эти данные с IP датацентра или VPN "
                 "(«Disable your VPN»)", resp)
+
+        if resp.status_code in (401, 403) and ring:
+            # One key out of keys.txt, refused: take it out so it stops eating
+            # bands, and name it by its last characters so it can be found.
+            detail = (resp.text or "").strip().replace("\n", " ")[:120]
+            reason = (f"CSFloat отклонил ключ (HTTP {resp.status_code})"
+                      + (f": {detail}" if detail else ""))
+            self.keyring.disable(key.key, reason)
+            raise KeyRejected(
+                f"ключ {key.tail} из keys.txt отклонён CSFloat "
+                f"(HTTP {resp.status_code}) — убран из работы", resp)
 
         if resp.status_code in (401, 403):
             # CSFloat itself refusing the credentials, not the edge refusing

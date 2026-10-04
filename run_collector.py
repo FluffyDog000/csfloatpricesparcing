@@ -233,7 +233,9 @@ def run_forever(collector: Collector) -> None:
                 # Several at a time when there are keys to do it with; with
                 # one key this is the same loop it replaces, one item after
                 # another.
-                done = sweep_items(collector, names)
+                done = sweep_items(collector, names,
+                                   report=_state_writer(collector))
+                collector.store_rate_state()
                 # Logged whatever the count, including one worker. Written
                 # only when several ran, the line's absence meant either "the
                 # sweep never happened" or "it ran on one worker", and there
@@ -260,6 +262,28 @@ def run_forever(collector: Collector) -> None:
         next_delay = collector.interval_for(item)
         schedule(name, time.monotonic() + next_delay, 0.0)
         log.info("Next poll for '%s' in %.1f min", name, next_delay / 60.0)
+
+
+def _state_writer(collector, every: float = 10.0):
+    """A sweep of hundreds of items takes minutes, and the load page reads the
+    keys' counters from the database: refresh them as items finish rather
+    than only once it is all over."""
+    import threading
+    lock = threading.Lock()
+    last = [0.0]
+
+    def report(_name, _result) -> None:
+        now = time.monotonic()
+        with lock:
+            if now - last[0] < every:
+                return
+            last[0] = now
+        try:
+            collector.store_rate_state()
+        except Exception as exc:  # noqa: BLE001 - a display write is not the sweep
+            log.debug("Could not store the key state mid-sweep: %s", exc)
+
+    return report
 
 
 def _attach_keyring(collector) -> None:

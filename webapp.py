@@ -2030,9 +2030,14 @@ def _key_ring_info(db) -> dict:
         routes = json.loads(db.get_setting("key_proxy_state") or "[]")
     except ValueError:
         routes = []
+    try:
+        ring = json.loads(db.get_setting("key_ring_state") or "[]")
+    except ValueError:
+        ring = []
     text = db.get_setting("key_proxies") or ""
     return {"keys": len(keys), "keys_file": bool(config.http.keys_file),
             "key_proxies_text": text, "key_routes": routes,
+            "key_ring": ring,
             "main_key": bool(config.http.api_key)}
 
 

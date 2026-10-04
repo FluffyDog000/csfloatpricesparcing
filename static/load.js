@@ -383,6 +383,62 @@ function renderKeyRing(d) {
   const table = document.getElementById("key-routes-table");
   table.hidden = !routes.length;
   if (routes.length) document.getElementById("key-routes-body").innerHTML = routeRows(routes);
+  renderKeyStates(d.key_ring || []);
+}
+
+// One row per analysis key. A key is named by the end of it - the part that
+// can be searched for in keys.txt - never in full.
+function keyQuota(k, kind) {
+  const q = (k.quota || {})[kind];
+  if (!q || q.remaining == null) return "—";
+  return `${q.remaining}/${q.limit ?? "?"}`;
+}
+
+function keyState(k) {
+  if (k.disabled) return { text: "отключён: " + k.disabled, cls: "hi-min", bad: true };
+  const c = k.cooling || {};
+  const parts = [];
+  if (c.listings > 0) parts.push(`листинги — пауза ${fmtLeft(c.listings)}`);
+  if (c.book > 0) parts.push(`стакан — пауза ${fmtLeft(c.book)}`);
+  if (c.other > 0) parts.push(`пауза ${fmtLeft(c.other)}`);
+  if (parts.length) return { text: parts.join(", "), cls: "hi-min" };
+  if (k.last_error && k.failures) return { text: "сбои сети: " + k.last_error, cls: "hi-min" };
+  return { text: "работает", cls: "" };
+}
+
+function renderKeyStates(keys) {
+  const box = document.getElementById("key-ring-box");
+  if (!box) return;
+  box.hidden = !keys.length;
+  if (!keys.length) return;
+  const states = keys.map((k) => ({ k, s: keyState(k) }));
+  const off = states.filter((x) => x.s.bad);
+  const cooling = states.filter((x) => !x.s.bad && x.s.cls);
+  let lim = 0, left = 0, seen = 0;
+  for (const k of keys) {
+    const q = (k.quota || {}).listings;
+    if (k.disabled || !q || q.remaining == null) continue;
+    lim += q.limit || 0; left += q.remaining; seen += 1;
+  }
+  document.getElementById("key-ring-summary").textContent =
+    `ключей: ${keys.length} · работают: ${keys.length - off.length - cooling.length}`
+    + ` · на паузе: ${cooling.length} · отключены: ${off.length}`
+    + (seen ? ` · листингов осталось ${left} из ${lim} (по ${seen} ключам, что уже ходили)` : "");
+  document.getElementById("key-ring-bad").innerHTML = off.length
+    ? `<p class="settings-msg err">Не работают — найди их в keys.txt по концу ключа
+       и замени или удали:<br>${off.map((x) =>
+         `<b>${esc(x.k.tail || x.k.key)}</b> — ${esc(x.k.disabled)}`).join("<br>")}</p>`
+    : "";
+  states.sort((a, b) => (b.s.bad - a.s.bad) || ((b.s.cls ? 1 : 0) - (a.s.cls ? 1 : 0)));
+  document.getElementById("key-ring-body").innerHTML = states.map(({ k, s }) => {
+    const q = (k.quota || {}).listings;
+    const reset = q && q.reset ? timeFmt(new Date(q.reset * 1000).toISOString()) : "—";
+    return `<tr><td><code>${esc(k.tail || k.key)}</code></td>
+      <td class="num">${keyQuota(k, "listings")}</td><td>${reset}</td>
+      <td class="num">${keyQuota(k, "book")}</td>
+      <td class="num">${k.requests ?? 0}</td><td class="num">${k.failures ?? 0}</td>
+      <td class="${s.cls}">${esc(s.text)}</td></tr>`;
+  }).join("");
 }
 
 const keyProxiesBox = document.getElementById("key-proxies-text");

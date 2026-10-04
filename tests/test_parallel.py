@@ -55,8 +55,16 @@ def test_workers_never_outnumber_the_items_either():
     db.close()
 
 
-def test_a_hundred_keys_do_not_become_a_hundred_threads():
-    col, db = _collector([f"k{i}" for i in range(40)])
+def test_every_key_gets_a_worker():
+    """A hundred and fifteen keys sweep a hundred and fifteen items at once;
+    a cap of sixteen left the other ninety-nine keys idle."""
+    col, db = _collector([f"k{i}" for i in range(115)])
+    assert workers_for(col) == 115
+    db.close()
+
+
+def test_threads_are_still_capped():
+    col, db = _collector([f"k{i}" for i in range(MAX_WORKERS + 50)])
     assert workers_for(col) == MAX_WORKERS
     db.close()
 

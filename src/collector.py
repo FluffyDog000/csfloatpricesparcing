@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .config import AppConfig, ItemConfig, load_items
 from .csfloat_client import (ACCOUNT_BLOCK_SECONDS, AuthError, CSFloatClient,
+                             KeyRejected,
                              EdgeBlocked, NoRouteAvailable, RateLimited,
                              VpnBlocked)
 from .db import Database, utcnow_iso
@@ -545,6 +546,10 @@ class Collector:
                 # Credentials are not per-band; every remaining one answers the
                 # same. Stop and say which credential to fix.
                 log.warning("Order sweep for '%s' refused: %s", name, exc)
+                if isinstance(exc, KeyRejected):
+                    # A key from keys.txt, not the one in .env: say which.
+                    result["error"] = str(exc)[:200]
+                    break
                 result["error"] = (
                     "CSFloat отклонил ключ CSFLOAT_API_KEY — он отозван или "
                     "не даёт доступа к ордерам. Стакан читается ключом, кука "
@@ -1621,6 +1626,9 @@ class Collector:
         key_pool = getattr(self.client, "key_pool", None)
         self.db.set_setting("key_proxy_state",
                             key_pool.to_json() if key_pool is not None else "[]")
+        ring = getattr(self.client, "keyring", None)
+        self.db.set_setting("key_ring_state",
+                            json.dumps(ring.snapshot()) if ring is not None else "[]")
         pool = getattr(self.client, "pool", None)
         if pool is not None:
             self.db.set_setting("proxy_state", pool.to_json())

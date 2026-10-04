@@ -29,11 +29,10 @@ from typing import Any, Callable, Sequence
 
 log = logging.getLogger("csfloat.parallel")
 
-# A ceiling on workers regardless of how many keys exist. A hundred sweeps at
-# once is a hundred sockets and a hundred sqlite connections for no gain: the
-# spacing of a single key already limits each worker, so past this the threads
-# only add contention.
-MAX_WORKERS = 16
+# A ceiling on workers regardless of how many keys exist. Each worker waits on
+# the network most of the time, so a worker per key is what keeps every key
+# busy; past a couple of hundred the threads only add contention.
+MAX_WORKERS = 200
 
 
 def workers_for(collector, wanted: int | None = None) -> int:
