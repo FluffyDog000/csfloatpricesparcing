@@ -459,8 +459,6 @@
              sc.flow !== null ? `поток ${sc.flow.toFixed(2)}/сут` : null,
              sc.quiet_days !== null
                ? `последняя продажа ${sc.quiet_days.toFixed(0)} дн назад` : null,
-             sc.spread !== null ? `разброс ${sc.spread.toFixed(2)}` : null,
-             sc.gap !== null ? `зазор ${(sc.gap * 100).toFixed(1)}%` : null,
             ].filter(Boolean).join(" · ");
         sec.appendChild(line);
       }
@@ -965,7 +963,6 @@ float, который принимает ордер. Ниже «ожид.» — 
   const SCREEN_FIELDS = [
     ["s-minprice", "min_price", 1], ["s-maxprice", "max_price", 1],
     ["s-flow", "min_flow", 1], ["s-quiet", "max_quiet_days", 1],
-    ["s-spread", "max_spread", 1], ["s-gap", "min_gap", 100],
     ["s-minsales", "min_sales", 1],
   ];
 
@@ -1249,9 +1246,6 @@ float, который принимает ордер. Ниже «ожид.» — 
       scr_max_price: $("s-maxprice").value,
       scr_min_flow: $("s-flow").value,
       scr_quiet: $("s-quiet").value,
-      scr_spread: $("s-spread").value,
-      // Typed as a percentage, stored as a fraction, like the other margins.
-      scr_gap: (parseFloat($("s-gap").value) || 0) / 100,
       scr_min_sales: $("s-minsales").value,
       }, token());
       fillParams(r.params);

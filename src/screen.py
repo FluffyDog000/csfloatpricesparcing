@@ -7,9 +7,15 @@ hundred items is well over an hour of continuous asking.
 
 So the first filter has to be the free one. Everything here is worked out from
 sales history already in the database: the price, how often the thing trades,
-whether it still trades at all, how widely the price swings, and whether there
-is any gap between what it sells for and what one could pay. An item that
-fails these would have failed after the requests too.
+and whether it still trades at all. An item that fails these would have failed
+after the requests too.
+
+Two checks were dropped: the spread of prices (IQR / median) and the "gap"
+between the median and the cheap tenth of sales. Both read the whole item as
+one price, and on a skin whose price follows its float that is the float
+range talking, not the market: a 0.15 and a 0.38 Fade make a wide spread and a
+fat gap whatever the trade is worth. The ladder prices each hundredth of float
+on its own and answers both questions properly once the book is read.
 
 The defaults are deliberately wide. A screen that silently throws items away
 before anyone has chosen its thresholds is worse than no screen: it looks like
@@ -29,8 +35,6 @@ class Screen:
     max_price: float = 0.0
     min_flow: float = 0.0         # sales per day over the window
     max_quiet_days: float = 0.0   # since the last sale
-    max_spread: float = 0.0       # IQR / median
-    min_gap: float = 0.0          # headroom between the exit and the cheap end
     min_sales: int = 0            # rows of history, any age
 
     def as_dict(self) -> dict[str, Any]:
@@ -44,8 +48,6 @@ class Verdict:
     median: float | None = None
     flow: float | None = None
     quiet_days: float | None = None
-    spread: float | None = None
-    gap: float | None = None
     sales: int = 0
 
     def as_dict(self) -> dict[str, Any]:
@@ -75,22 +77,6 @@ def profile(sales: Sequence[dict], window_days: float = 28.0,
                   if s.get("age_days") is not None
                   and s["age_days"] <= window_days]
         out.flow = len(recent) / window_days if window_days > 0 else None
-
-    if len(prices) >= 4:
-        ordered = sorted(prices)
-        n = len(ordered)
-        q1 = ordered[n // 4]
-        q3 = ordered[(3 * n) // 4 - (1 if n % 4 == 0 else 0)]
-        out.spread = (q3 - q1) / out.median if out.median else None
-
-    # Is there room for a trade at all? The tenth percentile stands in for
-    # "what the cheap end of the market goes for": if selling at the median,
-    # less the fee, does not clear even that, no bid can be both low enough to
-    # fill and high enough to profit - and no request would have said otherwise.
-    if len(prices) >= 5:
-        cheap = sorted(prices)[max(0, len(prices) // 10)]
-        if cheap > 0:
-            out.gap = (out.median * (1.0 - fee)) / cheap - 1.0
     return out
 
 
@@ -109,16 +95,11 @@ def screen(verdict: Verdict, limits: Screen) -> Verdict:
         (limits.max_quiet_days and v.quiet_days is not None
          and v.quiet_days > limits.max_quiet_days,
          lambda: f"последняя продажа {v.quiet_days:.0f} дн назад"),
-        (limits.max_spread and v.spread is not None
-         and v.spread > limits.max_spread,
-         lambda: f"разброс {v.spread:.2f} > {limits.max_spread:.2f}"),
-        (limits.min_gap and v.gap is not None and v.gap < limits.min_gap,
-         lambda: f"зазор {v.gap * 100:.1f}% < {limits.min_gap * 100:.1f}%"),
     ]
     for failed, why in checks:
         if failed:
             return Verdict(False, why(), v.median, v.flow, v.quiet_days,
-                           v.spread, v.gap, v.sales)
+                           v.sales)
     return v
 
 

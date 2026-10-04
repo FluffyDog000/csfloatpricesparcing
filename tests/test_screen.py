@@ -57,35 +57,15 @@ def test_an_item_that_stopped_trading_is_dropped_however_good_the_history():
     assert got.quiet_days == 90.0
 
 
-def test_a_price_that_swings_cannot_be_pinned_down():
-    wild = sales([50.0, 60.0, 70.0, 100.0, 140.0, 200.0, 260.0, 300.0] * 5)
-    got = look(wild, Screen(max_spread=0.35))
-    assert not got.passed and "разброс" in got.reason
-    assert look(STEADY, Screen(max_spread=0.35)).passed
-
-
-def test_an_item_with_no_room_for_a_trade_is_seen_without_asking():
-    """If selling at the median, less the fee, does not clear even the cheap
-    end of the market, no bid can be both low enough to fill and high enough
-    to profit - and no request would have said otherwise."""
-    flat = sales([100.0] * 40)
-    got = look(flat, Screen(min_gap=0.08))
-    assert not got.passed and "зазор" in got.reason
-
-    spread_out = sales([70.0] * 10 + [100.0] * 30)
-    assert look(spread_out, Screen(min_gap=0.08)).passed
-
-
 def test_the_numbers_are_reported_whether_it_passes_or_not():
     """"Why was this dropped" is answered by the value, not by the word."""
     got = look(STEADY, Screen(min_price=1000.0))
     assert not got.passed
     assert got.median == 102.0 and got.sales == 60
     assert got.flow and got.flow > 0 and got.quiet_days == 0.0
-    assert got.spread is not None and got.gap is not None
 
 
 def test_a_profile_never_judges():
     p = profile(sales([1.0] * 3))
     assert p.passed, "measuring is not screening"
-    assert p.spread is None and p.gap is None, "too few to say"
+    assert p.median == 1.0 and p.sales == 3

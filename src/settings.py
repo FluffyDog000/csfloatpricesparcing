@@ -56,7 +56,6 @@ LIMIT_KEYS = (
 SCREEN_BOUNDS = {
     "min_price": (0.0, 100_000.0), "max_price": (0.0, 100_000.0),
     "min_flow": (0.0, 100.0), "max_quiet_days": (0.0, 3650.0),
-    "max_spread": (0.0, 10.0), "min_gap": (0.0, 10.0),
     "min_sales": (0, 100_000),
 }
 SCREEN_KEYS = (
@@ -64,8 +63,6 @@ SCREEN_KEYS = (
     ("scr_max_price", "max_price", float),
     ("scr_min_flow", "min_flow", float),
     ("scr_quiet", "max_quiet_days", float),
-    ("scr_spread", "max_spread", float),
-    ("scr_gap", "min_gap", float),
     ("scr_min_sales", "min_sales", int),
 )
 
