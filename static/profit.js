@@ -21,6 +21,11 @@
 
   let last = null;
 
+  const STATES = {
+    queued: "в очереди", pending: "ждёт обмена в Steam",
+    verified: "завершена", failed: "не состоялась", cancelled: "отменена",
+  };
+
   function say(text, kind) {
     const el = $("f-note");
     if (!el) return;
@@ -171,7 +176,7 @@
       pending.map((x) => [
         [x.role === "buy" ? "покупка" : x.role === "sell" ? "продажа" : "?"],
         [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
-        [cash(x.price)], [x.state || "—", "muted"],
+        [cash(x.price)], [STATES[x.state] || x.state || "—", "muted"],
         [when(x.created_at), "mono"],
       ]), "");
   }
