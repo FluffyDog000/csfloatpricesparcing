@@ -1,10 +1,11 @@
 """Проверка API-ключа CSFloat, в окне.
 
-Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ПЯТЬ
+Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ШЕСТЬ
 запроса — одно объявление из /api/v1/listings, стакан ордеров к нему, чтение
 своего аккаунта (/api/v1/me) и снятие ордера с несуществующим id (CSFloat
 ответит «не найдено», ничего не меняется), и создание ордера с пустым телом
-(отвергается как неверное, ничего не создаётся) — и покажет лимиты CSFloat
+(отвергается как неверное, ничего не создаётся), и смену цены ордера с
+несуществующим id (ничего не меняется) — и покажет лимиты CSFloat
 для каждого: у них разные счётчики. Ключ и пароль прокси не сохраняются и
 целиком не печатаются; ответ аккаунта не печатается вовсе.
 
@@ -45,6 +46,11 @@ WRITE = "https://csfloat.com/api/v1/buy-orders/0"
 # Creating an order has its own counter (200 a day). An empty body is
 # refused as invalid - nothing is created - but the reply should carry it.
 CREATE = "https://csfloat.com/api/v1/buy-orders"
+# Changing an order's price, the way the bot does it, on an id that does not
+# exist: "unknown buy order", nothing changes, and the reply carries the
+# counter that raising a price is counted against.
+AMEND_BODY = (b'{"max_price": 100, "quantity": 1,'
+              b' "min_float": 0.15, "max_float": 0.16}')
 
 
 def masked(proxy: str) -> str:
@@ -92,7 +98,32 @@ def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0,
     text = _market(key, proxy, url, timeout, book_url)
     return (text + "\n\n" + _account(key, proxy, me_url, timeout)
             + "\n\n" + _write(key, proxy, timeout)
-            + "\n\n" + _create(key, proxy, timeout))
+            + "\n\n" + _create(key, proxy, timeout)
+            + "\n\n" + _amend(key, proxy, timeout))
+
+
+def _amend(key: str, proxy: str, timeout: float, url: str = WRITE) -> str:
+    """Смена цены несуществующего ордера: ничего не меняется, но видно,
+    каким счётчиком считается поднятие цены."""
+    handlers = []
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        status, headers, body = _get(opener, url, key, timeout, method="PATCH",
+                                     data=AMEND_BODY)
+    except Exception as exc:
+        return f"6. Смена цены — не дошёл: {type(exc).__name__}: {exc}"
+    lines = [f"6. Смена цены (поднятие) — HTTP {status}"
+             + (": ордера с таким id нет, как и задумано — ничего не изменено"
+                if status in (400, 404) else
+                ": ЛИМИТ" if status == 429
+                else f": {MEANING.get(status, 'неожиданный ответ')}")]
+    lines += _limits(headers)
+    if status not in (400, 404):
+        lines.append("  ответ: " + (body.decode("utf-8", "replace").strip()[:300]
+                                    or "(пусто)"))
+    return "\n".join(lines)
 
 
 def _create(key: str, proxy: str, timeout: float, url: str = CREATE) -> str:
@@ -265,7 +296,7 @@ def main() -> None:
             return
         button.config(state="disabled")
         out.delete("1.0", "end")
-        out.insert("end", "Отправляю пять запросов…")
+        out.insert("end", "Отправляю шесть запросов…")
         proxy = proxy_entry.get().strip()
         # В отдельном потоке, чтобы окно не зависало, пока ждём ответ.
         threading.Thread(
