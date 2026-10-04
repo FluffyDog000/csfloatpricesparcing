@@ -375,13 +375,8 @@ function renderKeyRing(d) {
   const n = (d.key_proxies_text || "").split("\n").filter((s) => s.trim()).length;
   parts.push(n ? `своих адресов: ${n}` + (d.keys ? ` (~${(d.keys * 3 / n).toFixed(1)} ключа на адрес)` : "")
                : "своих адресов нет — ключи ходят через общий список");
-  (d.main_key_state || []).forEach((m) => {
-    if (m.remaining == null && !m.wait_sec) return;
-    parts.push(`главный ключ, ${m.label}: `
-      + (m.remaining != null ? `${m.remaining}/${m.limit ?? "?"}` : "")
-      + (m.wait_sec > 0 ? ` — лимит, сброс через ${fmtLeft(m.wait_sec)}` : ""));
-  });
   info.textContent = parts.join(" · ");
+  renderMainKey(d);
   const box = document.getElementById("key-proxies-text");
   if (box && !keyProxiesDirty && document.activeElement !== box) {
     box.value = d.key_proxies_text || "";
@@ -390,6 +385,35 @@ function renderKeyRing(d) {
   table.hidden = !routes.length;
   if (routes.length) document.getElementById("key-routes-body").innerHTML = routeRows(routes);
   renderKeyStates(d.key_ring || []);
+}
+
+// The main key's counters, one row per kind of request it has made.
+function renderMainKey(d) {
+  const box = document.getElementById("main-key-box");
+  if (!box) return;
+  const rows = (d.main_key_state || []).filter((m) => m.remaining != null || m.wait_sec);
+  if (!d.main_key) {
+    box.innerHTML = '<p class="settings-msg err">CSFLOAT_API_KEY в .env не задан.</p>';
+    return;
+  }
+  if (!rows.length) {
+    box.innerHTML = '<p class="muted">Ключ задан. Лимиты появятся после первого '
+      + "запроса им с момента запуска сборщика — чтение сделок идёт через минуту.</p>";
+    return;
+  }
+  box.innerHTML = `<table class="stat"><thead><tr><th>запросы</th>
+    <th class="num">осталось</th><th class="num">лимит</th><th>сброс</th>
+    <th>состояние</th></tr></thead><tbody>${rows.map((m) => {
+      const reset = m.reset ? timeFmt(new Date(m.reset * 1000).toISOString()) : "—";
+      const out = m.wait_sec > 0;
+      const low = m.remaining != null && m.limit && m.remaining <= m.limit * 0.05;
+      return `<tr><td>${esc(m.label)}</td>
+        <td class="num">${m.remaining ?? "—"}</td><td class="num">${m.limit ?? "—"}</td>
+        <td>${reset}</td>
+        <td class="${out || low ? "hi-min" : ""}">${out
+          ? "лимит, сброс через " + fmtLeft(m.wait_sec)
+          : low ? "на исходе" : "работает"}</td></tr>`;
+    }).join("")}</tbody></table>`;
 }
 
 // One row per analysis key. A key is named by the end of it - the part that
