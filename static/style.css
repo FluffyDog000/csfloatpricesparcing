@@ -481,3 +481,8 @@ a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
   .topbar .build, .topbar .timer { display: none; }
   .topbar .status { width: 100%; }
 }
+
+/* Placement queue -------------------------------------------------------- */
+.stat.queue tr.queue-out td { opacity: .55; }
+.stat.queue tr.queue-line td { text-align: center; color: var(--muted);
+  font-size: 12px; border-top: 2px dashed var(--line); }

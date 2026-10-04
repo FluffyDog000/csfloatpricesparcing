@@ -209,7 +209,8 @@ def select(bands: Sequence[Band], limits: Limits,
 
 def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
                      held: Sequence[tuple[str, float, float]] = (),
-                     spent: float = 0.0, placed: int = 0
+                     spent: float = 0.0, placed: int = 0,
+                     trace: list | None = None
                      ) -> dict[str, list[Band]]:
     """Which bands to hold, chosen across every item at once.
 
@@ -235,8 +236,12 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     Bands of one item selling into the same lot band share its buyers, so
     each one taken lengthens the wait of the next, and one the band cannot
     absorb on top of the others is not taken.
+
+    `trace`, when given, is filled with every candidate in rank order: taken
+    or not, why not, and what it costs - the placement queue the page shows.
     """
     chosen: dict[str, list[Band]] = {}
+    outcome: dict[int, dict] = {}
     per_item_spent: dict[str, float] = {}
     flow: dict[tuple, float] = {}
     budget = limits.budget
@@ -246,21 +251,33 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
         key = _lot_key(item, band)
         return tied_up(band, flow.get(key, 0.0) if key else 0.0)
 
-    def room_for(item: str, band: Band) -> bool:
+    def why_not(item: str, band: Band) -> str:
+        """Empty when the band fits; otherwise the first limit it hits."""
         if band.bid is None:
-            return False
+            return "нет ставки"
         if placed >= limits.max_orders:
-            return False
+            return f"лимит ордеров ({limits.max_orders})"
         if len(chosen.get(item, ())) >= limits.max_orders_per_item:
-            return False
+            return f"не больше {limits.max_orders_per_item} на предмет"
         need = cost(item, band)
+        if need == float("inf"):
+            return "полоса не продаст столько вместе с другими ступенями"
         if spent + need > budget + 1e-9:
-            return False
-        return per_item_spent.get(item, 0.0) + need <= item_cap + 1e-9
+            return ("бюджет не задан" if budget <= 0
+                    else f"не хватает бюджета: нужно ${need:.0f}, "
+                         f"осталось ${max(budget - spent, 0):.0f}")
+        if per_item_spent.get(item, 0.0) + need > item_cap + 1e-9:
+            return "лимит денег на предмет"
+        return ""
 
-    def take(item: str, band: Band) -> None:
+    def room_for(item: str, band: Band) -> bool:
+        return not why_not(item, band)
+
+    def take(item: str, band: Band, already: bool = False) -> None:
         nonlocal spent, placed
         need = cost(item, band)
+        outcome[id(band)] = {"taken": True, "reason": "", "cost": need,
+                             "held": already}
         chosen.setdefault(item, []).append(band)
         spent += need
         per_item_spent[item] = per_item_spent.get(item, 0.0) + need
@@ -276,12 +293,19 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
     for item, band in ranked:
         if (item, round(band.float_min, 4), round(band.float_max, 4)) in holding \
                 and room_for(item, band):
-            take(item, band)
+            take(item, band, already=True)
     for item, band in ranked:
         if band in chosen.get(item, ()):
             continue
-        if room_for(item, band):
+        reason = why_not(item, band)
+        if reason:
+            outcome[id(band)] = {"taken": False, "reason": reason,
+                                 "cost": cost(item, band), "held": False}
+        else:
             take(item, band)
+    if trace is not None:
+        for item, band in ranked:
+            trace.append({"item": item, "band": band, **outcome[id(band)]})
     return chosen
 
 

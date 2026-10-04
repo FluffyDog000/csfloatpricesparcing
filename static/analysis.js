@@ -613,6 +613,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     }
 
     renderGuard(d.guard);
+    renderQueue(d.queue || [], d.limits);
 
     if (!d.actions.length) {
       box.innerHTML = '<p class="muted">Действий нет.</p>';
@@ -842,6 +843,70 @@ float, который принимает ордер. Ниже «ожид.» — 
       + ` · ${String(res.at).slice(0, 16).replace("T", " ")}`;
     box.appendChild(head);
     box.appendChild(actionTable(res.results, "итог"));
+  }
+
+  /** The placement queue: every band the model would open, best first, what
+   * each keeps busy and the running total - and where the money runs out.
+   * The actions table below holds only what fits; this is the whole line. */
+  function renderQueue(queue, limits) {
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const box = $("plan-queue");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!queue.length) return;
+    const taken = queue.filter((q) => q.taken);
+    const profit = taken.reduce((s, q) => s + (q.profit_day || 0), 0);
+    const used = taken.length ? taken[taken.length - 1].running || 0 : 0;
+    const head = document.createElement("h3");
+    head.textContent = "Очередь выставления";
+    box.appendChild(head);
+    const sum = document.createElement("p");
+    sum.className = "muted";
+    sum.innerHTML = `По рангу, лучшее сверху. В план входит <b>${taken.length}</b> из `
+      + `${queue.length}: держат <b>${money(used)}</b> из бюджета `
+      + `${money(limits && limits.budget)}, ожидаемо ~<b>${money(profit)}</b> в сутки. `
+      + "«Держит» — сколько денег ступень в среднем занимает: блокировка плюс продажа.";
+    box.appendChild(sum);
+
+    const t = document.createElement("table");
+    t.className = "stat queue";
+    t.innerHTML = `<thead><tr><th>№</th><th>предмет</th><th>float</th>
+      <th>ставка</th><th>маржа</th><th title="исполнений в сутки">налив</th>
+      <th title="маржа ÷ (7 дней блокировки + дни на продаже)">ранг</th>
+      <th title="сколько денег ступень держит в среднем">держит</th>
+      <th title="нарастающим итогом по тем, что в плане">итого</th>
+      <th title="налив × ставка × ожидаемая маржа">приб./сут</th>
+      <th>статус</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    let crossed = false;
+    queue.forEach((q) => {
+      if (!q.taken && !crossed) {
+        crossed = true;
+        const sep = document.createElement("tr");
+        sep.className = "queue-line";
+        sep.innerHTML = `<td colspan="11">— дальше в план не входит —</td>`;
+        tb.appendChild(sep);
+      }
+      const tr = document.createElement("tr");
+      tr.className = q.taken ? "" : "queue-out";
+      const m = q.margin_expected ?? q.margin;
+      tr.innerHTML = `<td>${q.n}</td>
+        <td>${esc(q.item)}</td>
+        <td>${q.float_min.toFixed(2)}–${q.float_max.toFixed(2)}</td>
+        <td>${money(q.bid)}</td>
+        <td>${pct(m)}</td>
+        <td>${q.lam === null || q.lam === undefined ? "—" : q.lam.toFixed(2)}</td>
+        <td>${q.rank ? q.rank.toFixed(4) : "—"}</td>
+        <td>${q.tied_up === null ? "—" : money(q.tied_up)}</td>
+        <td>${q.running === null ? "" : money(q.running)}</td>
+        <td>${q.profit_day === null ? "—" : money(q.profit_day)}</td>
+        <td class="${q.taken ? "ok" : "muted"}">${q.taken
+          ? (q.held ? "в плане · уже стоит" : "в плане") : esc(q.reason)}</td>`;
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
   }
 
   /** The brake: tripped or not, and where today stands against it. */

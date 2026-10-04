@@ -1170,7 +1170,8 @@ def api_analysis_plan():
             plan_bands(sales, orders, wear_range(name), depth, params,
                        own=_locked_tops(db, item_id)))]
 
-    wanted_by_item = select_portfolio(candidates, limits, holding)
+    trace: list = []
+    wanted_by_item = select_portfolio(candidates, limits, holding, trace=trace)
 
     actions: list[dict] = []
     ranked: dict[tuple, tuple[float, float]] = {}
@@ -1219,6 +1220,7 @@ def api_analysis_plan():
 
     return jsonify({
         "actions": actions,
+        "queue": _placement_queue(trace),
         "limits": limits.as_dict(),
         "screen": _analysis_screen(db).as_dict(),
         "held": held,
@@ -1242,6 +1244,41 @@ def api_analysis_plan():
         "sync": _json_setting(db, "orders_sync_result"),
         "guard": _guard_state(db, limits),
     })
+
+
+QUEUE_ROWS = 150
+
+
+def _placement_queue(trace: list) -> list[dict]:
+    """Every band the model would open, in the order the plan spends money
+    on them: what it costs, the running total, and - for the ones that did
+    not make it - which limit stopped them. The actions table shows only
+    what fits; this shows where the line falls and what lies past it."""
+    from src.executor import rank as rank_of
+
+    out, running = [], 0.0
+    for n, row in enumerate(trace[:QUEUE_ROWS], 1):
+        b = row["band"]
+        cost = row["cost"]
+        finite = cost is not None and cost != float("inf")
+        if row["taken"] and finite:
+            running += cost
+        margin = b.margin_expected if b.margin_expected is not None else b.margin
+        profit = ((b.lam or 0.0) * (b.bid or 0.0) * (margin or 0.0)
+                  if b.bid else None)
+        out.append({
+            "n": n, "item": row["item"],
+            "float_min": b.float_min, "float_max": b.float_max,
+            "bid": b.bid, "ceiling": b.ceiling, "margin": b.margin,
+            "margin_expected": b.margin_expected, "lam": b.lam,
+            "t_sell": b.t_sell, "rank": rank_of(b),
+            "tied_up": round(cost, 2) if finite else None,
+            "running": round(running, 2) if row["taken"] else None,
+            "profit_day": round(profit, 2) if profit is not None else None,
+            "taken": row["taken"], "held": row["held"],
+            "reason": row["reason"],
+        })
+    return out
 
 
 def _locked_tops(db, item_id: int) -> list[float]:
