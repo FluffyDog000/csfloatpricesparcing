@@ -1543,13 +1543,13 @@ def api_analysis_positions():
     """Every order we hold, and where it stands in its own book right now.
 
     The plan says what would be done and the journal says what was done;
-    neither answers "am I still first". That needs the book read against each
-    order's own float range, because a rival whose range merely overlaps ours
-    takes the same lots.
+    neither answers "am I still first". That needs the book read against the
+    item we would actually get - the one at our order's top float - because a
+    rival scoped below it takes better items, not ours.
     """
+    from src.executor import ahead_of
     from src.holdings import strip_own
-    from src.orders import wear_range
-    from src.pricing import _competing
+    from src.ladder import rival_bid
 
     db = get_db()
     rows = []
@@ -1568,13 +1568,14 @@ def api_analysis_positions():
         lo, hi = float(row["float_min"]), float(row["float_max"])
         price = float(row["price"])
 
-        rivals = _competing(book, lo, hi, wear_range(name))
-        # At or above, not strictly above: an order matching our price is
-        # filled before ours or after it depending on who placed first, which
-        # the book does not say. Counting it as ahead is the reading that does
-        # not flatter us, and it is what reconcile already does.
-        above = [o for o in rivals if float(o["price"]) >= price]
-        top = max((float(o["price"]) for o in rivals), default=0.0)
+        # Who would take the item we actually get - the one at our top - at
+        # our price or above; the same reading the defence acts on. At or
+        # above, not strictly above: an order matching our price is filled
+        # before ours or after it depending on who placed first, which the
+        # book does not say, and counting it is the reading that does not
+        # flatter us.
+        above = ahead_of(book, lo, hi, price)
+        top = rival_bid(book, hi)
         ahead = sum(int(o.get("qty") or 1) for o in above)
         rows.append({
             "id": row["id"], "item": name, "float_min": lo, "float_max": hi,

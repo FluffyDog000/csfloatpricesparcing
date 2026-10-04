@@ -364,3 +364,35 @@ def test_a_rare_dear_band_pays_for_its_spread_not_only_its_mean():
     limits = Limits(total_capital=250.0, max_orders=10, max_orders_per_item=3)
     assert len(select_portfolio(cheap, limits)) == 3
     assert len(select_portfolio(dear, limits)) < 3
+
+
+# -- who is really ahead -------------------------------------------------------
+
+DEAGLE_BOOK = [
+    {"price": 28.10, "qty": 3, "float_min": 0.0, "float_max": 0.01},
+    {"price": 28.10, "qty": 1, "float_min": 0.0, "float_max": 0.001},
+    {"price": 27.50, "qty": 1, "float_min": 0.0, "float_max": 0.003},
+    {"price": 23.30, "qty": 3, "float_min": 0.0, "float_max": 0.02},
+    {"price": 22.70, "qty": 3, "float_min": 0.0, "float_max": 0.04},
+    {"price": 22.60, "qty": 1, "float_min": None, "float_max": None},
+]
+
+
+def test_an_order_scoped_below_our_top_is_not_ahead_of_us():
+    """Desert Eagle | Mecha Industries (FN), ours 0.00-0.02 at $23.40. The
+    $28 bids take only floats under 0.01; a seller of a 0.015 hands it to
+    us. The journal said "outbid, fourteen ahead"."""
+    from src.executor import ahead_of
+
+    assert ahead_of(DEAGLE_BOOK, 0.0, 0.02, 23.40) == []
+    above = ahead_of(DEAGLE_BOOK, 0.0, 0.02, 23.20)
+    assert [o["price"] for o in above] == [23.30]
+
+
+def test_the_defence_does_not_take_down_an_order_that_is_first():
+    """Read as outbid to $28.10, past a $26 ceiling, the order was withdrawn."""
+    acts = reconcile("Deagle", [band(0.0, 0.02, 23.40, 26.0)],
+                     [row(0.0, 0.02, 23.40, 26.0)], DEAGLE_BOOK,
+                     Limits(patience_minutes=0))
+    assert [a.kind for a in acts] == [KEEP], acts[0].reason
+    assert "первые" in acts[0].reason

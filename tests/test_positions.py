@@ -1,9 +1,9 @@
 """Where each standing order actually stands.
 
 The plan says what would be done, the journal says what was done; neither
-answers "am I still first". That needs the book read against each order's own
-float range, because a rival whose range merely overlaps ours takes the same
-lots.
+answers "am I still first". That needs the book read against the item the
+order actually gets - the one at its top float, since a seller hands over the
+worst float an order accepts.
 """
 import json
 import logging
@@ -179,3 +179,24 @@ def test_an_older_database_gains_the_column_rather_than_failing():
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(buy_orders)")}
     assert "order_id" in cols
     db.close()
+
+
+def test_a_rival_scoped_below_our_top_is_not_ahead():
+    """Desert Eagle | Mecha Industries (FN), ours 0.00-0.02 at $23.40: the
+    $28 bids on 0.00-0.01 take better floats, never the 0.015 we get. The
+    page read "outbid, fourteen ahead"."""
+    c = _app()
+    db = _db()
+    item_id = db.add_item("Desert Eagle | Mecha Industries (Factory New)")
+    db.upsert_our_order(item_id, 0.0, 0.02, 23.40, 26.0, state="live",
+                        remote_id="r1")
+    db.replace_buy_orders(item_id, [
+        {"price": 28.10, "qty": 3, "float_min": 0.0, "float_max": 0.01},
+        {"price": 27.50, "qty": 1, "float_min": 0.0, "float_max": 0.003},
+        {"price": 23.30, "qty": 3, "float_min": 0.0, "float_max": 0.02}])
+    db.close()
+
+    body = c.get("/api/analysis/positions").get_json()
+    row = body["orders"][0]
+    assert body["outbid"] == 0 and row["first"] and row["ahead"] == 0
+    assert row["top"] == 23.30, "the best bid that would take our item"

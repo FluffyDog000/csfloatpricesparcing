@@ -221,6 +221,29 @@ def tied_up(band: Band, extra_lam: float = 0.0) -> float:
     return float("inf") if n == float("inf") else band.bid * n
 
 
+def ahead_of(book: Iterable[dict], lo: float, hi: float,
+             price: float) -> list[dict]:
+    """The orders standing in front of ours [lo, hi] at `price`.
+
+    The ones that would take the item we actually get - a seller hands over
+    the worst float an order accepts, which is our top - at our price or
+    above. The same question the ladder asks when it prices the order
+    (`ladder.rival_bid` at the top). Counting every order whose range merely
+    overlaps ours put a 0.00-0.01 bid at $28 in front of a 0.00-0.02 order at
+    $23 that was first for everything from 0.01 up - and the defence, seeing
+    "outbid to $28, above the ceiling", took down orders that were winning.
+    """
+    out = []
+    for o in book:
+        o_lo = o.get("float_min")
+        o_hi = o.get("float_max")
+        o_lo = 0.0 if o_lo is None else float(o_lo)
+        o_hi = 1.0 if o_hi is None else float(o_hi)
+        if o_lo <= hi <= o_hi and float(o["price"]) >= price:
+            out.append(o)
+    return out
+
+
 def _lot_key(item: str, band: Band) -> tuple | None:
     """The lot band a band's items sell into, when it is known."""
     if band.lot_min is None or band.lot_max is None:
@@ -384,11 +407,8 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
                 order_id=row.get("id"), remote_id=row.get("remote_id")))
             continue
 
-        # Whoever is bidding for the same lots, above us.
-        rivals = [o for o in book
-                  if (o.get("float_min") if o.get("float_min") is not None else 0.0) < key[1]
-                  and (o.get("float_max") if o.get("float_max") is not None else 1.0) > key[0]
-                  and o["price"] >= price]
+        # Whoever would take the item we get, at our price or above.
+        rivals = ahead_of(book, key[0], key[1], price)
         ahead = sum(int(o.get("qty") or 1) for o in rivals)
 
         if band.ceiling is None:
