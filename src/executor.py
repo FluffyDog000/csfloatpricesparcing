@@ -7,9 +7,13 @@ them is a separate, deliberate step.
 
 Three rules carry most of the weight.
 
-Withdraw at the ceiling. The ceiling is the price above which the trade stops
+Never past the ceiling. The ceiling is the price above which the trade stops
 being worth doing, worked out before the fight rather than during it, so a
-position that gets bid past it is abandoned rather than chased.
+position that gets bid past it is not chased - but it is not taken down
+either. It stands behind, costing nothing, and leads again when the rival
+fills or leaves; taking it down would mean placing it again out of the
+day's 200 creates. When the ceiling itself falls under our price, the order
+is brought down to it in place.
 
 Prefer patience to re-bidding. Being outbid is not by itself a reason to
 answer: whoever went above us is filled first, and then we lead again for
@@ -483,14 +487,19 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
             continue
         new_ceiling = band.ceiling
 
+        qty = int(row.get("quantity") or 1)
         if price > new_ceiling + 1e-9:
+            # The market moved down under a standing order. Brought down to
+            # the new ceiling rather than taken down: an amend is free, and
+            # placing it again would spend one of the day's 200 creates.
             actions.append(Action(
-                CANCEL, item, key[0], key[1], price, new_ceiling,
-                f"цена ${price:.2f} выше потолка ${new_ceiling:.2f}",
-                order_id=row.get("id"), remote_id=row.get("remote_id")))
+                LOWER, item, key[0], key[1], new_ceiling, new_ceiling,
+                f"потолок упал до ${new_ceiling:.2f} — снижаем с ${price:.2f}, "
+                f"а не снимаем: ордер сохраняется",
+                order_id=row.get("id"), remote_id=row.get("remote_id"),
+                was=price, quantity=qty))
             continue
 
-        qty = int(row.get("quantity") or 1)
         if not ahead:
             # First - and maybe by more than it takes. A rival who stood just
             # under us and left leaves us paying for a fight that is over: at
@@ -528,11 +537,16 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
         # was for.
         limit = new_ceiling
         if answer > limit + 1e-9:
+            # Not answered, and not taken down either. Standing behind costs
+            # nothing - no money is held by an order - and when the rival
+            # fills or leaves we lead again for free. Taking it down meant
+            # placing it again later, out of the day's 200 creates.
             actions.append(Action(
-                CANCEL, item, key[0], key[1], price, new_ceiling,
-                f"перебили до ${top:.2f}, ответ ${answer:.2f} выше того, "
-                f"что позволяет маржа (${limit:.2f})", order_id=row.get("id"),
-                remote_id=row.get("remote_id"), quantity=qty))
+                KEEP, item, key[0], key[1], price, new_ceiling,
+                f"перебили до ${top:.2f}, ответ ${answer:.2f} выше потолка "
+                f"${limit:.2f} — стоим позади, ордер сохраняем",
+                order_id=row.get("id"), remote_id=row.get("remote_id"),
+                quantity=qty))
             continue
 
         actions.append(Action(

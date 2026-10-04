@@ -70,22 +70,29 @@ def test_being_outbid_is_not_by_itself_a_reason_to_answer():
     assert slow[0].was == 100.0
 
 
-def test_a_position_bid_past_its_ceiling_is_abandoned_not_chased():
-    # Answering this rival would cost $111, and $110 is the most the trade
-    # is worth; the ceiling itself is still a price we would pay.
+def test_a_position_bid_past_its_ceiling_is_kept_behind_not_chased():
+    """Answering would cost $111 against a $110 ceiling, so it is not
+    answered - and not taken down either: standing behind costs nothing, the
+    rival may fill or leave, and placing it again would spend one of the
+    day's 200 creates."""
     book = [{"price": 110.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}]
     acts = reconcile("Gloves", [band(0.15, 0.17, 100.0, 110.0, lam=0.03)],
                      [row(0.15, 0.17, 100.0, 110.0)], book,
                      Limits(patience_minutes=1440.0))
-    assert acts[0].kind == CANCEL
-    assert "выше того, что позволяет маржа" in acts[0].reason
+    assert acts[0].kind == KEEP
+    assert "стоим позади" in acts[0].reason and acts[0].price == 100.0
 
 
-def test_an_order_whose_ceiling_has_fallen_under_it_is_pulled():
-    """The market moved down; what we are bidding is no longer worth paying."""
+def test_an_order_whose_ceiling_has_fallen_under_it_comes_down_to_it():
+    """The market moved down; what we are bidding is no longer worth paying.
+    Brought down to the new ceiling in place, rather than taken down."""
+    from src.executor import LOWER
+
     acts = reconcile("Gloves", [band(0.15, 0.17, 95.0, 96.0)],
-                     [row(0.15, 0.17, 100.0, 110.0)], [], Limits())
-    assert acts[0].kind == CANCEL and "выше потолка" in acts[0].reason
+                     [dict(row(0.15, 0.17, 100.0, 110.0), quantity=2)], [],
+                     Limits())
+    assert acts[0].kind == LOWER and acts[0].price == 96.0
+    assert acts[0].was == 100.0 and acts[0].quantity == 2
 
 
 def test_a_band_that_stopped_qualifying_is_cancelled():

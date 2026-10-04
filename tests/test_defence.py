@@ -109,7 +109,9 @@ def test_a_slow_band_bid_over_is_answered_in_place():
     db.close()
 
 
-def test_a_rival_above_our_ceiling_takes_us_out():
+def test_a_rival_above_our_ceiling_does_not_take_us_out():
+    """Outbid past the ceiling: the order stays, behind. Taking it down cost
+    one of the day's 200 creates to put it back."""
     col, db = _collector()
     rival = [{"price": 191.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
     item_id, name = _stock(db, rival=rival)
@@ -120,10 +122,10 @@ def test_a_rival_above_our_ceiling_takes_us_out():
     col.client.send_json = lambda m, u, b=None, h=None: sent.append((m, u)) or {}
     db.set_setting("an_patience_min", "720")
 
-    out = col.defend_orders()
-    assert [r["action"]["kind"] for r in out["results"]] == ["cancel"]
-    assert sent[0][0] == "DELETE"
-    assert db.our_orders(item_id) == [], "and we stop holding it"
+    out = (col.defend_orders() or {}).get("results", [])
+    assert "cancel" not in [r["action"]["kind"] for r in out]
+    assert all(m != "DELETE" for m, _ in sent)
+    assert len(db.our_orders(item_id)) == 1, "still standing"
     db.close()
 
 
