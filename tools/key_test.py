@@ -1,9 +1,10 @@
-"""Проверка API-ключа CSFloat: один запрос, в окне.
+"""Проверка API-ключа CSFloat, в окне.
 
-Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ДВА
-запроса — одно объявление из /api/v1/listings и стакан ордеров к нему — и
-покажет лимиты CSFloat для каждого: у них разные счётчики. Ключ и пароль
-прокси не сохраняются и целиком не печатаются.
+Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ТРИ
+запроса — одно объявление из /api/v1/listings, стакан ордеров к нему и чтение
+своего аккаунта (/api/v1/me, ничего не меняет) — и покажет лимиты CSFloat для
+каждого: у них разные счётчики. Ключ и пароль прокси не сохраняются и
+целиком не печатаются; ответ аккаунта не печатается вовсе.
 
 Нужен только Python 3 — ничего ставить не надо:
     python csfloat_key_test.py
@@ -32,6 +33,9 @@ MEANING = {
 
 
 BOOK = "https://csfloat.com/api/v1/listings/{id}/buy-orders?limit=1"
+# Our own account: what placing, cancelling and reading orders are counted
+# against. Read only - nothing on the account changes.
+ME = "https://csfloat.com/api/v1/me"
 
 
 def masked(proxy: str) -> str:
@@ -71,9 +75,35 @@ def _limits(headers) -> list[str]:
 
 
 def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0,
-          book_url: str = BOOK) -> str:
-    """Два запроса: листинг и стакан ордеров к нему. У CSFloat у них разные
-    лимиты, и для обхода важны оба. Возвращает отчёт текстом."""
+          book_url: str = BOOK, me_url: str = ME) -> str:
+    """Три запроса: листинг, стакан ордеров к нему и свой аккаунт. У CSFloat
+    у них разные лимиты. Возвращает отчёт текстом."""
+    text = _market(key, proxy, url, timeout, book_url)
+    return text + "\n\n" + _account(key, proxy, me_url, timeout)
+
+
+def _account(key: str, proxy: str, me_url: str, timeout: float) -> str:
+    """Чтение своего аккаунта. Тело ответа не печатается: там id и баланс,
+    нужны только лимиты."""
+    handlers = []
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        status, headers, body = _get(opener, me_url, key, timeout)
+    except Exception as exc:
+        return f"3. Свой аккаунт — не дошёл: {type(exc).__name__}: {exc}"
+    lines = [f"3. Свой аккаунт (/me — как выставление и сверка) — HTTP {status}: "
+             f"{MEANING.get(status, 'неожиданный ответ')}"]
+    lines += _limits(headers)
+    if status != 200:
+        lines.append("  ответ: " + (body.decode("utf-8", "replace").strip()[:300]
+                                    or "(пусто)"))
+    return "\n".join(lines)
+
+
+def _market(key: str, proxy: str, url: str, timeout: float,
+            book_url: str) -> str:
     handlers = []
     if proxy:
         handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
@@ -172,7 +202,7 @@ def main() -> None:
             return
         button.config(state="disabled")
         out.delete("1.0", "end")
-        out.insert("end", "Отправляю один запрос…")
+        out.insert("end", "Отправляю три запроса…")
         proxy = proxy_entry.get().strip()
         # В отдельном потоке, чтобы окно не зависало, пока ждём ответ.
         threading.Thread(
