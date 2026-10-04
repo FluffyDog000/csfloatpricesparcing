@@ -153,37 +153,22 @@ def run_forever(collector: Collector) -> None:
                 schedule(name, time.monotonic() + i * new_step, new_step)
                 log.info("New item picked up from DB: '%s'", name)
 
-        if not heap:
-            time.sleep(min(RESYNC_SECONDS, 5.0))
-            continue
-
-        # Quota exhausted (x-ratelimit-remaining ~ 0): wait for the reset.
-        quota_wait = collector.quota_pause_seconds()
-        if quota_wait > 0:
-            if time.monotonic() - last_quota_log >= 300.0:
-                last_quota_log = time.monotonic()
-                _, remaining, _ = collector.quota()
-                log.warning("API quota spent (remaining=%s); waiting %.1f min for reset",
-                            remaining, quota_wait / 60.0)
-            time.sleep(min(quota_wait, 5.0))
-            continue
-
-        # Global 429 cooldown: hold every item until CSFloat lets us back in.
-        cooling = collector.client.cooldown_remaining()
-        if cooling > 0:
-            if time.monotonic() - last_cooldown_log >= 60.0:
-                last_cooldown_log = time.monotonic()
-                log.warning("Rate-limited by CSFloat; polling paused for %.1f min",
-                            cooling / 60.0)
-            time.sleep(min(cooling, 5.0))
-            continue
-
-        # "Poll now" from the dashboard. Handled after the quota and cooldown
-        # gates above, so a manual request never punches through a rate limit —
-        # it just waits, and the flag stays set until it can run.
+        # Requests from the dashboard and the account's own work: an approved
+        # plan, the sync, the defence, the sweeps. Ahead of the sales polls'
+        # gates below, not behind them. Those gates are about the addresses
+        # the anonymous sales history is read from; the plan, the sync and
+        # the defence go out on the main key's own addresses and the sweeps
+        # on the analysis keys', each with limits of their own. Behind the
+        # gates, an approved plan sat "waiting for the collector" for as long
+        # as the history addresses were spent.
         if time.monotonic() - last_manual_check >= MANUAL_POLL_CHECK_SECONDS:
             last_manual_check = time.monotonic()
-            for row in collector.db.pending_poll_requests():
+            # "Poll now" is a sales poll, and waits for the history addresses
+            # like any other: the flag stays set until it can run.
+            history_free = (collector.quota_pause_seconds() <= 0
+                            and collector.client.cooldown_remaining() <= 0)
+            for row in (collector.db.pending_poll_requests()
+                        if history_free else []):
                 item = active.get(row["market_hash_name"])
                 if item is None:
                     collector.db.clear_poll_request(int(row["id"]))
@@ -260,6 +245,31 @@ def run_forever(collector: Collector) -> None:
                 log.info("Swept %d of %d item(s) on %d worker(s), %d failed",
                          len(done["swept"]), len(names), done["workers"],
                          len(done["failed"]))
+
+        if not heap:
+            time.sleep(min(RESYNC_SECONDS, 5.0))
+            continue
+
+        # Quota exhausted (x-ratelimit-remaining ~ 0): wait for the reset.
+        quota_wait = collector.quota_pause_seconds()
+        if quota_wait > 0:
+            if time.monotonic() - last_quota_log >= 300.0:
+                last_quota_log = time.monotonic()
+                _, remaining, _ = collector.quota()
+                log.warning("API quota spent (remaining=%s); waiting %.1f min for reset",
+                            remaining, quota_wait / 60.0)
+            time.sleep(min(quota_wait, 5.0))
+            continue
+
+        # Global 429 cooldown: hold every item until CSFloat lets us back in.
+        cooling = collector.client.cooldown_remaining()
+        if cooling > 0:
+            if time.monotonic() - last_cooldown_log >= 60.0:
+                last_cooldown_log = time.monotonic()
+                log.warning("Rate-limited by CSFloat; polling paused for %.1f min",
+                            cooling / 60.0)
+            time.sleep(min(cooling, 5.0))
+            continue
 
         run_at, _, name = heap[0]
         delay = run_at - time.monotonic()
