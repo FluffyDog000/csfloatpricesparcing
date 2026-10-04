@@ -1,8 +1,9 @@
 """Проверка API-ключа CSFloat: один запрос, в окне.
 
-Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ОДИН
-запрос (одно объявление из /api/v1/listings) и покажет, что ответил CSFloat.
-Ключ никуда не сохраняется и не печатается целиком.
+Вставь ключ, при желании прокси, нажми «Проверить». Скрипт отправит ДВА
+запроса — одно объявление из /api/v1/listings и стакан ордеров к нему — и
+покажет лимиты CSFloat для каждого: у них разные счётчики. Ключ и пароль
+прокси не сохраняются и целиком не печатаются.
 
 Нужен только Python 3 — ничего ставить не надо:
     python csfloat_key_test.py
@@ -12,6 +13,7 @@
 import datetime
 import hashlib
 import json
+import re
 import time
 import threading
 import urllib.error
@@ -29,12 +31,16 @@ MEANING = {
 }
 
 
-def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0) -> str:
-    """Один запрос. Возвращает отчёт текстом."""
-    handlers = []
-    if proxy:
-        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-    opener = urllib.request.build_opener(*handlers)
+BOOK = "https://csfloat.com/api/v1/listings/{id}/buy-orders?limit=1"
+
+
+def masked(proxy: str) -> str:
+    """The proxy as printed: the password replaced, so the output can be
+    pasted anywhere."""
+    return re.sub(r"//([^:/@]+):([^@]+)@", r"//\1:***@", proxy)
+
+
+def _get(opener, url: str, key: str, timeout: float):
     req = urllib.request.Request(url, headers={
         "Authorization": key,
         "Accept": "application/json",
@@ -42,29 +48,45 @@ def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0) -> s
     })
     try:
         resp = opener.open(req, timeout=timeout)
-        status, headers, body = resp.status, resp.headers, resp.read()
+        return resp.status, resp.headers, resp.read()
     except urllib.error.HTTPError as exc:
-        status, headers, body = exc.code, exc.headers, exc.read()
+        return exc.code, exc.headers, exc.read()
+
+
+def _limits(headers) -> list[str]:
+    quota = [(k, v) for k, v in headers.items()
+             if k.lower().startswith(("x-ratelimit", "retry-after"))]
+    if not quota:
+        return ["  заголовков лимита нет"]
+    out = [f"  {k}: {v}" for k, v in quota]
+    reset = headers.get("x-ratelimit-reset")
+    try:
+        left = float(reset) - time.time()
+        when = datetime.datetime.fromtimestamp(float(reset)).strftime("%H:%M:%S")
+        out.append(f"  → счётчик обнулится в {when}, через "
+                   + (f"{left / 60:.1f} мин" if left >= 60 else f"{left:.0f} с"))
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
+def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0,
+          book_url: str = BOOK) -> str:
+    """Два запроса: листинг и стакан ордеров к нему. У CSFloat у них разные
+    лимиты, и для обхода важны оба. Возвращает отчёт текстом."""
+    handlers = []
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        status, headers, body = _get(opener, url, key, timeout)
     except Exception as exc:  # сеть, прокси, DNS, таймаут
         return f"Запрос не дошёл до CSFloat:\n{type(exc).__name__}: {exc}"
 
     lines = [f"Ключ: …{key[-4:]}  (отпечаток {hashlib.sha256(key.encode()).hexdigest()[:8]})",
-             f"Через: {proxy or 'напрямую'}",
-             f"HTTP {status} — {MEANING.get(status, 'неожиданный ответ')}", ""]
-    quota = [(k, v) for k, v in headers.items()
-             if k.lower().startswith(("x-ratelimit", "retry-after"))]
-    if quota:
-        lines.append("Лимиты:")
-        lines += [f"  {k}: {v}" for k, v in quota]
-        reset = headers.get("x-ratelimit-reset")
-        try:
-            left = float(reset) - time.time()
-            when = datetime.datetime.fromtimestamp(float(reset)).strftime("%H:%M:%S")
-            lines.append(f"  → счётчик обнулится в {when}, через "
-                         + (f"{left / 60:.1f} мин" if left >= 60 else f"{left:.0f} с"))
-        except (TypeError, ValueError):
-            pass
-        lines.append("")
+             f"Через: {masked(proxy) if proxy else 'напрямую'}", "",
+             f"1. Листинги — HTTP {status}: {MEANING.get(status, 'неожиданный ответ')}"]
+    lines += _limits(headers)
 
     text = body.decode("utf-8", "replace")
     try:
@@ -72,16 +94,29 @@ def probe(key: str, proxy: str = "", url: str = URL, timeout: float = 20.0) -> s
     except ValueError:
         data = None
     rows = data.get("data") if isinstance(data, dict) else data
-    if status == 200 and isinstance(rows, list) and rows:
-        item = rows[0].get("item", {})
-        price = rows[0].get("price")
-        lines.append("Пример ответа:")
-        lines.append(f"  {item.get('market_hash_name', '?')}")
-        if price is not None:
-            lines.append(f"  цена ${price / 100:.2f}, float {item.get('float_value')}")
-    else:
-        lines.append("Ответ сервера:")
-        lines.append("  " + (text.strip()[:500] or "(пусто)"))
+    if not (status == 200 and isinstance(rows, list) and rows):
+        lines.append("  ответ: " + (text.strip()[:500] or "(пусто)"))
+        return "\n".join(lines)
+    item = rows[0].get("item", {})
+    lines.append(f"  пример: {item.get('market_hash_name', '?')}")
+
+    listing_id = rows[0].get("id")
+    if not listing_id:
+        lines.append("\n2. Стакан ордеров — пропущен: в ответе нет id листинга")
+        return "\n".join(lines)
+    try:
+        status, headers, body = _get(opener, book_url.format(id=listing_id),
+                                     key, timeout)
+    except Exception as exc:
+        lines.append(f"\n2. Стакан ордеров — не дошёл: {type(exc).__name__}: {exc}")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append(f"2. Стакан ордеров (buy-orders) — HTTP {status}: "
+                 f"{MEANING.get(status, 'неожиданный ответ')}")
+    lines += _limits(headers)
+    if status != 200:
+        lines.append("  ответ: " + (body.decode('utf-8', 'replace').strip()[:300]
+                                    or "(пусто)"))
     return "\n".join(lines)
 
 
