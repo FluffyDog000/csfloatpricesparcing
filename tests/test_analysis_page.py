@@ -1119,3 +1119,28 @@ def test_an_item_short_of_bands_is_swept_even_when_recent():
     c.post("/api/analysis/items", json={"market_hash_name": name})
 
     assert c.post("/api/analysis/sweep", json={}).get_json()["queued"] == [name]
+
+
+def test_the_analysis_does_not_price_an_item_against_our_own_order():
+    """The plan strips our orders out of the book; the analysis did not, so
+    an item we already bid on was priced against ourselves there, and the
+    page's capital disagreed with the plan's."""
+    c, name = _stocked()
+    before = c.get("/api/analysis").get_json()["items"][0]
+
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    top = max((b for b in before["bands"] if b["take"]), key=lambda b: b["bid"])
+    db.upsert_our_order(item_id, top["float_min"], top["float_max"],
+                        top["bid"] + 1.0, top["ceiling"], state="live",
+                        remote_id="r1")
+    db.replace_buy_orders(item_id, [
+        {"price": 170.0, "qty": 1, "float_min": 0.15, "float_max": 0.17},
+        {"price": top["bid"] + 1.0, "qty": 1, "float_min": top["float_min"],
+         "float_max": top["float_max"]}])
+    db.close()
+
+    after = c.get("/api/analysis").get_json()["items"][0]
+    assert after["capital"] == before["capital"]
+    assert [b["bid"] for b in after["bands"]] == [b["bid"] for b in before["bands"]]

@@ -674,8 +674,13 @@ float, который принимает ордер. Ниже «ожид.» — 
 
     const places = d.actions.filter((a) => a.kind === "place").length;
     const sum = document.createElement("p");
+    const over = d.limits.budget ? tied / d.limits.budget : 0;
     sum.innerHTML = `Ордеров на <b>${money(need)}</b>; их исполнения будут `
-      + `держать около <b>${money(tied)}</b> из <b>${money(d.limits.budget)}</b> `
+      + `держать около <b>${money(tied)}</b> при бюджете <b>${money(d.limits.budget)}</b> `
+      + (d.limits.full_allowance && over > 1
+        ? `(в ${over.toFixed(1)} раза больше — режим «весь лимит CSFloat»: `
+          + `оплатятся те, что исполнятся первыми) `
+        : "")
       + `· ${places} ордер(ов) `
       + `из ${d.limits.max_orders}, не больше `
       + `${d.limits.max_orders_per_item} на предмет`;

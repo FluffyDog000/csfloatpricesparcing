@@ -1075,7 +1075,13 @@ def api_analysis():
                         "screened_out": verdict.reason})
             continue
 
-        orders = db.buy_orders(item_id)
+        # Our own orders are in the public book. The plan takes them out
+        # before pricing; this did not, so every item we already bid on was
+        # priced against ourselves here - a rung read as "cannot outbid"
+        # because the order above it was ours - and the totals on this page
+        # disagreed with the plan's.
+        from src.holdings import strip_own
+        orders = strip_own(db.buy_orders(item_id), db.our_orders(item_id))
         try:
             depth = db.listing_depth(item_id)
         except Exception:  # noqa: BLE001 - an older DB has no such table
