@@ -430,6 +430,12 @@ ul.attention li.att-warn { border-color: #d29922; }
 .og-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
 .og-meta .mono, .og-chain .mono { font-family: var(--mono); font-size: 12px; }
 .og-price { font-family: var(--mono); }
+.og-ceil { font-family: var(--mono); color: var(--muted); }
+.og-next.og-muted { color: var(--muted); }
+.og-next { margin: 6px 14px 0 34px; font-size: 13px; }
+.og-next.og-ok { color: var(--good); }
+.og-next.og-bad { color: var(--bad); }
+.og-next.og-warn { color: #d29922; }
 .og-chain { margin: 0; padding: 8px 14px 10px 34px; display: flex;
             flex-direction: column; gap: 4px; font-size: 13px; }
 .og-chain li { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 3px 6px;

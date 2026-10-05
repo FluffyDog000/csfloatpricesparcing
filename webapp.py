@@ -1573,7 +1573,13 @@ def api_analysis_positions():
     from src.holdings import strip_own
     from src.ladder import rival_bid
 
+    from src.collector import VERDICTS_KEY
+
     db = get_db()
+    try:
+        verdicts = json.loads(db.get_setting(VERDICTS_KEY) or "{}")
+    except ValueError:
+        verdicts = {}
     rows = []
     books: dict[int, list] = {}
     raw_books: dict[int, list] = {}
@@ -1599,9 +1605,18 @@ def api_analysis_positions():
         above = ahead_of(book, lo, hi, price)
         top = rival_bid(book, hi)
         ahead = sum(int(o.get("qty") or 1) for o in above)
+        # The ceiling stored with the order is the one it was last sent with;
+        # the defence re-scores it every pass, and the one it last arrived at
+        # is what the next answer is held to.
+        verdict = verdicts.get(str(row["id"]))
+        ceiling = float(verdict["ceiling"]) if verdict and verdict.get(
+            "ceiling") is not None else float(row["ceiling"])
         rows.append({
             "id": row["id"], "item": name, "float_min": lo, "float_max": hi,
-            "price": price, "ceiling": float(row["ceiling"]),
+            "price": price, "ceiling": ceiling,
+            "placed_ceiling": float(row["ceiling"]),
+            "room": round(ceiling - price, 2),
+            "verdict": verdict,
             "quantity": int(row.get("quantity") or 1),
             "state": row["state"], "remote_id": row["remote_id"],
             "placed_at": row["placed_at"], "note": row["note"],

@@ -417,3 +417,44 @@ def test_the_defence_brings_an_order_down_when_the_rival_below_has_left():
     ev = [e for e in db.order_events() if e["kind"] == "lower"]
     assert ev and ev[0]["was"] == 175.0
     db.close()
+
+
+def test_the_defence_keeps_its_verdict_on_an_order_it_left_alone():
+    """Outbid and not answered is a decision, and nothing in the journal
+    records it - no action, no event. The verdict is what lets the page say
+    "standing behind, the answer is over the ceiling" instead of nothing."""
+    from src.collector import VERDICTS_KEY
+
+    col, db = _collector()
+    rival = [{"price": 191.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=rival)
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    col.client.send_json = lambda *a, **k: {}
+    db.set_setting("an_patience_min", "720")
+
+    col.defend_orders()
+    order_id = str(db.our_orders(item_id)[0]["id"])
+    verdict = json.loads(db.get_setting(VERDICTS_KEY))[order_id]
+    assert verdict["kind"] == "keep"
+    assert "стоим позади" in verdict["reason"]
+    assert verdict["ceiling"] > 0 and verdict["at"]
+    db.close()
+
+
+def test_a_verdict_goes_with_its_order():
+    from src.collector import VERDICTS_KEY
+
+    col, db = _collector()
+    item_id, name = _stock(db)
+    db.set_setting(VERDICTS_KEY, json.dumps({"999": {"kind": "keep"}}))
+    db.upsert_our_order(item_id, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    col.client.send_json = lambda *a, **k: {}
+    col.defend_orders()
+    kept = json.loads(db.get_setting(VERDICTS_KEY))
+    assert "999" not in kept, "an order no longer held drops its verdict"
+    assert str(db.our_orders(item_id)[0]["id"]) in kept
+    db.close()

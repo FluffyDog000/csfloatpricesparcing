@@ -264,6 +264,42 @@
     return out;
   }
 
+  /** What the bot will do with this order next, in words - so "outbid and
+   *  left alone" reads as a decision, not as the bot having missed it. */
+  function outlook(r, defend) {
+    if (r.state === "manual") return ["поставлен вручную — бот его не ведёт", "muted"];
+    if (!r.book) return ["стакан не читан — положение неизвестно", "muted"];
+    const ceil = cash(r.ceiling);
+    const atCeiling = r.room !== undefined && r.room !== null && r.room < 0.005;
+    if (r.price > r.ceiling + 0.005) {
+      return [`цена выше нового потолка ${ceil} — защита снизит до потолка`, "warn"];
+    }
+    if (r.first) {
+      return atCeiling
+        ? [`первые, цена на потолке ${ceil} — если перебьют, выше не пойдём `
+          + "и будем стоять позади", "warn"]
+        : [`первые; если перебьют — поднимем максимум до ${ceil} `
+          + `(запас ${cash(r.room)})`, "ok"];
+    }
+    if (r.top >= r.ceiling - 0.005) {
+      return [`перебили на ${cash(r.top)}, это не ниже потолка ${ceil} — не `
+        + "перебиваем, стоим позади и ждём, пока соперник исполнится или уйдёт",
+        "bad"];
+    }
+    if (!defend) {
+      return [`перебили на ${cash(r.top)}, поднять можно до ${ceil} — `
+        + "автозащита выключена", "bad"];
+    }
+    return [`перебили на ${cash(r.top)} — защита перебьёт, но не выше ${ceil}`
+      + " (или подождёт, если очередь скоро разойдётся)", "warn"];
+  }
+
+  function verdictLine(r) {
+    const v = r && r.verdict;
+    if (!v) return null;
+    return `защита ${when(v.at)}: ${v.reason}`;
+  }
+
   function statusOf(group, posRow) {
     if (posRow) {
       if (posRow.state === "manual") return ["вручную", "st-muted"];
@@ -344,12 +380,24 @@
       sum.appendChild(head);
       const meta = node("div", "og-meta");
       meta.appendChild(node("span", "mono", g.band));
-      meta.appendChild(node("span", "og-price", cash(
-        index[key] ? index[key].price : last.price)));
+      const pr = index[key];
+      meta.appendChild(node("span", "og-price", cash(pr ? pr.price : last.price)
+        + (pr && (pr.quantity || 1) > 1 ? ` ×${pr.quantity}` : "")));
+      if (pr && pr.state !== "manual") {
+        const room = pr.room !== undefined && pr.room !== null && pr.room < 0.005
+          ? "на потолке" : `запас ${cash(pr.room)}`;
+        meta.appendChild(node("span", "og-ceil", `потолок ${cash(pr.ceiling)} · ${room}`));
+      }
       meta.appendChild(node("span", "muted", parts.join(" · ")));
       meta.appendChild(node("span", "muted mono", when(last.at)));
       sum.appendChild(meta);
       det.appendChild(sum);
+      if (pr) {
+        const [text, tone] = outlook(pr, lastJournal && lastJournal.defend);
+        det.appendChild(node("p", "og-next og-" + tone, "Дальше: " + text));
+        const v = verdictLine(pr);
+        if (v) det.appendChild(node("p", "og-next muted", v));
+      }
 
       // Oldest first inside: a history reads forwards.
       const chain = node("ol", "og-chain");
@@ -484,7 +532,8 @@
     const t = document.createElement("table");
     t.className = "stat journal stack";
     t.innerHTML = `<thead><tr><th>предмет</th><th>float</th><th>наша цена</th>
-      <th>потолок</th><th>верх стакана</th><th>положение</th>
+      <th>потолок</th><th>запас</th><th>верх стакана</th><th>положение</th>
+      <th>что дальше</th>
       <th title="как бот отличил наш ордер от чужих в стакане">узнан</th>
       <th>стакан читан</th></tr></thead>`;
     const tb = document.createElement("tbody");
@@ -500,12 +549,20 @@
       cell("предмет", r.item + (r.state === "manual" ? "  (вручную)" : ""));
       cell("float", Number(r.float_min).toFixed(4) + "–" + Number(r.float_max).toFixed(4), "mono");
       cell("наша цена", cash(r.price) + ((r.quantity || 1) > 1 ? ` ×${r.quantity}` : ""));
-      cell("потолок", cash(r.ceiling));
+      const moved = Math.abs((r.placed_ceiling || r.ceiling) - r.ceiling) >= 0.005;
+      const ceilCell = cell("потолок", cash(r.ceiling));
+      if (moved) ceilCell.title = `при выставлении был ${cash(r.placed_ceiling)}`;
+      cell("запас", r.state === "manual" ? "—"
+        : r.room < 0.005 ? "на потолке" : cash(r.room),
+        r.room < 0.005 ? "err" : "");
       cell("верх стакана", r.top ? cash(r.top) : "—");
       cell("положение", !r.book ? "стакан не читан"
         : r.first ? "мы первые"
         : `перебили: впереди ${r.ahead} на ${cash(r.top)}`,
         r.first ? "" : "err");
+      const [next] = outlook(r, lastJournal && lastJournal.defend);
+      const nextCell = cell("что дальше", next, "muted");
+      if (r.verdict) nextCell.title = verdictLine(r);
       cell("узнан", !r.book ? "—" : r.seen_in_book ? "по id" : "по цене и float",
         r.seen_in_book ? "" : "muted");
       cell("стакан читан", r.swept_at ? when(r.swept_at) : "—", "mono");

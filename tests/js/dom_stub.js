@@ -122,6 +122,7 @@ function deepText(node) {
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),
     positions: deepText(nodes["p-note"]),
+    positionTable: deepText(nodes["p-table"]),
     positionRows: (() => {
       const box = nodes["p-table"] || el("div");
       const t = box.children[0];

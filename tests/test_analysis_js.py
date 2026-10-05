@@ -747,3 +747,46 @@ def test_one_cause_failing_many_orders_is_one_line():
     got = _run_script("static/journal.js", _journal(events))
     assert "8 ордер(ов): не поднят" in got["attention"]
     assert got["attention"].count("Item ") == 8, "the orders are listed under it"
+
+
+def _position(**over):
+    row = {"id": 1, "item": "A (FT)", "float_min": 0.15, "float_max": 0.17,
+           "price": 10.0, "ceiling": 12.0, "placed_ceiling": 12.0, "room": 2.0,
+           "quantity": 1, "state": "live", "remote_id": "r1", "top": 9.0,
+           "ahead": 0, "first": True, "seen_in_book": True,
+           "swept_at": "2026-09-19T12:00:00", "book": 3, "verdict": None}
+    row.update(over)
+    return {"orders": [row], "outbid": 0 if row["first"] else 1,
+            "book_named": 0, "book_rows": 3, "checking": False}
+
+
+def test_an_order_shows_its_ceiling_and_what_comes_next():
+    got = _run_script("static/journal.js", _journal(
+        [_event(1, "place")], defend=True, positions=_position()))
+    assert "потолок $12.00" in got["journalText"]
+    assert "запас $2.00" in got["journalText"]
+    assert "поднимем максимум до $12.00" in got["journalText"]
+
+
+def test_an_order_outbid_past_its_ceiling_says_it_will_not_answer():
+    """The user's question exactly: outbid, and the bot does nothing - is
+    that a decision or a miss? The page has to say which."""
+    pos = _position(first=False, ahead=1, top=12.5, verdict={
+        "kind": "keep", "at": "2026-09-19T12:05:00", "ceiling": 12.0,
+        "price": 10.0,
+        "reason": "перебили до $12.50, ответ $12.51 выше потолка $12.00 — "
+                  "стоим позади, ордер сохраняем"})
+    got = _run_script("static/journal.js", _journal(
+        [_event(1, "place")], defend=True, positions=pos))
+    assert "не перебиваем, стоим позади" in got["journalText"]
+    assert "стоим позади, ордер сохраняем" in got["journalText"], \
+        "and the defence's own last verdict is shown"
+    assert "не перебиваем" in got["positionTable"]
+
+
+def test_an_order_at_its_ceiling_is_marked_as_such():
+    got = _run_script("static/journal.js", _journal(
+        [_event(1, "place", price=12.0)], defend=True,
+        positions=_position(price=12.0, room=0.0)))
+    assert "на потолке" in got["journalText"]
+    assert "выше не пойдём" in got["journalText"]

@@ -200,3 +200,27 @@ def test_a_rival_scoped_below_our_top_is_not_ahead():
     row = body["orders"][0]
     assert body["outbid"] == 0 and row["first"] and row["ahead"] == 0
     assert row["top"] == 23.30, "the best bid that would take our item"
+
+
+def test_the_ceiling_shown_is_the_one_the_defence_last_arrived_at():
+    """The stored ceiling is the one the order was sent with; the defence
+    re-scores it every pass, and the next answer is held to the new one."""
+    from src.collector import VERDICTS_KEY
+
+    c = _app()
+    db = _db()
+    item_id = db.add_item(NAME)
+    db.upsert_our_order(item_id, 0.15, 0.17, 100.0, 120.0, state="live",
+                        remote_id="r1")
+    order_id = db.our_orders(item_id)[0]["id"]
+    db.set_setting(VERDICTS_KEY, json.dumps({str(order_id): {
+        "kind": "keep", "reason": "мы первые в полосе", "ceiling": 110.0,
+        "price": 100.0, "at": "2026-10-05T10:00:00+00:00"}}))
+    db.replace_buy_orders(item_id, [
+        {"price": 90.0, "qty": 1, "float_min": 0.15, "float_max": 0.17}])
+    db.close()
+
+    row = c.get("/api/analysis/positions").get_json()["orders"][0]
+    assert row["ceiling"] == 110.0 and row["placed_ceiling"] == 120.0
+    assert row["room"] == 10.0
+    assert row["verdict"]["reason"] == "мы первые в полосе"

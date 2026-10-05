@@ -51,6 +51,9 @@ log = logging.getLogger("csfloat.collector")
 QUOTA_RESERVE = 15
 QUOTA_FACTOR_MAX = 60.0
 MAX_QUOTA_PAUSE_SECONDS = 3600.0   # re-check at least hourly while waiting
+# The defence's last verdict on each held order, by our_orders id (see
+# `defend_orders`); read by the journal's positions.
+VERDICTS_KEY = "defend_verdicts"
 
 
 
@@ -1245,6 +1248,11 @@ class Collector:
             by_item.setdefault(int(row["item_id"]), []).append(row)
 
         results: list[dict] = []
+        # What the defence decided about each order this pass, kept or acted
+        # on. The journal only records actions, and "outbid, the answer is
+        # over the ceiling - standing behind" happens without one, so without
+        # this the page could not say why an outbid order was left alone.
+        verdicts: dict[str, dict] = {}
         looked = self._read_held_books(by_item, defend_minutes(self.db))
         for item_id, rows in by_item.items():
             name = self.db.item_name(item_id)
@@ -1279,8 +1287,14 @@ class Collector:
                     float(row["float_min"]), float(row["float_max"]),
                     sales, book, span, depth, params, own=own))
 
-            actions = [a for a in reconcile(name, wanted, rows, book, limits)
-                       if a.kind in (RAISE, LOWER, CANCEL)]
+            decided = reconcile(name, wanted, rows, book, limits)
+            for a in decided:
+                if a.order_id is not None:
+                    verdicts[str(a.order_id)] = {
+                        "kind": a.kind, "reason": a.reason,
+                        "ceiling": a.ceiling, "price": a.price,
+                        "at": utcnow_iso()}
+            actions = [a for a in decided if a.kind in (RAISE, LOWER, CANCEL)]
             if not actions:
                 continue
             self.client.pool.pin(for_orders=True)
@@ -1315,11 +1329,26 @@ class Collector:
                    "results": results}
         self.db.set_setting("defend_result",
                             _json.dumps(summary, ensure_ascii=False))
+        self._store_verdicts(verdicts, held)
         self.db.set_setting("defend_last_at", utcnow_iso())
         if results:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    def _store_verdicts(self, verdicts: dict[str, dict], held: list[dict]) -> None:
+        """Keep the latest verdict for every order still held: an item skipped
+        this pass keeps the one from before, a gone order loses its own."""
+        import json as _json
+
+        try:
+            old = _json.loads(self.db.get_setting(VERDICTS_KEY) or "{}")
+        except ValueError:
+            old = {}
+        ids = {str(r["id"]) for r in held}
+        merged = {k: v for k, v in old.items() if k in ids}
+        merged.update(verdicts)
+        self.db.set_setting(VERDICTS_KEY, _json.dumps(merged, ensure_ascii=False))
 
     def _read_held_books(self, by_item: dict, minutes: float) -> int:
         """Fresh books and asks for every item we hold an order on, several
