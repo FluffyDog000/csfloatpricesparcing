@@ -299,3 +299,130 @@ def test_a_dead_proxy_is_not_reported_as_a_missing_trades_path():
     out = col.sync_trades()
     assert "прокси" in out["error"] and "Host unreachable" in out["error"]
     assert "DevTools" not in out["error"]
+
+
+# -- what is counted ------------------------------------------------------------
+
+def _stocked(*raws):
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    db.add_item(NAME)
+    for t in parsed(*raws):
+        db.upsert_trade(t)
+    db.close()
+    return webapp, c
+
+
+def test_trades_before_the_start_date_are_not_counted():
+    """Bought long before the bot, sold in Steam or kept: those purchases sat
+    in "held" for ever and the old sales in "no purchase found"."""
+    webapp, c = _stocked(
+        trade("1", "buy", 10000, at="2026-08-01T10:00:00Z"),               # old, held
+        trade("2", "buy", 5000, flt=0.2, at="2026-08-02T10:00:00Z"),       # old
+        trade("3", "sell", 6000, flt=0.2, at="2026-09-05T10:00:00Z"),      # ...sold after
+        trade("4", "sell", 7000, flt=0.3, at="2026-08-03T10:00:00Z"),      # old, unmatched
+        trade("5", "buy", 9000, flt=0.4, at="2026-09-10T10:00:00Z"),       # new, held
+        trade("6", "buy", 8000, flt=0.5, at="2026-09-11T10:00:00Z"),
+        trade("7", "sell", 9000, flt=0.5, at="2026-09-12T10:00:00Z"))
+    before = c.get("/api/profit?days=0").get_json()
+    assert before["all_time"]["deals"] == 2 and len(before["holding"]) == 2
+
+    r = c.post("/api/profit/settings", json={"since": "2026-09-01"})
+    assert r.status_code == 200
+    body = c.get("/api/profit?days=0").get_json()
+    assert body["settings"]["since"] == "2026-09-01"
+    assert [h["trade_id"] for h in body["holding"]] == ["5"]
+    assert [d["buy_id"] for d in body["closed"]] == ["6"], \
+        "bought before the date and sold after is left out too"
+    assert body["all_time"]["deals"] == 1
+    assert body["unmatched"] == []
+
+
+def test_a_trade_taken_out_by_hand_is_nowhere_and_can_come_back():
+    webapp, c = _stocked(
+        trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+        trade("2", "sell", 11000, at="2026-09-09T10:00:00Z"),
+        trade("3", "buy", 9000, flt=0.4, at="2026-09-10T10:00:00Z"))
+    assert c.post("/api/profit/exclude",
+                  json={"trade_ids": ["3"], "excluded": True}).status_code == 200
+    body = c.get("/api/profit?days=0").get_json()
+    assert body["holding"] == []
+    assert [x["trade_id"] for x in body["excluded"]] == ["3"]
+
+    c.post("/api/profit/exclude", json={"trade_ids": ["1", "2"]})
+    body = c.get("/api/profit?days=0").get_json()
+    assert body["closed"] == [] and body["unmatched"] == [], \
+        "a deal goes whole: its sale does not turn up as one with no purchase"
+
+    c.post("/api/profit/exclude", json={"trade_ids": ["1", "2", "3"],
+                                        "excluded": False})
+    body = c.get("/api/profit?days=0").get_json()
+    assert len(body["closed"]) == 1 and len(body["holding"]) == 1
+    assert body["excluded"] == []
+
+
+def test_an_excluded_purchase_does_not_take_the_sale_with_it():
+    """Two copies with one float and seed: taking out the first purchase
+    leaves the sale to pair with the second, not to vanish."""
+    webapp, c = _stocked(
+        trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+        trade("2", "buy", 9500, at="2026-09-02T10:00:00Z"),
+        trade("3", "sell", 11000, at="2026-09-09T10:00:00Z"))
+    c.post("/api/profit/exclude", json={"trade_ids": ["1"]})
+    body = c.get("/api/profit?days=0").get_json()
+    assert [d["buy_id"] for d in body["closed"]] == ["2"]
+
+
+def test_the_held_estimate_uses_the_period_set_on_the_page():
+    import datetime as dt
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.add_item(NAME)
+    for t in parsed(trade("1", "buy", 9000, at="2026-09-10T10:00:00Z")):
+        db.upsert_trade(t)
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = [(f"r{i}", 100.0, now - dt.timedelta(days=2)) for i in range(6)]
+    rows += [(f"o{i}", 60.0, now - dt.timedelta(days=20)) for i in range(7)]
+    for sid, price, at in rows:
+        db.conn.execute(
+            "INSERT INTO sales (sale_id, item_id, market_hash_name, price, "
+            "float_value, sold_at, scraped_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (sid, item_id, NAME, price, 0.155, at.isoformat(), at.isoformat()))
+    db.conn.commit()
+    db.close()
+
+    wide = c.get("/api/profit?days=0").get_json()["holding"][0]
+    assert wide["estimate"] == 60.0, "thirteen sales over 30 days, median $60"
+    assert "за 30 дн" in wide["basis"]
+    c.post("/api/profit/settings", json={"estimate_days": 7})
+    narrow = c.get("/api/profit?days=0").get_json()["holding"][0]
+    assert narrow["estimate"] == 100.0, "only the last week"
+    assert "за 7 дн" in narrow["basis"]
+
+
+def test_bad_settings_are_refused_with_a_reason():
+    webapp, c = _app()
+    r = c.post("/api/profit/settings", json={"since": "05.10.2026"})
+    assert r.status_code == 400 and "ГГГГ-ММ-ДД" in r.get_json()["error"]
+    r = c.post("/api/profit/settings", json={"estimate_days": 0})
+    assert r.status_code == 400
+    body = c.get("/api/profit").get_json()
+    assert body["settings"] == {"since": "", "estimate_days": 30}
+    assert c.post("/api/profit/settings", json={"since": ""}).status_code == 200
+
+
+def test_the_page_shows_the_settings_and_the_excluded():
+    from tests.test_analysis_js import _run_script
+
+    webapp, c = _stocked(
+        trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+        trade("3", "buy", 9000, flt=0.4, at="2026-09-10T10:00:00Z"))
+    c.post("/api/profit/settings", json={"since": "2026-09-01"})
+    c.post("/api/profit/exclude", json={"trade_ids": ["3"]})
+    got = _run_script("static/profit.js", c.get("/api/profit?days=0").get_json())
+    text = got["profit"]
+    assert "Ошибка" not in got["status"], got["status"]
+    assert "Сделки до 01.09.2026 не учитываются" in got["settingsNote"]
+    assert "Убранные из учёта (1)" in got["excludedTitle"]
+    assert "вернуть" in got["excludedText"]

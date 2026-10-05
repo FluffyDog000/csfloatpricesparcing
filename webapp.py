@@ -1763,12 +1763,26 @@ def api_profit():
     except (TypeError, ValueError):
         days = 0.0
     since = pf.since_iso(days) if days > 0 else ""
+    conf = _profit_settings(db)
+    start = conf["since"]
 
-    book = pf.pair(db.all_trades(), fee)
+    def counted(when: str | None) -> bool:
+        """On or after the date the owner counts from. Compared by date:
+        trades arrive as "...Z" and "+00:00" alike, and a day is the unit."""
+        return not start or (when or "")[:10] >= start
+
+    everything = db.all_trades()
+    # Taken out before pairing: a purchase left in would still claim the
+    # sale of the same skin, and the sale would vanish with it.
+    book = pf.pair([t for t in everything
+                    if t["trade_id"] not in conf["excluded"]], fee)
     events = [e for e in db.order_events(limit=50000, include_dry=False)
               if e["ok"] and e["kind"] in ("place", "raise")]
 
-    closed = [d for d in book.closed if (d["sold_at"] or "") >= since]
+    # Bought before the date and sold after goes too: the purchase is part of
+    # what the date leaves out, and half a deal is no profit to report.
+    counted_closed = [d for d in book.closed if counted(d["bought_at"])]
+    closed = [d for d in counted_closed if (d["sold_at"] or "") >= since]
     for d in closed:
         d["by_bot"] = pf.by_bot({"market_hash_name": d["market_hash_name"],
                                  "float_value": d["float_value"],
@@ -1776,14 +1790,18 @@ def api_profit():
 
     sales_cache: dict[str, list] = {}
     holding = []
-    cutoff = pf.since_iso(pf.ESTIMATE_DAYS)
+    cutoff = pf.since_iso(conf["estimate_days"])
     for t in book.holding:
+        if not counted(t.get("done_at") or t.get("created_at")):
+            continue
         name = t["market_hash_name"] or ""
         if name not in sales_cache:
             item_id = db.get_item_id(name) if name else None
             sales_cache[name] = (db.query_sales(int(item_id), since_iso=cutoff)
                                  if item_id is not None else [])
         est, basis = pf.estimate(sales_cache[name], t["float_value"])
+        if est is not None:
+            basis += f" за {conf['estimate_days']} дн"
         bought = float(t["price"] or 0)
         bought_at = t.get("done_at") or t.get("created_at")
         when = parse_iso(bought_at)
@@ -1799,6 +1817,7 @@ def api_profit():
                            if est is not None else None),
             "by_bot": pf.by_bot(t, events),
             "tracked": bool(sales_cache[name]),
+            "trade_id": t["trade_id"],
         })
 
     valued = [h for h in holding if h["estimate"] is not None]
@@ -1806,7 +1825,7 @@ def api_profit():
         "fee": fee,
         "days": days,
         "totals": pf.totals(closed),
-        "all_time": pf.totals(book.closed),
+        "all_time": pf.totals(counted_closed),
         "closed": closed[:1000],
         "holding": holding,
         "holding_totals": {
@@ -1817,13 +1836,97 @@ def api_profit():
             "unvalued": len(holding) - len(valued),
         },
         "unmatched": [dict(t) for t in book.unmatched
-                      if ((t.get("done_at") or t.get("created_at") or "") >= since)],
+                      if ((t.get("done_at") or t.get("created_at") or "") >= since)
+                      and counted(t.get("done_at") or t.get("created_at"))],
         "pending": [dict(t) for t in book.pending],
-        "trades": len(db.all_trades()),
+        "trades": len(everything),
+        "settings": {"since": start, "estimate_days": conf["estimate_days"]},
+        "excluded": [{"trade_id": t["trade_id"], "role": t.get("role"),
+                      "market_hash_name": t.get("market_hash_name"),
+                      "float_value": t.get("float_value"),
+                      "price": t.get("price"),
+                      "at": t.get("done_at") or t.get("created_at")}
+                     for t in everything if t["trade_id"] in conf["excluded"]],
         "sync": _json_setting(db, "trades_sync_result"),
         "sync_at": db.get_setting("trades_sync_at") or None,
         "sync_pending": db.get_setting("trades_sync_requested") == "1",
     })
+
+
+PROFIT_SINCE_KEY = "profit_since"
+PROFIT_DAYS_KEY = "profit_estimate_days"
+PROFIT_EXCLUDED_KEY = "profit_excluded"
+PROFIT_DAYS_BOUNDS = (1, 180)
+
+
+def _profit_settings(db) -> dict:
+    """What the earnings tab counts: from which date, which trades the owner
+    took out by hand, and how many days of sales value what is still held."""
+    since = (db.get_setting(PROFIT_SINCE_KEY) or "").strip()
+    try:
+        days = int(float(db.get_setting(PROFIT_DAYS_KEY) or 30))
+    except (TypeError, ValueError):
+        days = 30
+    days = min(max(days, PROFIT_DAYS_BOUNDS[0]), PROFIT_DAYS_BOUNDS[1])
+    try:
+        excluded = {str(x) for x in json.loads(
+            db.get_setting(PROFIT_EXCLUDED_KEY) or "[]")}
+    except ValueError:
+        excluded = set()
+    return {"since": since, "estimate_days": days, "excluded": excluded}
+
+
+@app.route("/api/profit/settings", methods=["POST"])
+def api_profit_settings():
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    errors = []
+    if "since" in data:
+        since = str(data.get("since") or "").strip()
+        if since:
+            try:
+                datetime.strptime(since, "%Y-%m-%d")
+            except ValueError:
+                errors.append(f"дата «{since}» — нужен формат ГГГГ-ММ-ДД")
+                since = None
+        if since is not None:
+            db.set_setting(PROFIT_SINCE_KEY, since)
+    if "estimate_days" in data:
+        lo, hi = PROFIT_DAYS_BOUNDS
+        try:
+            days = int(float(str(data["estimate_days"]).replace(",", ".")))
+        except (TypeError, ValueError):
+            days = None
+        if days is None or not lo <= days <= hi:
+            errors.append(f"срок оценки — целое от {lo} до {hi} дней")
+        else:
+            db.set_setting(PROFIT_DAYS_KEY, str(days))
+    conf = _profit_settings(db)
+    return jsonify({"since": conf["since"], "estimate_days": conf["estimate_days"],
+                    "errors": errors, "error": "; ".join(errors)}), \
+        (400 if errors else 200)
+
+
+@app.route("/api/profit/exclude", methods=["POST"])
+def api_profit_exclude():
+    """Take trades out of the earnings, or put them back. Several at once: a
+    closed deal is its purchase and its sale, and leaving either in would
+    show up as a half of it somewhere else."""
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    ids = data.get("trade_ids") or ([data["trade_id"]] if data.get("trade_id") else [])
+    ids = [str(x) for x in ids if str(x).strip()]
+    if not ids:
+        abort(400, description="trade_id не указан")
+    db = get_db()
+    excluded = _profit_settings(db)["excluded"]
+    if data.get("excluded", True):
+        excluded |= set(ids)
+    else:
+        excluded -= set(ids)
+    db.set_setting(PROFIT_EXCLUDED_KEY, json.dumps(sorted(excluded)))
+    return jsonify({"excluded": len(excluded)})
 
 
 @app.route("/api/profit/sync", methods=["POST"])

@@ -26,6 +26,16 @@
     <button class="btn" id="f-reload">Обновить</button>
     <button class="btn primary" id="f-sync">Прочитать сделки</button>
   </div>
+  <div class="journal-controls profit-settings">
+    <label>считать с даты
+      <input id="f-since" class="input" type="date">
+    </label>
+    <label>оценка «в наличии» по продажам за, дней
+      <input id="f-est-days" class="input" type="number" min="1" max="180" step="1">
+    </label>
+    <button class="btn" id="f-save">Сохранить</button>
+  </div>
+  <div class="muted" id="f-settings-note"></div>
   <div class="muted" id="f-note"></div>
   <div class="muted" id="f-sync-state"></div>
 </section>
@@ -54,6 +64,14 @@
   CSFloat, получен иначе или куплен раньше, чем CSFloat отдаёт историю. В
   профит не входят.</p>
   <div id="f-unmatched"></div>
+</section>
+
+<section class="settings-block" id="f-excluded-box" hidden>
+  <details>
+    <summary><h2 class="inline-h2" id="f-excluded-title">Убранные из учёта</h2>
+      <span class="muted">— сделки, которые ты убрал крестиком; их можно вернуть</span></summary>
+    <div id="f-excluded"></div>
+  </details>
 </section>
 
 <section class="settings-block" id="f-pending-box" hidden>

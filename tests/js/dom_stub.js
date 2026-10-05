@@ -118,6 +118,9 @@ function deepText(node) {
     problemsTitle: deepText(nodes["j-attention-title"]),
     bar: deepText(nodes["p-note"]),
     attention: deepText(nodes["j-attention"]),
+    settingsNote: deepText(nodes["f-settings-note"]),
+    excludedTitle: deepText(nodes["f-excluded-title"]),
+    excludedText: deepText(nodes["f-excluded"]),
     profit: ["f-tiles", "f-alltime", "f-closed", "f-holding-note", "f-holding",
              "f-unmatched", "f-sync-state"]
       .map((id) => deepText(nodes[id])).join(" | "),

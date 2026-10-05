@@ -71,10 +71,11 @@
     const tb = node("tbody");
     rows.forEach((cells) => {
       const tr = node("tr");
-      cells.forEach(([text, cls, title], i) => {
+      cells.forEach(([text, cls, title, el], i) => {
         const td = node("td", cls || "", text);
         td.dataset.label = heads[i];
         if (title) td.title = title;
+        if (el) td.appendChild(el);
         tr.appendChild(td);
       });
       tb.appendChild(tr);
@@ -115,6 +116,66 @@
       : `Комиссия CSFloat при продаже — ${(d.fee * 100).toFixed(1)}%.`;
   }
 
+  /** A × that takes trades out of the count; put back from the list below. */
+  function dropButton(ids, what) {
+    const b = node("button", "att-hide", "×");
+    b.title = "убрать из учёта — " + what;
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await postJSON("/api/profit/exclude", { trade_ids: ids, excluded: true }, token());
+        await load();
+      } catch (e) {
+        say("Ошибка — " + ((e && e.message) || e), "err");
+        b.disabled = false;
+      }
+    };
+    return ["", "drop-cell", "", b];
+  }
+
+  function excluded(d) {
+    const rows = (d.excluded || []).filter((x) => matches(x.market_hash_name));
+    $("f-excluded-box").hidden = !(d.excluded || []).length;
+    $("f-excluded-title").textContent = `Убранные из учёта (${(d.excluded || []).length})`;
+    table($("f-excluded"), ["", "предмет", "float", "цена", "когда", ""],
+      rows.map((x) => {
+        const b = node("button", "btn small", "вернуть");
+        b.onclick = async () => {
+          b.disabled = true;
+          try {
+            await postJSON("/api/profit/exclude",
+              { trade_ids: [x.trade_id], excluded: false }, token());
+            await load();
+          } catch (e) {
+            say("Ошибка — " + ((e && e.message) || e), "err");
+            b.disabled = false;
+          }
+        };
+        return [
+          [x.role === "buy" ? "покупка" : x.role === "sell" ? "продажа" : "?", "muted"],
+          [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
+          [cash(x.price)], [when(x.at), "mono"], ["", "", "", b],
+        ];
+      }), "");
+  }
+
+  function settings(d) {
+    const s = d.settings || {};
+    const since = $("f-since"), days = $("f-est-days");
+    // Not while it is being typed into: the page reloads every five minutes.
+    if (since && document.activeElement !== since) since.value = s.since || "";
+    if (days && document.activeElement !== days) days.value = s.estimate_days || 30;
+    const note = $("f-settings-note");
+    if (note) {
+      const [y, m, dd] = String(s.since || "").split("-");
+      note.textContent = (s.since
+        ? `Сделки до ${dd}.${m}.${y} не учитываются (купленное до даты и `
+          + "проданное после — тоже)."
+        : "Учитываются все сделки — задай дату, чтобы отсечь старые.")
+        + ` «В наличии» оценивается по медиане продаж за ${s.estimate_days || 30} дн.`;
+    }
+  }
+
   function render() {
     const d = last;
     if (!d) return;
@@ -123,7 +184,7 @@
     tiles(d, closed);
 
     table($("f-closed"),
-      ["предмет", "float", "паттерн", "купили", "продали", "комиссия", "профит", "%", "дней"],
+      ["предмет", "float", "паттерн", "купили", "продали", "комиссия", "профит", "%", "дней", ""],
       closed.map((x) => [
         [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
         [flt(x.float_value), "mono"],
@@ -134,6 +195,7 @@
         [signed(x.profit), tone(x.profit)],
         [pct(x.pct), tone(x.profit)],
         [x.days ?? "—", "mono"],
+        dropButton([x.buy_id, x.sell_id], "и покупку, и продажу"),
       ]),
       d.trades ? "За этот период закрытых сделок нет."
         : "Сделок ещё нет — нажми «Прочитать сделки».");
@@ -148,7 +210,7 @@
         + ". Оценка, а не сделка: цена может уйти."
       : "";
     table($("f-holding"),
-      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит"],
+      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", ""],
       holding.map((x) => [
         [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
         [flt(x.float_value), "mono"],
@@ -158,17 +220,20 @@
         [cash(x.estimate), "", x.tracked ? x.basis
           : "предмет не отслеживается — добавь его, чтобы была история продаж"],
         [signed(x.est_profit), tone(x.est_profit)],
+        dropButton([x.trade_id], "например, оставил себе или продал не на CSFloat"),
       ]),
       "Всё купленное продано.");
 
     const unmatched = d.unmatched.filter((x) => matches(x.market_hash_name));
     $("f-unmatched-box").hidden = !unmatched.length;
-    table($("f-unmatched"), ["предмет", "float", "паттерн", "продали", "когда"],
+    table($("f-unmatched"), ["предмет", "float", "паттерн", "продали", "когда", ""],
       unmatched.map((x) => [
         [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"], [cash(x.price)],
         [when(x.done_at || x.created_at), "mono"],
+        dropButton([x.trade_id], "продажа без покупки"),
       ]), "");
+    excluded(d);
 
     const pending = d.pending.filter((x) => matches(x.market_hash_name));
     $("f-pending-box").hidden = !pending.length;
@@ -222,6 +287,7 @@
     say("Считаю…");
     try {
       last = await getJSON(`/api/profit?days=${encodeURIComponent(days)}`);
+      settings(last);
       syncState(last);
       render();
       say("", "ok");
@@ -235,6 +301,24 @@
     $("f-days").onchange = load;
     $("f-bot").onchange = render;
     $("f-search").addEventListener("input", render);
+    $("f-save").onclick = async () => {
+      const btn = $("f-save");
+      btn.disabled = true;
+      try {
+        await postJSON("/api/profit/settings", {
+          since: $("f-since").value || "",
+          estimate_days: $("f-est-days").value,
+        }, token());
+        $("f-since").blur();
+        $("f-est-days").blur();
+        await load();
+        say("Сохранено.", "ok");
+      } catch (e) {
+        say("Не сохранено — " + ((e && e.message) || e), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
     $("f-sync").onclick = async () => {
       const btn = $("f-sync");
       btn.disabled = true;
