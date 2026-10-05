@@ -495,3 +495,45 @@ def test_the_bots_row_keeps_the_order_over_a_copy_made_by_hand():
     assert set(by_state) == {"live", "duplicate"}
     assert by_state["live"]["ceiling"] == 170.0
     db.close()
+
+
+def test_a_saved_path_without_pages_goes_page_by_page_past_a_hundred():
+    """The saved list path had no page in it: CSFloat answered with the first
+    hundred of 148 orders and every sync failed as "read not whole". The same
+    path page by page reads them all, and is kept."""
+    from src.placement import PLACEMENT_KEY, load
+
+    col, db = _collector(list_path="/api/v1/me/buy-orders")
+    item_id = db.add_item(NAME)
+    orders = [_site_order(f"r{i}", lo=round(0.10 + i / 1000, 4),
+                          hi=round(0.101 + i / 1000, 4)) for i in range(148)]
+    for o in orders[:3]:
+        db.upsert_our_order(item_id, o["hybrid_properties"]["min_float"],
+                            o["hybrid_properties"]["max_float"], 150.0, 160.0,
+                            state="live", remote_id=o["id"])
+    asked = []
+
+    def answer(url, headers=None, account=False):
+        asked.append(url)
+        if "page=" not in url:
+            return {"data": orders[:100], "count": 148}
+        page = int(url.split("page=")[1].split("&")[0])
+        return {"data": orders[page * 100:(page + 1) * 100], "count": 148}
+
+    col.client.fetch_json = answer
+    out = col.sync_our_orders()
+    assert out["error"] == "", out
+    assert out["seen"] == 148
+    assert out["counts"]["gone"] == 0
+    saved = load(db.get_setting(PLACEMENT_KEY)).list_path
+    assert saved == "/api/v1/me/buy-orders?page={page}&limit=100"
+    db.close()
+
+
+def test_paged_path_keeps_what_the_path_already_says():
+    from src.placement import paged_path
+
+    assert paged_path("/a?page=0&limit=10&order=desc") == \
+        "/a?page={page}&limit=10&order=desc"
+    assert paged_path("/a?order=desc") == "/a?order=desc&page={page}&limit=100"
+    assert paged_path("/a?page={page}") == "/a?page={page}"

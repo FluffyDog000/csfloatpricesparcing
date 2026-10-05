@@ -161,6 +161,26 @@ LIST_CANDIDATES = (
 )
 
 
+def paged_path(path: str) -> str:
+    """The same listing, asked for page by page.
+
+    A path saved without pages answers with the first hundred orders and no
+    more: past a hundred the sync could only report the list as unread. Its
+    own page parameter becomes a placeholder; one with none gets page and
+    limit added."""
+    import re
+
+    if "{page}" in path:
+        return path
+    if re.search(r"[?&]page=\d+", path):
+        out = re.sub(r"([?&]page=)\d+", r"\g<1>{page}", path)
+    else:
+        out = path + ("&" if "?" in path else "?") + "page={page}"
+    if not re.search(r"[?&]limit=\d+", out):
+        out += "&limit=100"
+    return out
+
+
 def endpoint(path: str, order_id: str | None = None) -> str:
     """Fill {order_id} in a configured path."""
     if "{order_id}" not in path:

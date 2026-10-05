@@ -1100,7 +1100,7 @@ class Collector:
         found only when orders come back, and a configured path is trusted on
         its own - by then someone has looked at it.
         """
-        from .placement import LIST_CANDIDATES, parse_order_list
+        from .placement import LIST_CANDIDATES, paged_path, parse_order_list
 
         base = self.config.http.base_url.rstrip("/")
         tried: list[str] = []
@@ -1109,10 +1109,20 @@ class Collector:
             try:
                 return self._all_pages(base, spec.list_path), "", spec.list_path
             except IncompleteList as exc:
+                tried.append(f"{spec.list_path} — {exc}")
+                # A path saved without pages stops at a hundred. The same path
+                # page by page is the fix, and it is kept once it reads whole.
+                paged = paged_path(spec.list_path)
+                if paged != spec.list_path:
+                    try:
+                        rows = self._all_pages(base, paged)
+                        log.info("Buy orders read page by page at %s", paged)
+                        return rows, "", paged
+                    except Exception as exc2:  # noqa: BLE001
+                        tried.append(f"{paged} — {type(exc2).__name__}: {exc2}")
                 # The path works; the list is longer than it reads. Going on
                 # to other candidates would find one that answers with a first
                 # page and nothing else - the same mistake, accepted.
-                tried.append(f"{spec.list_path} — {exc}")
                 return None, f"список ордеров прочитан не целиком: {exc}", tried
             except Exception as exc:  # noqa: BLE001
                 detail = f"{type(exc).__name__}: {exc}"
