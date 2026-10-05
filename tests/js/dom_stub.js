@@ -67,6 +67,9 @@ global.fetch = async (url) => ({
                                 test_amend: null, test_pending: false };
     }
     if (url.startsWith("/api/analysis/plan")) return plan;
+    if (url.startsWith("/api/analysis/cancel_lowest")) {
+      return api.weakest || { order: "", item: "", held: 0 };
+    }
     if (url.startsWith("/api/profit")) return api;
     if (url.startsWith("/api/analysis")) return api;
     return { items: [] };
@@ -126,6 +129,7 @@ function deepText(node) {
       .map((id) => deepText(nodes[id])).join(" | "),
     tiles: (nodes["j-summary"] || el("div")).children.length,
     tilesText: deepText(nodes["j-summary"]),
+    weakest: deepText(nodes["j-weakest-info"]),
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),
     positions: deepText(nodes["p-note"]),

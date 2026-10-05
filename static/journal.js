@@ -39,6 +39,10 @@
   // that snaps shut while being read is worse than no history.
   const opened = new Set();
   let showHidden = false;
+  // The weakest order needs the whole plan worked out: asked for on opening,
+  // after a change, and every few minutes - not on every one-minute reload.
+  const WEAKEST_EVERY = 5 * 60 * 1000;
+  let weakestAt = 0;
 
   window.JOURNAL_BUILD = (document.currentScript
     && document.currentScript.src || "").split("?v=")[1] || "?";
@@ -601,6 +605,37 @@
     history(lastJournal);
   }
 
+  /** Which order goes first if room has to be made, and why that one. */
+  async function weakest(force) {
+    const el = $("j-weakest-info");
+    if (!el) return;
+    if (!force && Date.now() - weakestAt < WEAKEST_EVERY) return;
+    weakestAt = Date.now();
+    el.textContent = "";
+    el.className = "weakest-line muted";
+    try {
+      const w = await postJSON("/api/analysis/cancel_lowest", { preview: true }, token());
+      const r = (lastPositions && index(lastPositions)[keyOf(w.item, w)]) || null;
+      el.className = "weakest-line";
+      el.appendChild(node("span", "muted", "Самый слабый ордер: "));
+      el.appendChild(node("b", "", `${w.item} ${bandOf(w)}`));
+      el.appendChild(node("span", "", ` · ${cash(w.price)}`
+        + (w.quantity > 1 ? ` ×${w.quantity}` : "")));
+      el.appendChild(node("span", w.withdrawn ? "err" : "muted", w.withdrawn
+        ? " · план его и так снял бы: полоса больше не проходит отсев"
+        : ` · ранг ${Number(w.rank).toFixed(4)}`
+          + (w.next_rank !== null && w.next_rank !== undefined
+            ? ` (следующий ${Number(w.next_rank).toFixed(4)})` : "")));
+      if (r) {
+        el.appendChild(node("span", r.first ? "muted" : "err",
+          " · " + chipOf(r)[0]));
+      }
+      el.appendChild(node("span", "muted", ` · из ${w.held} ордеров бота`));
+    } catch (e) {
+      el.textContent = "Самый слабый ордер: " + ((e && e.message) || e);
+    }
+  }
+
   async function load() {
     const dry = $("j-dry").checked ? "1" : "0";
     const hours = periodHours();
@@ -618,13 +653,14 @@
       state(d);
       syncState(d);
       render();
+      weakest(false);
     } catch (e) {
       bar("Ошибка — " + ((e && e.message) || e), "err");
     }
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    $("j-reload").onclick = load;
+    $("j-reload").onclick = () => { weakestAt = 0; load(); };
 
     $("p-refresh").onclick = async () => {
       const btn = $("p-refresh");
@@ -681,7 +717,7 @@
         if (!confirm(`Снять ордер ${p.order}?`)) { bar(""); return; }
         const r = await postJSON("/api/analysis/cancel_lowest", {}, token());
         bar(r.note, "ok");
-        setTimeout(load, 8000);
+        setTimeout(() => { load(); weakest(true); }, 8000);
       } catch (e) {
         bar("Не снят — " + ((e && e.message) || e), "err");
       } finally {

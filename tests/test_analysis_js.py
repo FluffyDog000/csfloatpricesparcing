@@ -822,3 +822,15 @@ def test_the_tiles_say_what_the_orders_add_up_to_against_the_allowance():
     got = _run_script("static/journal.js", _journal([], positions=pos))
     assert "$7100.00" in got["tilesText"]
     assert "лимит CSFloat $7000.00" in got["tilesText"]
+
+
+def test_the_weakest_order_is_named_with_why():
+    pos = _position(_row(first=False, ahead=2, top=11.0))
+    got = _run_script("static/journal.js", _journal([], positions=pos, weakest={
+        "order": "A (FT) …", "item": "A (FT)", "float_min": 0.15,
+        "float_max": 0.17, "price": 10.0, "quantity": 2, "rank": 0.0012,
+        "withdrawn": False, "reason": "", "held": 40, "next_rank": 0.0019}))
+    text = got["weakest"]
+    assert "Самый слабый ордер" in text and "A (FT) 0.1500–0.1700" in text
+    assert "ранг 0.0012" in text and "следующий 0.0019" in text
+    assert "×2" in text and "перебит" in text and "из 40" in text

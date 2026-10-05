@@ -1445,7 +1445,20 @@ def api_analysis_cancel_lowest():
              + (f" ×{victim['quantity']}" if int(victim.get("quantity") or 1) > 1
                 else "") + f" ({rank_text})")
     if data.get("preview"):
-        return jsonify({"order": label})
+        stronger = sorted((a for a in held if a is not victim), key=worth)
+        return jsonify({
+            "order": label, "item": victim["item"],
+            "float_min": victim["float_min"], "float_max": victim["float_max"],
+            "price": price, "quantity": int(victim.get("quantity") or 1),
+            "rank": (None if victim["kind"] == "cancel"
+                     else float(victim.get("rank") or 0.0)),
+            "withdrawn": victim["kind"] == "cancel",
+            "reason": victim.get("reason") or "",
+            "held": len(held),
+            # The next one up, so "weakest" reads against something.
+            "next_rank": (None if not stronger or stronger[0]["kind"] == "cancel"
+                          else float(stronger[0].get("rank") or 0.0)),
+        })
     if db.get_setting("analysis_pending_actions"):
         abort(409, description="в очереди уже есть план — дождись, пока сборщик его выполнит")
 
