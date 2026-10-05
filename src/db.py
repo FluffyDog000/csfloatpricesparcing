@@ -222,12 +222,16 @@ class Database:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        self._all: list[sqlite3.Connection] = []
+        # Every connection handed out, with the thread it belongs to.
+        self._all: list[tuple[threading.Thread, sqlite3.Connection]] = []
         self._all_lock = threading.Lock()
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path))
+        # check_same_thread=False only so that a connection can be closed from
+        # another thread once its own has finished (see `_reap_dead`); while
+        # the owner lives, nobody else touches it.
+        conn = sqlite3.connect(str(self.path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
@@ -236,8 +240,35 @@ class Database:
         # spends a request for nothing.
         conn.execute("PRAGMA busy_timeout=10000;")
         with self._all_lock:
-            self._all.append(conn)
+            self._reap_dead()
+            self._all.append((threading.current_thread(), conn))
         return conn
+
+    def _reap_dead(self) -> None:
+        """Close the connections of threads that have finished. Caller holds
+        `_all_lock`.
+
+        Sweeps and the defence run in a fresh pool of up to two hundred threads
+        each pass, and each thread opens a connection - two or three file
+        handles with WAL. Kept until the database itself was closed, they ran
+        a collector out of handles within hours: "Too many open files", every
+        poll failing and every proxy reported unreachable, because no socket
+        could be opened either. A new thread arriving is a good moment to
+        release what the finished ones left."""
+        alive = []
+        for thread, conn in self._all:
+            if thread.is_alive():
+                alive.append((thread, conn))
+                continue
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._all = alive
+
+    def open_connections(self) -> int:
+        with self._all_lock:
+            return len(self._all)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -348,7 +379,7 @@ class Database:
         """
         with self._all_lock:
             conns, self._all = self._all, []
-        for conn in conns:
+        for _thread, conn in conns:
             try:
                 conn.close()
             except sqlite3.Error:

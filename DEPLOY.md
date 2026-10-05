@@ -118,6 +118,7 @@ WorkingDirectory=/home/csfloat/csfloatpricesparcing
 ExecStart=/home/csfloat/csfloatpricesparcing/.venv/bin/python run_collector.py
 Restart=always
 RestartSec=10
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -136,6 +137,7 @@ WorkingDirectory=/home/csfloat/csfloatpricesparcing
 ExecStart=/home/csfloat/csfloatpricesparcing/.venv/bin/python webapp.py
 Restart=always
 RestartSec=10
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

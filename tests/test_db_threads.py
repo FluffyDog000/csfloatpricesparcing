@@ -115,3 +115,42 @@ def test_the_schema_is_built_once_not_per_thread():
     t.join()
     assert calls == []
     d.close()
+
+
+def test_finished_threads_do_not_keep_their_connections_open():
+    """A collector runs a fresh pool of up to two hundred threads every sweep.
+    Each finished thread's connection used to stay open until the database
+    was closed, and the process ran out of file handles ("Too many open
+    files") - every poll and every proxy connection failing after it."""
+    d = _db()
+
+    def work():
+        d.get_setting("x")
+
+    for _ in range(50):
+        t = threading.Thread(target=work)
+        t.start()
+        t.join()
+    work()                                   # the main thread, still alive
+    assert d.open_connections() <= 2
+    d.close()
+
+
+def test_close_closes_connections_of_other_threads():
+    d = _db()
+    held = {}
+    gate = threading.Event()
+
+    def work():
+        held["conn"] = d.conn
+        gate.wait()
+
+    t = threading.Thread(target=work)
+    t.start()
+    while "conn" not in held:
+        pass
+    d.close()
+    gate.set()
+    t.join()
+    with pytest.raises(sqlite3.ProgrammingError):
+        held["conn"].execute("SELECT 1")
