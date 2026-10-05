@@ -834,3 +834,10 @@ def test_the_weakest_order_is_named_with_why():
     assert "Самый слабый ордер" in text and "A (FT) 0.1500–0.1700" in text
     assert "ранг 0.0012" in text and "следующий 0.0019" in text
     assert "×2" in text and "перебит" in text and "из 40" in text
+
+
+def test_orders_taken_down_to_make_room_are_counted_and_filterable():
+    ev = _event(1, "cancel", source="room", reason="освободить лимит CSFloat")
+    got = _run_script("static/journal.js", _journal([ev], positions=_position()))
+    assert "снято ради места" in got["tilesText"]
+    assert "ради места" in got["journalText"], "the source is named in the history"

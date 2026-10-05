@@ -22,7 +22,7 @@
     fill: ["исполнен", "act-place"],
   };
   const SOURCE = { plan: "план", defence: "защита", sync: "сверка",
-    guard: "защита от слива", manual: "кнопкой" };
+    guard: "защита от слива", manual: "кнопкой", room: "ради места" };
   // This many orders failing for one reason fold into one line.
   const FOLD_AT = 3;
   // A refusal on an order still held stops being news once this old; one on
@@ -208,6 +208,7 @@
     (d.events || []).filter((e) => !e.dry && parseT(e.at) >= day).forEach((e) => {
       const key = e.ok ? e.kind : "fail";
       counts[key] = (counts[key] || 0) + 1;
+      if (e.ok && e.source === "room") counts.room = (counts.room || 0) + 1;
     });
     const tiles = [
       ["стоит ордеров", pos ? rows.length : d.held, ""],
@@ -224,6 +225,7 @@
       ["поднято / снижено", `${counts.raise || 0} / ${counts.lower || 0}`, ""],
       ["исполнено за сутки", counts.fill || 0, "good"],
       ["отказов за сутки", counts.fail || 0, counts.fail ? "bad" : ""],
+      ["снято ради места за сутки", counts.room || 0, counts.room ? "warn" : ""],
     ];
     tiles.forEach(([label, value, tone]) => {
       const tile = node("div", "journal-tile" + (tone ? " " + tone : ""));
@@ -505,7 +507,9 @@
     const words = search();
     const events = (d.events || []).filter((e) => {
       if (kind === "fail" && e.ok) return false;
-      if (kind && kind !== "fail" && !(e.ok && e.kind === kind)) return false;
+      if (kind === "room" && !(e.ok && e.source === "room")) return false;
+      if (kind && kind !== "fail" && kind !== "room"
+          && !(e.ok && e.kind === kind)) return false;
       return matches(e.market_hash_name, words);
     });
     const total = (d.events || []).length;

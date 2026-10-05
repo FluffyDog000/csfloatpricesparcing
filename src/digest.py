@@ -160,13 +160,21 @@ def summary_text(db) -> str:
     # The day.
     day = _events_since(db, 24 * 60)
     counts: dict[str, int] = {}
+    room = []
     for e in day:
         key = e["kind"] if e["ok"] else "fail"
         counts[key] = counts.get(key, 0) + 1
+        if e["ok"] and e.get("source") == "room":
+            room.append(e)
     lines += ["", "<b>За сутки</b>",
               f"поставлено {counts.get('place', 0)} · поднято "
               f"{counts.get('raise', 0)} · снижено {counts.get('lower', 0)} · "
               f"снято {counts.get('cancel', 0)} · отказов {counts.get('fail', 0)}"]
+    if room:
+        lines.append(f"снято ради места под перебивание: {len(room)} — "
+                     + ", ".join(html.escape(e["market_hash_name"])
+                                 for e in room[:5])
+                     + (" …" if len(room) > 5 else ""))
     try:
         from .guard import current
         reading = current(db, limits)

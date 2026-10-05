@@ -1449,6 +1449,7 @@ class Collector:
         held_by_id = {int(r["id"]): r for r in held}
         gone: set[int] = set()
         freed = 0
+        room_log: list[dict] = []
         auto_free = auto_free_on(self.db)
         for item_id, name, rows, actions in work:
             self.client.pool.pin(for_orders=True)
@@ -1470,21 +1471,30 @@ class Collector:
                     out = sender.perform(action)
                     if (not out.ok and not dry and action.kind in (RAISE, LOWER)
                             and balance_refusal(out.detail)):
+                        mine = ranks.get(int(action.order_id or -1), 0.0)
+                        taken: list[str] = []
                         while auto_free and freed < FREE_PER_PASS:
                             victim = self._weakest_below(
-                                ranks, held_by_id, gone,
-                                ranks.get(int(action.order_id or -1), 0.0),
+                                ranks, held_by_id, gone, mine,
                                 exclude=int(action.order_id or -1))
                             if victim is None:
                                 break
-                            if not self._free_room(sender, victim, action,
-                                                   results, dry):
+                            if not self._free_room(
+                                    sender, victim, action, results, dry,
+                                    ranks.get(int(victim["id"]), 0.0), mine):
                                 break
                             gone.add(int(victim["id"]))
                             freed += 1
+                            taken.append(self._order_label(victim, ranks))
                             out = sender.perform(action)
                             if out.ok or not balance_refusal(out.detail):
                                 break
+                        if taken:
+                            room_log.append({
+                                "for": f"{action.item} {action.float_min:.4f}–"
+                                       f"{action.float_max:.4f} (ранг {mine:.4f})",
+                                "taken": taken, "ok": out.ok,
+                                "price": action.price})
                         if not out.ok and balance_refusal(out.detail):
                             self._hold_amends(limits)
                     results.append(out.as_dict())
@@ -1510,6 +1520,8 @@ class Collector:
             finally:
                 self.client.pool.unpin()
 
+        if room_log and not dry:
+            self._tell_room(room_log)
         summary = {"at": utcnow_iso(), "dry_run": dry, "items": looked,
                    "orders": len(held), "actions": len(results),
                    "results": results}
@@ -1587,21 +1599,48 @@ class Collector:
                 best = (key, row)
         return best[1] if best else None
 
+    def _order_label(self, row: dict, ranks: dict[int, float]) -> str:
+        name = self.db.item_name(int(row["item_id"])) or "?"
+        qty = int(row.get("quantity") or 1)
+        r = ranks.get(int(row["id"]), 0.0)
+        return (f"{name} {float(row['float_min']):.4f}–{float(row['float_max']):.4f}"
+                f" за ${float(row['price']):.2f}" + (f" ×{qty}" if qty > 1 else "")
+                + (" (план и так снял бы)" if r < 0 else f" (ранг {r:.4f})"))
+
+    def _tell_room(self, log_rows: list[dict]) -> None:
+        """One message per pass that traded weaker orders for stronger ones,
+        so the trade is seen when it happens, not found in the journal."""
+        lines = ["🔁 Освободил место под перебивание "
+                 "(CSFloat ответил «не хватило баланса»)"]
+        for r in log_rows:
+            lines.append("")
+            lines.append(("✅ поднят " if r["ok"] else "❌ всё равно не поднят ")
+                         + f"{r['for']} до ${r['price']:.2f}")
+            for t in r["taken"]:
+                lines.append(f"   снят: {t}")
+        self._tell("\n".join(lines))
+
     def _free_room(self, sender, victim: dict, action, results: list,
-                   dry: bool) -> bool:
+                   dry: bool, victim_rank: float = 0.0,
+                   for_rank: float = 0.0) -> bool:
         from .executor import CANCEL, Action as _Action
 
         name = self.db.item_name(int(victim["item_id"])) or "?"
+        weaker = ("план и так снял бы его" if victim_rank < 0
+                  else f"ранг {victim_rank:.4f}")
         cancel = _Action(
             CANCEL, name, float(victim["float_min"]), float(victim["float_max"]),
             float(victim["price"]), float(victim["ceiling"]),
             f"освободить лимит CSFloat: «не хватило баланса» при правке "
-            f"{action.item} — снят как более слабый",
+            f"{action.item} {action.float_min:.4f}–{action.float_max:.4f} "
+            f"(ранг {for_rank:.4f}) — снят как более слабый ({weaker})",
             order_id=victim.get("id"), remote_id=victim.get("remote_id"),
             quantity=int(victim.get("quantity") or 1))
         out = sender.perform(cancel)
         results.append(out.as_dict())
-        self._log_order_event(out, "defence", dry, item_id=int(victim["item_id"]))
+        # Its own source: "taken down to make room" is the one cancel the
+        # owner wants to find among the defence's, and to count.
+        self._log_order_event(out, "room", dry, item_id=int(victim["item_id"]))
         if out.ok and not dry:
             self.db.set_our_order_state(int(victim["id"]), "cancelled", out.detail)
         return out.ok

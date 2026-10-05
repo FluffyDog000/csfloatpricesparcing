@@ -428,6 +428,7 @@ td.warn-text { color: #d29922; }
 .journal-bar-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .journal-bar-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .journal-tile.good b { color: var(--good); }
+.journal-tile.warn b { color: #d29922; }
 .weakest-line { font-size: 13px; margin: -4px 0 12px; }
 .problems-block { padding-top: 12px; padding-bottom: 12px; }
 .problems-head { display: flex; align-items: center; justify-content: space-between;

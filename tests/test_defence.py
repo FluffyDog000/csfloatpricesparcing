@@ -522,6 +522,8 @@ def test_an_outbid_order_gets_room_by_taking_down_a_weaker_one():
         return {}
 
     col.client.send_json = send
+    told = []
+    col._tell = told.append
     out = col.defend_orders()
     assert calls == [("PATCH", "A"), ("DELETE", "B"), ("PATCH", "A")], calls
     assert [r["ok"] for r in out["results"]] == [True, True]
@@ -529,6 +531,11 @@ def test_an_outbid_order_gets_room_by_taking_down_a_weaker_one():
     assert db.our_orders(a_item)[0]["price"] == 154.0, "and A raised"
     events = [e for e in db.order_events() if e["kind"] == "cancel"]
     assert events and "освободить лимит" in events[0]["reason"]
+    assert events[0]["source"] == "room", "findable apart from other cancels"
+    assert len(told) == 1 and "Освободил место" in told[0]
+    assert "поднят" in told[0] and "King Snake" in told[0], told[0]
+    from src import digest
+    assert "снято ради места под перебивание: 1" in digest.summary_text(db)
     db.close()
 
 
