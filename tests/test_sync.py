@@ -73,7 +73,7 @@ def test_an_order_still_standing_is_left_alone():
     out = col.sync_our_orders()
 
     assert out["counts"] == {"gone": 0, "filled": 0, "repriced": 0,
-                             "adopted": 0, "matched": 1}
+                             "adopted": 0, "matched": 1, "duplicate": 0}
     assert len(db.our_orders()) == 1
     assert db.order_events() == [], "nothing happened, nothing to log"
     db.close()
@@ -411,4 +411,87 @@ def test_an_order_for_three_that_bought_one_is_still_standing():
     assert out["counts"].get("filled", 0) == 0
     rows = db.our_orders()
     assert len(rows) == 1 and rows[0]["quantity"] == 3
+    db.close()
+
+
+def test_an_order_placed_by_hand_is_adopted_once_not_every_sync():
+    """Rows placed by hand were left out of the comparison, so every sync
+    found the same order "not ours" again and added another copy of it."""
+    col, db = _collector()
+    db.add_item(NAME)
+    _answers(col, {"data": [_site_order("r9")]})
+    col.sync_our_orders()
+    col.sync_our_orders()
+    col.sync_our_orders()
+    manual = [r for r in db.our_orders(live_only=False) if r["state"] == "manual"]
+    assert len(manual) == 1
+    db.close()
+
+
+def test_copies_left_by_earlier_syncs_are_retired():
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    for _ in range(3):
+        db.conn.execute(
+            "INSERT INTO our_orders (item_id, float_min, float_max, price, "
+            "ceiling, remote_id, state, updated_at, note, quantity) "
+            "VALUES (?, 0.35, 0.38, 150, 150, 'r9', 'manual', '', '', 1)",
+            (item_id,))
+    db.conn.commit()
+    _answers(col, {"data": [_site_order("r9")]})
+    out = col.sync_our_orders()
+    states = sorted(r["state"] for r in db.our_orders(live_only=False))
+    assert states == ["duplicate", "duplicate", "manual"], states
+    assert out["counts"]["duplicate"] == 2
+    db.close()
+
+
+def test_the_bots_own_order_written_off_is_claimed_back_not_adopted():
+    """Placed by the bot, its record written off when a list came back short
+    - and with no id, the old revival could not find it. The site's order on
+    the same band is the bot's, and the bot keeps tending it."""
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    row_id = db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 170.0,
+                                 state="live", remote_id=None)
+    db.set_our_order_state(row_id, "gone", "нет на сайте")
+    _answers(col, {"data": [_site_order("r7", price_cents=15100)]})
+    out = col.sync_our_orders()
+    rows = db.our_orders(live_only=False)
+    assert [r["state"] for r in rows] == ["live"], rows
+    assert rows[0]["remote_id"] == "r7" and rows[0]["price"] == 151.0
+    assert rows[0]["ceiling"] == 170.0, "and keeps the ceiling it was placed with"
+    assert out["counts"]["adopted"] == 0
+    db.close()
+
+
+def test_a_different_order_on_a_band_the_bot_left_is_not_taken():
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    row_id = db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 170.0,
+                                 state="live", remote_id="r1")
+    db.set_our_order_state(row_id, "cancelled", "снят")
+    _answers(col, {"data": [_site_order("r2")]})
+    col.sync_our_orders()
+    states = sorted(r["state"] for r in db.our_orders(live_only=False))
+    assert states == ["cancelled", "manual"], states
+    db.close()
+
+
+def test_the_bots_row_keeps_the_order_over_a_copy_made_by_hand():
+    """Both describe one order: the bot's record is the one that keeps it."""
+    col, db = _collector()
+    item_id = db.add_item(NAME)
+    db.conn.execute(
+        "INSERT INTO our_orders (item_id, float_min, float_max, price, ceiling,"
+        " remote_id, state, updated_at, note, quantity) "
+        "VALUES (?, 0.35, 0.38, 150, 150, 'r1', 'manual', '', '', 1)", (item_id,))
+    db.conn.commit()
+    db.upsert_our_order(item_id, 0.35, 0.38, 150.0, 170.0, state="live",
+                        remote_id="r1")
+    _answers(col, {"data": [_site_order("r1")]})
+    col.sync_our_orders()
+    by_state = {r["state"]: r for r in db.our_orders(live_only=False)}
+    assert set(by_state) == {"live", "duplicate"}
+    assert by_state["live"]["ceiling"] == 170.0
     db.close()

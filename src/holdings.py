@@ -28,6 +28,7 @@ FILLED = "filled"      # the site says it bought something
 REPRICED = "repriced"  # standing at a price we did not write down
 ADOPTED = "adopted"    # on the site, never ours
 MATCHED = "matched"    # agrees
+DUPLICATE = "duplicate"  # a second record of an order another one already has
 
 
 @dataclass
@@ -72,6 +73,9 @@ def reconcile_holdings(ours: Sequence[dict], theirs: Sequence[dict],
     used: set[int] = set()
     changes: list[Change] = []
 
+    # The bot's own rows first: when a row placed by hand and a row of the
+    # bot's both describe one order, the bot's is the one that keeps it.
+    ours = sorted(ours, key=lambda r: r.get("state") == "manual")
     for row in ours:
         rid = str(row.get("remote_id") or "")
         match = by_remote.get(rid) if rid else None
@@ -80,6 +84,14 @@ def reconcile_holdings(ours: Sequence[dict], theirs: Sequence[dict],
             # recorded, or one whose reply never came back.
             key = (str(row.get("market_hash_name") or ""),) + _band(row)
             match = by_band.get(key)
+        if match is not None and id(match) in used:
+            # Two records, one order on the site. Rows placed by hand were
+            # never compared against, so every sync adopted the same order
+            # again and the list filled up with copies of it.
+            changes.append(Change(
+                DUPLICATE, "повторная запись ордера, уже учтённого",
+                ours=row, theirs=match))
+            continue
         if match is None:
             changes.append(Change(
                 GONE, "нет на сайте — снят вручную или исполнен", ours=row))
@@ -187,7 +199,8 @@ def strip_own(book: Sequence[dict], ours: Sequence[dict]) -> list[dict]:
 
 
 def summary(changes: Iterable[Change]) -> dict[str, int]:
-    out = {GONE: 0, FILLED: 0, REPRICED: 0, ADOPTED: 0, MATCHED: 0}
+    out = {GONE: 0, FILLED: 0, REPRICED: 0, ADOPTED: 0, MATCHED: 0,
+           DUPLICATE: 0}
     for change in changes:
         out[change.kind] = out.get(change.kind, 0) + 1
     return out

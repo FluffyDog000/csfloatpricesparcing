@@ -504,6 +504,7 @@
     if (c.repriced) bits.push(`${c.repriced} с другой ценой`);
     if (c.adopted) bits.push(`${c.adopted} не наших`);
     if (s.revived) bits.push(`${s.revived} снова найдены на сайте`);
+    if (c.duplicate) bits.push(`${c.duplicate} повторных записей убрано`);
     el.textContent = (el.textContent || "")
       + `Сверено ${when(d.sync_at)}: на аккаунте ${s.seen} `
       + `ордер(ов)` + (bits.length ? " — " + bits.join(", ") : "") + ".";

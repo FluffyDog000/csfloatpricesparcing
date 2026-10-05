@@ -67,7 +67,7 @@ def test_the_tally_is_what_the_page_shows():
     got = reconcile_holdings([ours("r1"), ours("r2", lo=0.2, hi=0.22)],
                              [theirs("r1"), theirs("r9", lo=0.3, hi=0.32)])
     assert summary(got) == {GONE: 1, FILLED: 0, REPRICED: 0, ADOPTED: 1,
-                            MATCHED: 1}
+                            MATCHED: 1, "duplicate": 0}
 
 
 ORDER = {"id": "1021510122612067461", "qty": 1, "price": 630,

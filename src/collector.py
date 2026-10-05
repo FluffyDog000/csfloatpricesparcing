@@ -766,7 +766,7 @@ class Collector:
         """
         import json as _json
 
-        from .holdings import (ADOPTED, FILLED, GONE, REPRICED,
+        from .holdings import (ADOPTED, DUPLICATE, FILLED, GONE, REPRICED,
                                reconcile_holdings, summary)
         from .placement import PLACEMENT_KEY, load, parse_order_list
 
@@ -815,13 +815,18 @@ class Collector:
                 self.db.set_our_order_state(int(row["id"]), "live",
                                             "снова найден на сайте")
                 revived += 1
+        revived += self._reclaim_by_band(theirs)
         if revived:
             result["revived"] = revived
             log.warning("%d order(s) written off as gone are still on the "
                         "account; back to standing", revived)
 
         ours = []
-        for row in self.db.our_orders():
+        # Rows placed by hand are compared too: left out, every sync found
+        # their order "not ours" again and adopted it once more.
+        for row in self.db.our_orders(live_only=False):
+            if row["state"] not in ("planned", "live", "manual"):
+                continue
             row = dict(row)
             row["market_hash_name"] = self.db.item_name(int(row["item_id"]))
             ours.append(row)
@@ -845,6 +850,10 @@ class Collector:
                     int(change.ours["id"]), float(change.theirs["price"]),
                     change.detail)
                 self._note_holding(change, "raise")
+            elif change.kind == DUPLICATE:
+                # Not "gone": that state counts as bought for the brake.
+                self.db.set_our_order_state(
+                    int(change.ours["id"]), "duplicate", change.detail)
             elif change.kind == ADOPTED:
                 item_id = self.db.get_item_id(change.name) if change.name else None
                 if item_id is None:
@@ -878,6 +887,60 @@ class Collector:
         except Exception as exc:  # noqa: BLE001 - logged loudly, sync stands
             log.error("Brake check failed: %s", exc)
         return result
+
+    def _reclaim_by_band(self, theirs: list[dict]) -> int:
+        """Give the bot back its orders whose record it lost.
+
+        An order standing on the site that no live row of ours accounts for
+        was taken for one placed by hand, and the bot stopped tending it -
+        though the bot had placed it, on a band it still has a record for,
+        written off as gone or taken down when a list came back short or a
+        reply never did. The latest such record on the same item and band
+        claims it, unless both carry ids and they differ: then they are two
+        different orders and the site's one is not ours to take."""
+        rows = self.db.our_orders(live_only=False)
+        live = [r for r in rows if r["state"] in ("planned", "live")]
+        live_ids = {str(r["remote_id"]) for r in live if r.get("remote_id")}
+        live_bands = {(int(r["item_id"]), round(float(r["float_min"]), 4),
+                       round(float(r["float_max"]), 4)) for r in live}
+        lost = sorted((r for r in rows
+                       if r["state"] in ("gone", "cancelled", "filled")),
+                      key=lambda r: r.get("updated_at") or "", reverse=True)
+        claimed = 0
+        for t in theirs:
+            rid = str(t.get("remote_id") or "")
+            if rid and rid in live_ids:
+                continue
+            name = t.get("market_hash_name")
+            item_id = self.db.get_item_id(name) if name else None
+            if item_id is None:
+                continue
+            band = (int(item_id), round(float(t.get("float_min") or 0.0), 4),
+                    round(float(t.get("float_max") or 1.0), 4))
+            if band in live_bands:
+                continue
+            for r in lost:
+                if (int(r["item_id"]), round(float(r["float_min"]), 4),
+                        round(float(r["float_max"]), 4)) != band:
+                    continue
+                theirs_id = rid or None
+                mine = str(r.get("remote_id") or "") or None
+                if theirs_id and mine and theirs_id != mine:
+                    continue
+                self.db.conn.execute(
+                    "UPDATE our_orders SET state = 'live', price = ?, "
+                    "remote_id = COALESCE(?, remote_id), note = ?, "
+                    "updated_at = ? WHERE id = ?",
+                    (float(t.get("price") or r["price"]), theirs_id,
+                     "снова найден на сайте", utcnow_iso(), int(r["id"])))
+                self.db.conn.commit()
+                lost.remove(r)
+                live_bands.add(band)
+                if theirs_id:
+                    live_ids.add(theirs_id)
+                claimed += 1
+                break
+        return claimed
 
     def check_guard(self) -> dict | None:
         """Pull the brake if the last day bought too much. See `guard`.
