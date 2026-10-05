@@ -21,7 +21,8 @@
     keep: ["оставлен", "act-keep"],
     fill: ["исполнен", "act-place"],
   };
-  const SOURCE = { plan: "план", defence: "защита", sync: "сверка", guard: "защита от слива" };
+  const SOURCE = { plan: "план", defence: "защита", sync: "сверка",
+    guard: "защита от слива", manual: "кнопкой" };
   // This many orders failing for one reason fold into one line.
   const FOLD_AT = 3;
   // A refusal on an order still held stops being news once this old; one on
@@ -205,6 +206,9 @@
     });
     const tiles = [
       ["стоит ордеров", pos ? rows.length : d.held, ""],
+      [pos && pos.allowance ? `на сумму (лимит CSFloat ${cash(pos.allowance)})`
+        : "на сумму", pos ? cash(pos.face) : "—",
+        pos && pos.allowance && pos.face > pos.allowance ? "bad" : ""],
       ["первые", read.filter((r) => r.first).length, "good"],
       ["перебиты", read.filter((r) => !r.first).length,
         read.some((r) => !r.first) ? "bad" : ""],
@@ -664,6 +668,22 @@
           + "не на паузе ли он.", "err");
       } catch (e) {
         bar("Ошибка — " + ((e && e.message) || e), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    $("j-weakest").onclick = async () => {
+      const btn = $("j-weakest");
+      btn.disabled = true;
+      try {
+        bar("Считаю план, чтобы найти самый слабый ордер…");
+        const p = await postJSON("/api/analysis/cancel_lowest", { preview: true }, token());
+        if (!confirm(`Снять ордер ${p.order}?`)) { bar(""); return; }
+        const r = await postJSON("/api/analysis/cancel_lowest", {}, token());
+        bar(r.note, "ok");
+        setTimeout(load, 8000);
+      } catch (e) {
+        bar("Не снят — " + ((e && e.message) || e), "err");
       } finally {
         btn.disabled = false;
       }

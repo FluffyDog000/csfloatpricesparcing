@@ -125,6 +125,7 @@ function deepText(node) {
              "f-unmatched", "f-sync-state"]
       .map((id) => deepText(nodes[id])).join(" | "),
     tiles: (nodes["j-summary"] || el("div")).children.length,
+    tilesText: deepText(nodes["j-summary"]),
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),
     positions: deepText(nodes["p-note"]),

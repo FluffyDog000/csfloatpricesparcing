@@ -814,3 +814,11 @@ def test_an_order_at_its_ceiling_is_marked_as_such():
         positions=_position(price=12.0, room=0.0)))
     assert "на потолке" in got["ordersText"]
     assert "выше не пойдём" in got["ordersText"]
+
+
+def test_the_tiles_say_what_the_orders_add_up_to_against_the_allowance():
+    pos = _position(_row(price=10.0, quantity=3))
+    pos.update({"face": 7100.0, "allowance": 7000.0})
+    got = _run_script("static/journal.js", _journal([], positions=pos))
+    assert "$7100.00" in got["tilesText"]
+    assert "лимит CSFloat $7000.00" in got["tilesText"]

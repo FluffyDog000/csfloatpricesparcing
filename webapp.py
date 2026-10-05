@@ -1405,6 +1405,69 @@ def api_analysis_apply():
     })
 
 
+@app.route("/api/analysis/cancel_lowest", methods=["POST"])
+def api_analysis_cancel_lowest():
+    """Take down the one standing order the plan values least.
+
+    When fills spend the balance, CSFloat's allowance (ten times it) drops
+    under what is already standing, and from then on it refuses every amend
+    of every order - raising and lowering alike - as "insufficient balance".
+    Freeing room by hand means choosing which order goes, and the plan's rank
+    already says: one the plan would take down anyway first, then the lowest
+    rank, the larger one first on a tie. {"preview": true} only names it."""
+    import json as _json
+
+    _require_admin()
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    plan = api_analysis_plan().get_json()
+    if not plan["can_cancel"]:
+        abort(400, description="снятие ордеров не настроено в запросе постановки")
+    held = [a for a in plan["actions"]
+            if a["kind"] in ("keep", "raise", "lower", "cancel")
+            and a.get("remote_id")]
+    if not held:
+        abort(404, description="снимать нечего: стоящих ордеров бота нет")
+
+    def worth(a):
+        # A band the plan would withdraw is worth nothing to it, whatever
+        # number rides along.
+        r = -1.0 if a["kind"] == "cancel" else float(a.get("rank") or 0.0)
+        face = float(a.get("was") or a["price"]) * int(a.get("quantity") or 1)
+        return (r, -face)
+
+    victim = min(held, key=worth)
+    price = float(victim.get("was") or victim["price"])
+    rank_text = ("план и так снял бы его" if victim["kind"] == "cancel"
+                 else f"ранг {float(victim.get('rank') or 0):.4f}")
+    label = (f"{victim['item']} {victim['float_min']:.4f}–"
+             f"{victim['float_max']:.4f} за ${price:.2f}"
+             + (f" ×{victim['quantity']}" if int(victim.get("quantity") or 1) > 1
+                else "") + f" ({rank_text})")
+    if data.get("preview"):
+        return jsonify({"order": label})
+    if db.get_setting("analysis_pending_actions"):
+        abort(409, description="в очереди уже есть план — дождись, пока сборщик его выполнит")
+
+    action = {
+        "kind": "cancel", "item": victim["item"],
+        "float_min": victim["float_min"], "float_max": victim["float_max"],
+        "price": price, "ceiling": victim.get("ceiling") or price,
+        "reason": f"снят кнопкой: самый слабый ордер ({rank_text}) — "
+                  "освободить лимит CSFloat",
+        "order_id": victim.get("order_id"), "remote_id": victim["remote_id"],
+        "quantity": int(victim.get("quantity") or 1),
+    }
+    db.set_setting("analysis_pending_actions", _json.dumps(
+        {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+         "source": "manual", "actions": [action]}, ensure_ascii=False))
+    log.warning("Weakest order queued for cancel: %s", label)
+    waiting = _why_waiting(db)
+    return jsonify({"order": label, "waiting": waiting,
+                    "note": f"Снимаю: {label}."
+                    + (" Сборщик занят: " + "; ".join(waiting) if waiting else "")})
+
+
 @app.route("/api/analysis/placement", methods=["GET", "POST"])
 def api_analysis_placement():
     """The captured request that creates, amends and cancels an order.
@@ -1698,6 +1761,14 @@ def api_analysis_positions():
     total = sum(len(b) for b in raw_books.values())
     return jsonify({
         "orders": rows,
+        # What CSFloat holds against its allowance: every standing order,
+        # the bot's and the hand-placed alike, at its price times its count.
+        "face": round(sum(r["price"] * r["quantity"] for r in rows
+                          if r["state"] != "planned"), 2),
+        # Ten times the balance typed on the analysis page - the real one
+        # falls as fills spend it, and then amends are refused.
+        "allowance": _analysis_limits(db).as_dict().get("allowance"),
+        "balance": _analysis_limits(db).balance,
         "outbid": sum(1 for r in rows if not r["first"]),
         # One sweep answers it: if the book names its orders we can point at
         # ours exactly, and the price-and-bounds guess retires.

@@ -1158,3 +1158,55 @@ def test_the_plan_never_offers_an_order_dearer_than_the_price_limit():
     assert not [a for a in plan["actions"] if a["kind"] == "place"]
     assert any("отсев по цене" in q["reason"] for q in plan["queue"]) or \
         not plan["queue"]
+
+
+def test_the_weakest_order_is_found_and_queued_for_cancel():
+    """Fills spent the balance, CSFloat's allowance fell under what stood, and
+    every amend came back "insufficient balance". Room is freed by taking down
+    the order the plan values least - one it would withdraw anyway first."""
+    import json as _json
+
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
+    c.post("/api/analysis/placement",
+           json=c.get("/api/analysis/placement").get_json()["suggested"])
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.upsert_our_order(item_id, 0.36, 0.37, 50.0, 60.0, state="live",
+                        remote_id="weak")
+    db.close()
+
+    preview = c.post("/api/analysis/cancel_lowest", json={"preview": True})
+    assert preview.status_code == 200
+    assert "0.3600–0.3700" in preview.get_json()["order"]
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    assert not db.get_setting("analysis_pending_actions"), "a preview sends nothing"
+    db.close()
+
+    body = c.post("/api/analysis/cancel_lowest", json={}).get_json()
+    assert "0.3600–0.3700" in body["order"]
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    queued = _json.loads(db.get_setting("analysis_pending_actions"))
+    db.close()
+    assert queued["source"] == "manual"
+    assert [(a["kind"], a["remote_id"]) for a in queued["actions"]] == \
+        [("cancel", "weak")]
+    assert c.post("/api/analysis/cancel_lowest", json={}).status_code == 409, \
+        "never over a plan already waiting"
+
+
+def test_positions_say_what_the_orders_add_up_to():
+    c, name = _stocked()
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.upsert_our_order(item_id, 0.36, 0.37, 50.0, 60.0, state="live",
+                        remote_id="a", quantity=2)
+    db.upsert_our_order(item_id, 0.30, 0.31, 20.0, 30.0, state="live",
+                        remote_id="b")
+    db.close()
+    c.post("/api/analysis/params", json={"an_balance": "700"})
+    body = c.get("/api/analysis/positions").get_json()
+    assert body["face"] == 120.0
+    assert body["allowance"] == 7000.0

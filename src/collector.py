@@ -717,10 +717,11 @@ class Collector:
                             if hasattr(self.client, "order_headers") else None,
                             dry_run=dry)
             results = []
+            source = str(pending.get("source") or "plan")
             for action in actions:
                 out = sender.perform(action)
                 results.append(out.as_dict())
-                self._log_order_event(out, "plan", dry)
+                self._log_order_event(out, source, dry)
                 if not out.ok or dry:
                     continue
                 item_id = self.db.get_item_id(action.item)
