@@ -1096,6 +1096,24 @@ def api_analysis():
             plan(sales, orders, wear_range(name), depth, params, own=own)),
             screen)
         bands = [b.as_dict() for b in scored]
+        # The other pricing beside the one in use, rung by rung: switching is
+        # a decision about money, and it is made on the items it would change.
+        from dataclasses import replace
+        alt_params = replace(params, adaptive=not params.adaptive)
+        alt = {(round(b.float_min, 4), round(b.float_max, 4)): b
+               for b in cap_bids(_refuse_unread_book(
+                   db, item_id,
+                   plan(sales, orders, wear_range(name), depth, alt_params,
+                        own=own)), screen)}
+        for b in bands:
+            other = alt.get((round(b["float_min"], 4), round(b["float_max"], 4)))
+            if other is not None:
+                b["alt"] = {"ceiling": other.ceiling, "bid": other.bid,
+                            "take": other.take, "reason": other.reason,
+                            "market": other.market, "sample": other.sample,
+                            "window": other.window, "shift": other.shift,
+                            "market_then": other.market_then,
+                            "rank": other.rank}
         take = [b for b in bands if b["take"]]
         out.append({
             "item": name,
@@ -1111,6 +1129,7 @@ def api_analysis():
             # repriced or sold since is still in it.
             "depth_at": max((b["fetched_at"] for b in depth), default=None),
             "bands": bands,
+            "alt_take": sum(1 for b in bands if (b.get("alt") or {}).get("take")),
             # Face value of the orders - what the ten-times-balance rule counts.
             "capital": round(sum(b["bid"] for b in take), 2),
             # And the money their fills would keep busy - what actually runs

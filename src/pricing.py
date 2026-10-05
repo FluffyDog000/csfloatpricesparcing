@@ -101,13 +101,17 @@ class Params:
     # How far the skin may have fallen over the last week, float-adjusted,
     # before nothing of it is opened. 0 turns the check off.
     max_drop: float = 0.05
+    # Window by need, prices brought to today, careful median - see
+    # `recency`. Off until turned on from the analysis page.
+    adaptive: bool = False
 
     def ladder_params(self):
         from . import ladder as _ladder
         return _ladder.Params(fee=self.fee, min_margin=self.min_margin,
                               window_days=self.window_days,
                               min_sample=self.min_sample,
-                              max_drop=self.max_drop)
+                              max_drop=self.max_drop,
+                              adaptive=bool(self.adaptive))
 
 
 @dataclass
@@ -171,6 +175,13 @@ class Band:
     flow_sample: int = 0
     take: bool = False
     reason: str = ""
+    # With the adaptive pricing (see `recency`): the plain median, the median
+    # before older sales were brought to today, the window used, and how far
+    # today's level stands from the window's start.
+    market_plain: float | None = None
+    market_then: float | None = None
+    window: float | None = None
+    shift: float | None = None
 
     # How many items one order asks for. One create out of the day's 200
     # buys up to this many; set from the fill rate (executor.size_orders).
@@ -220,9 +231,17 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
     lots, prices, lot_span = _ladder.lots_in_band(depth, hi)
     # The same windowing `ladder` does for a whole climb. Without it this path
     # priced a held order off a quarter of history at a fortnight's rate.
-    rung = _ladder.evaluate(
-        hi, _ladder.within(sales, p.window_days), orders, (lo, hi), lots, prices,
-        p.ladder_params(), lot_span=lot_span, own=own)
+    lp = p.ladder_params()
+    prep = None
+    if lp.adaptive:
+        from .recency import prepare
+        rows, lp, prep = prepare(sales, lp, span or (lo, hi))
+    else:
+        rows = _ladder.within(sales, p.window_days)
+    rung = _ladder.evaluate(hi, rows, orders, (lo, hi), lots, prices, lp,
+                            lot_span=lot_span, own=own)
+    if prep is not None:
+        rung.window, rung.shift = prep.window, prep.shift
     return _as_band(rung)
 
 
@@ -294,4 +313,8 @@ def _as_band(rung) -> Band:
         flow_sample=rung.sample,
         take=rung.take,
         reason=rung.reason,
+        market_plain=rung.market_plain,
+        market_then=rung.market_then,
+        window=rung.window,
+        shift=rung.shift,
     )

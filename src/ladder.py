@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from .depth import DEPTH_PAGE
+from .recency import careful_median, prepare
 from .trend import weekly
 
 # CSFloat holds a bought item for seven days before it can be listed. That is
@@ -75,6 +76,10 @@ class Params:
     # How far the skin may have fallen over the last week, float-adjusted,
     # before no rung of it is opened. 0 turns the check off. See `trend`.
     max_drop: float = 0.05
+    # The pricing for thin items (see `recency`): a window as long as the
+    # item needs, older sales brought to today's prices, and a resale price
+    # less the median's own error. Off: the fixed window and a plain median.
+    adaptive: bool = False
 
 
 @dataclass
@@ -126,6 +131,13 @@ class Rung:
     rank: float = 0.0
     take: bool = False
     reason: str = ""
+    # With `adaptive`: the plain median the careful one was taken from, the
+    # median before older sales were brought to today, the window used and
+    # how far today's level stands from the window's start.
+    market_plain: float | None = None
+    market_then: float | None = None
+    window: float | None = None
+    shift: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -143,6 +155,8 @@ class Rung:
             "sell_rate": self.sell_rate, "own": self.own,
             "t_sell": self.t_sell, "trend": self.trend, "rank": self.rank,
             "take": self.take, "reason": self.reason,
+            "market_plain": self.market_plain, "market_then": self.market_then,
+            "window": self.window, "shift": self.shift,
         }
 
 
@@ -512,7 +526,16 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         rung.reason = (f"мало продаж у верха: {rung.sample} "
                        f"при пороге {params.min_sample}")
         return rung
-    rung.market = median([sale_price(r) for r in near])
+    if params.adaptive:
+        # The median less its own error: a few cents at thirty sales, half a
+        # dollar at five. And, for the page, what it read before older sales
+        # were brought to today's prices.
+        rung.market, rung.market_plain = careful_median(
+            [sale_price(r) for r in near])
+        then = [r.get("raw_price") for r in near if r.get("raw_price") is not None]
+        rung.market_then = median([float(v) for v in then]) if then else None
+    else:
+        rung.market = median([sale_price(r) for r in near])
 
     # What the queue allows, once the lock has run. The rate is the lots'
     # own band, not the rung's reach.
@@ -723,7 +746,11 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
     # more history than the window so a thin band still has a median to read,
     # and dividing that wider count by the narrower window is what overstated
     # every flow in the model.
-    sales = within(sales, p.window_days)
+    prep = None
+    if p.adaptive:
+        sales, p, prep = prepare(sales, p, span)
+    else:
+        sales = within(sales, p.window_days)
 
     out: list[Rung] = []
     claimed: set[int] = set()
@@ -733,6 +760,8 @@ def ladder(sales: Sequence[dict], orders: Sequence[dict],
         rung = evaluate(top, sales, orders, (low, high), lots, prices, p,
                         lot_span=lot_span, own=own)
         rung.trend = drift.change
+        if prep is not None:
+            rung.window, rung.shift = prep.window, prep.shift
         if rung.take:
             mine = [i for i in fills_at(sales, orders, low, top, rung.bid)
                     if i not in claimed]

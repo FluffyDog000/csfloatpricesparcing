@@ -1210,3 +1210,20 @@ def test_positions_say_what_the_orders_add_up_to():
     body = c.get("/api/analysis/positions").get_json()
     assert body["face"] == 120.0
     assert body["allowance"] == 7000.0
+
+
+def test_every_band_carries_what_the_other_pricing_makes_of_it():
+    """Switching the pricing is a decision about money, made on the items it
+    would change: each band says what the other one would bid, and the toggle
+    sticks."""
+    c, name = _stocked()
+    body = c.get("/api/analysis").get_json()
+    item = next(i for i in body["items"] if i["item"] == name)
+    assert body["params"]["adaptive"] in (0, False)
+    assert item["bands"] and all("alt" in b for b in item["bands"])
+    assert "alt_take" in item
+
+    r = c.post("/api/analysis/params", json={"an_adaptive": "1"})
+    assert r.get_json()["params"]["adaptive"] == 1
+    body = c.get("/api/analysis").get_json()
+    assert body["params"]["adaptive"] == 1

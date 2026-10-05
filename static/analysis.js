@@ -268,12 +268,41 @@
     return `${Math.round(hours / 24)} дн назад`;
   }
 
+  // Which pricing the bands came from, so the comparison line can be named
+  // after the other one. Set by renderResults from the reply's params.
+  let adaptiveOn = false;
+  const escText = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /** What the other pricing makes of this band, in one line - or "" when it
+   *  says the same. Built from text nodes' worth of values only. */
+  function altNote(b) {
+    const a = b.alt;
+    if (!a) return "";
+    const label = adaptiveOn ? "по-старому" : "по-новому";
+    const extra = []
+      .concat(a.window && a.window > 16.01 ? [`окно ${Math.round(a.window)} дн`] : [])
+      .concat(a.shift !== null && a.shift !== undefined && Math.abs(a.shift) >= 0.001
+        ? [`цены приведены к сегодня (${a.shift > 0 ? "+" : "−"}${Math.abs(a.shift * 100).toFixed(1)}%)`] : []);
+    if (!a.take) {
+      if (!b.take && a.reason === b.reason) return "";
+      return `${label}: не проходит — ${escText(a.reason || "")}`;
+    }
+    const d = b.take && b.ceiling && a.ceiling ? a.ceiling - b.ceiling : null;
+    return `${label}: ставка ${money(a.bid)}, потолок ${money(a.ceiling)}`
+      + (d !== null && Math.abs(d) >= 0.005 ? ` (${d > 0 ? "+" : "−"}${money(Math.abs(d))})` : "")
+      + (!b.take ? " — проходит" : "")
+      + (extra.length ? " · " + extra.join(" · ") : "");
+  }
+
   function bandRow(b, depthAt, depthBands) {
     const tr = document.createElement("tr");
     const band = b.float_min.toFixed(2) + "–" + b.float_max.toFixed(2);
+    const alt = altNote(b);
+    const altHtml = alt ? `<br><small class="alt-note">${alt}</small>` : "";
     if (!b.take) {
       tr.className = "band-skip";
-      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}</td>`;
+      tr.innerHTML = `<td>${band}</td><td colspan="9" class="muted">${b.reason}${altHtml}</td>`;
       return tr;
     }
     tr.className = "band-take";
@@ -330,7 +359,8 @@
       ? `медиана продаж в последней сотой перед верхом, по ${b.sample} сделкам`
       : `медиана по ${b.sample} сделкам против цены очереди лотов`;
     tr.innerHTML = `
-      <td><b>${band}</b></td>
+      <td><b>${band}</b>${b.window && b.window > 16.01
+        ? `<br><small class="muted">окно ${Math.round(b.window)} дн</small>` : ""}${altHtml}</td>
       <td class="muted">${b.top ? money(b.top) : "никого"}</td>
       <td><b>${money(b.bid)}</b></td>
       <td>${money(b.ceiling)}</td>
@@ -391,6 +421,20 @@
     });
     box.appendChild(tiles);
 
+    // The other pricing, counted the same way: how many bands it would take.
+    const altTake = scored.reduce((n, i) => n + (i.alt_take || 0), 0);
+    const altItems = scored.filter((i) => (i.alt_take || 0) > 0).length;
+    if (scored.some((i) => i.alt_take !== undefined)) {
+      const cmp = document.createElement("p");
+      cmp.className = "muted";
+      const now = data.params && data.params.adaptive ? "новому" : "старому";
+      const other = now === "новому" ? "по-старому" : "по-новому";
+      cmp.textContent = `Сейчас расчёт по ${now}: ${orders} полос на ${withBids.length} `
+        + `предмет(ах). ${other[0].toUpperCase() + other.slice(1)} было бы ${altTake} полос `
+        + `на ${altItems} предмет(ах) — разница по каждой полосе в разборе ниже.`;
+      box.appendChild(cmp);
+    }
+
     // What the free pass threw out, grouped by the threshold that did it.
     if (screened.length) {
       const why = {};
@@ -422,6 +466,7 @@
   function renderResults(data) {
     const box = $("an-results");
     box.innerHTML = "";
+    adaptiveOn = !!(data.params && data.params.adaptive);
     renderFunnel(data);
     if (!data.items.length) return;
     const onlyTake = ($("an-only-take") || {}).checked;
@@ -1036,6 +1081,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("p-window").value = p.window_days;
     $("p-sample").value = p.min_sample;
     $("p-drop").value = Math.round((p.max_drop || 0) * 1000) / 10;
+    if ($("p-adaptive")) $("p-adaptive").checked = !!p.adaptive;
   }
 
   document.addEventListener("DOMContentLoaded", () => {
@@ -1305,6 +1351,7 @@ float, который принимает ордер. Ниже «ожид.» — 
         an_window: $("p-window").value,
         an_min_sample: $("p-sample").value,
         an_max_drop: (parseFloat($("p-drop").value) || 0) / 100,
+        an_adaptive: $("p-adaptive") && $("p-adaptive").checked ? 1 : 0,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,
       an_max_orders: $("l-max").value,

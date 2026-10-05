@@ -430,6 +430,7 @@ td.warn-text { color: #d29922; }
 .journal-tile.good b { color: var(--good); }
 .journal-tile.warn b { color: #d29922; }
 .weakest-line { font-size: 13px; margin: -4px 0 12px; }
+.alt-note { color: #6a8fd8; }
 .problems-block { padding-top: 12px; padding-bottom: 12px; }
 .problems-head { display: flex; align-items: center; justify-content: space-between;
                  gap: 10px; margin-bottom: 8px; }

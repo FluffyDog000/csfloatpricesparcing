@@ -841,3 +841,32 @@ def test_orders_taken_down_to_make_room_are_counted_and_filterable():
     got = _run_script("static/journal.js", _journal([ev], positions=_position()))
     assert "снято ради места" in got["tilesText"]
     assert "ради места" in got["journalText"], "the source is named in the history"
+
+
+def test_a_band_says_what_the_new_pricing_would_do():
+    from tests.test_analysis_js import _run as run_analysis
+
+    band = {"float_min": 0.15, "float_max": 0.16, "take": True, "bid": 32.6,
+            "ceiling": 34.0, "step": 0.1, "rank": 0.003, "margin": 0.09,
+            "market": 36.4, "sample": 9, "priced_from": "история", "queue": 0,
+            "queue_price": None, "lam": 0.14, "top": 32.5,
+            "alt": {"take": True, "bid": 32.6, "ceiling": 33.4, "window": 30.0,
+                    "shift": -0.012, "reason": "", "market": 35.9, "sample": 17}}
+    skip = {"float_min": 0.15, "float_max": 0.17, "take": False,
+            "reason": "мало продаж у верха: 4 при пороге 8",
+            "alt": {"take": True, "bid": 30.1, "ceiling": 31.0, "window": 45.0,
+                    "shift": -0.02, "reason": ""}}
+    got = run_analysis({
+        "items": [{"item": "A (FT)", "sales": 40, "orders": 3, "depth": 2,
+                   "bands": [band, skip], "capital": 32.6, "profit": 2.9,
+                   "swept_at": None, "alt_take": 2, "screened_out": "",
+                   "screen": {"passed": True, "flow": 0.3, "quiet_days": 1.0,
+                              "median": 36.0, "sales": 40, "reason": ""}}],
+        "params": {"fee": 0.02, "band_step": 0.01, "adaptive": False},
+        "screen": {}, "error": "", "waiting": []})
+    import re
+    text = re.sub(r"<[^>]+>", "", got["resultsText"] + got["funnelText"])
+    assert "по-новому: ставка $32.60, потолок $33.40 (−$0.60)" in text, text
+    assert "окно 30 дн" in text and "−1.2%" in text
+    assert "по-новому: ставка $30.10, потолок $31.00 — проходит" in text
+    assert "По-новому было бы 2 полос" in text

@@ -145,6 +145,13 @@ function deepText(node) {
     sections: (nodes["an-results"] || el("div")).children.length,
     funnel: (nodes["an-funnel"] || el("div")).children.length,
     funnelText: deepText(nodes["an-funnel"]),
+    // Rows built with innerHTML strings carry their text there, not in
+    // child nodes; read both.
+    resultsText: (function deepHtml(n) {
+      if (!n) return "";
+      return (n.textContent || "") + " " + (n.innerHTML || "") + " "
+        + (n.children || []).map(deepHtml).join(" ");
+    })(nodes["an-results"]),
     planSync: (nodes["plan-sync"] || el("div")).textContent,
     step: (nodes["p-step"] || el("div")).value,
     budget: (nodes["l-total"] || el("div")).value,
