@@ -43,6 +43,7 @@ LIMIT_BOUNDS = {
     "full_allowance": (0, 1),
     "max_quantity": (1, 50),
     "order_days": (0.5, 30.0),
+    "leverage": (1.0, 10.0),
 }
 LIMIT_KEYS = (
     ("an_total_capital", "total_capital", float),
@@ -56,7 +57,33 @@ LIMIT_KEYS = (
     ("an_full_allowance", "full_allowance", int),
     ("an_max_quantity", "max_quantity", int),
     ("an_order_days", "order_days", float),
+    ("an_leverage", "leverage", float),
 )
+
+# The balance read off the account (`Collector.read_balance`), in dollars,
+# and when. Used in place of the typed one while it is this fresh: older, and
+# the bot has not been able to look - the typed figure is the better guess.
+BALANCE_KEY = "account_balance"
+BALANCE_AT_KEY = "account_balance_at"
+BALANCE_FRESH_HOURS = 6.0
+
+
+def live_balance(db) -> tuple[float | None, str | None]:
+    """(dollars, when read) of the account's balance, when it is fresh."""
+    from datetime import datetime, timedelta, timezone
+
+    from .pacing import parse_iso
+
+    raw, at = db.get_setting(BALANCE_KEY), db.get_setting(BALANCE_AT_KEY)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, None
+    when = parse_iso(at)
+    if when is None or datetime.now(timezone.utc) - when > timedelta(
+            hours=BALANCE_FRESH_HOURS):
+        return None, at
+    return value, at
 
 # The free pass over sales history, before any request is spent. Wide by
 # default on purpose: a screen that drops items before anyone has chosen its
@@ -101,6 +128,11 @@ def params(db) -> Params:
 
 def limits(db) -> Limits:
     out = _fill(db, Limits(), LIMIT_KEYS, LIMIT_BOUNDS)
+    out.balance_typed = out.balance
+    live, _ = live_balance(db)
+    if live is not None:
+        out.balance = live
+        out.balance_live = True
     if db.get_setting("an_patience_min") in (None, ""):
         # Patience used to be set in days. Reading the old key as minutes would
         # turn "wait up to 14 days" into "wait a quarter of an hour" silently,

@@ -874,7 +874,8 @@ float, который принимает ордер. Ниже «ожид.» — 
     const peak = lastTaken.peak || 0;
     sum.innerHTML = `По рангу, лучшее сверху. В план входит <b>${taken.length}</b> из `
       + `${queue.length}: ордеров на <b>${money(face)}</b>`
-      + (limits && limits.order_cap ? ` из ${money(limits.order_cap)} разрешённых` : "")
+      + (limits && limits.order_cap ? ` из ${money(limits.order_cap)} разрешённых`
+        + (limits.leverage && limits.leverage < 10 ? ` (${limits.leverage}× баланса)` : "") : "")
       + `; исполнения держат в среднем <b>${money(used)}</b>, в неудачный день до `
       + `<b>${money(peak)}</b> при бюджете ${money(limits && limits.budget)}`
       + (limits && limits.full_allowance
@@ -958,7 +959,16 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("l-max").value = l.max_orders;
     $("l-maxitem").value = l.max_orders_per_item;
     $("l-patience").value = l.patience_minutes;
-    $("l-balance").value = l.balance;
+    $("l-balance").value = l.balance_live ? (l.balance_typed || 0) : l.balance;
+    if ($("l-leverage")) $("l-leverage").value = l.leverage ?? 10;
+    const bnote = $("l-balance-note");
+    if (bnote) {
+      bnote.textContent = l.balance_live
+        ? `С аккаунта: ${money(l.balance)} — бот считает от него. Поле — запасное, `
+          + "если баланс не удастся прочитать."
+        : "Баланс с аккаунта не прочитан — бот считает от этого поля. "
+          + "0 — не знаю, тогда проверка отключена.";
+    }
     $("l-guard").value = Math.round((l.guard_share || 0) * 1000) / 10;
     if ($("l-surge")) $("l-surge").value = l.surge_z ?? 1;
     if ($("l-full")) $("l-full").checked = !!l.full_allowance;
@@ -977,9 +987,11 @@ float, который принимает ордер. Ниже «ожид.» — 
         + `планировать буду на ${money(l.budget)}.`;
     } else {
       note.className = "muted";
-      note.textContent = `Баланс ${money(l.balance)}, лимит `
+      note.textContent = `Баланс ${money(l.balance)}`
+        + (l.balance_live ? " (с аккаунта)" : "") + `, лимит `
         + `${money(l.total_capital)} в него укладывается. Ордеров CSFloat `
-        + `разрешит на ${money(l.allowance)} — это ограничение до денег не доходит.`;
+        + `разрешит на ${money(l.allowance)}; план ставит до ${money(l.order_cap)} `
+        + `(${l.leverage}×), остальное — запас для перебивания после покупок.`;
     }
   }
 
@@ -1267,6 +1279,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       an_guard_share: (parseFloat($("l-guard").value) || 0) / 100,
       an_surge_z: $("l-surge").value,
       an_full_allowance: $("l-full").checked ? 1 : 0,
+      an_leverage: $("l-leverage").value,
       an_max_quantity: $("l-maxqty").value,
       an_order_days: $("l-days").value,
       scr_min_price: $("s-minprice").value,

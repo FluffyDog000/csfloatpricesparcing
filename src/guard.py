@@ -66,10 +66,21 @@ def read(rows: Iterable[dict], limits, now: datetime | None = None) -> Reading:
             spent += float(row.get("price") or 0.0)
         except (TypeError, ValueError):
             continue
-    reference = limits.balance if limits.balance > 0 else limits.total_capital
+    reference = _reference(limits, spent)
     share = limits.guard_share
     limit = reference * share if reference > 0 and share > 0 else 0.0
     return Reading(round(spent, 2), len(bought), reference, limit)
+
+
+def _reference(limits, spent: float) -> float:
+    """What the day's fills are measured against. A balance read off the
+    account is already short of today's purchases, and measuring them against
+    what they left would tighten the brake with every fill: the day began
+    with what is there now plus what was spent."""
+    if limits.balance > 0:
+        return limits.balance + (spent if getattr(limits, "balance_live", False)
+                                 else 0.0)
+    return limits.total_capital
 
 
 def read_trades(trades: Iterable[dict], limits,
@@ -100,7 +111,7 @@ def read_trades(trades: Iterable[dict], limits,
         except (TypeError, ValueError):
             continue
         fills += 1
-    reference = limits.balance if limits.balance > 0 else limits.total_capital
+    reference = _reference(limits, spent)
     share = limits.guard_share
     limit = reference * share if reference > 0 and share > 0 else 0.0
     return Reading(round(spent, 2), fills, reference, limit)

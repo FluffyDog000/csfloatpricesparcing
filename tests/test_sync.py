@@ -191,7 +191,8 @@ def test_the_listing_endpoint_is_looked_for_when_the_configured_one_refuses():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         if url.endswith("/api/v1/buy-orders"):
             raise requests.HTTPError("HTTP 405 для " + url)
         if "/me/buy-orders?page=0" in url:
@@ -245,7 +246,8 @@ def test_the_unattended_pass_does_not_go_probing():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         raise requests.HTTPError("HTTP 405")
 
     col.client.fetch_json = answer
@@ -261,7 +263,8 @@ def test_a_configured_path_that_works_is_not_second_guessed():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         return []
 
     col.client.fetch_json = answer
@@ -295,7 +298,8 @@ def test_every_page_of_orders_is_read():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         page = int(url.split("page=")[1].split("&")[0])
         return {"data": pages.get(page, [])}
 
@@ -317,7 +321,8 @@ def test_a_page_parameter_the_server_ignores_does_not_loop():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         return {"data": [_site_order("r0"), _site_order("r1")]}
 
     col.client.fetch_json = answer
@@ -514,7 +519,8 @@ def test_a_saved_path_without_pages_goes_page_by_page_past_a_hundred():
     asked = []
 
     def answer(url, headers=None, account=False):
-        asked.append(url)
+        if not url.endswith("/api/v1/me"):
+            asked.append(url)
         if "page=" not in url:
             return {"data": orders[:100], "count": 148}
         page = int(url.split("page=")[1].split("&")[0])

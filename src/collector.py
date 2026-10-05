@@ -781,6 +781,7 @@ class Collector:
                                 _json.dumps(result, ensure_ascii=False))
             return result
 
+        self.read_balance()
         self.client.pool.pin(for_orders=True)
         try:
             theirs, error, found = self._read_their_orders(spec, discover)
@@ -1091,6 +1092,33 @@ class Collector:
                 "следующие страницы повторяют её: список, похоже, длиннее, "
                 "чем удаётся прочитать")
         return out
+
+    def read_balance(self) -> float | None:
+        """The account's balance, off /me, for the limits to count from.
+
+        The typed figure went stale with the first fill: $700 on the page,
+        $630 on the account, and a plan placed against the larger one stood
+        over CSFloat's allowance - every amend refused for balance. One read
+        of the main key's counter per defence pass. Never raises."""
+        from .profit import ME_PATH, my_balance, my_id
+        from .settings import BALANCE_AT_KEY, BALANCE_KEY
+
+        base = self.config.http.base_url.rstrip("/")
+        try:
+            payload = self.client.fetch_json(base + ME_PATH, account=True)
+        except Exception as exc:  # noqa: BLE001 - the typed figure still serves
+            log.warning("Could not read the account balance: %s", exc)
+            return None
+        balance = my_balance(payload)
+        if balance is None:
+            log.warning("No balance in the /me reply")
+            return None
+        self.db.set_setting(BALANCE_KEY, f"{balance:.2f}")
+        self.db.set_setting(BALANCE_AT_KEY, utcnow_iso())
+        me = my_id(payload)
+        if me and not self.db.get_setting("account_steam_id"):
+            self.db.set_setting("account_steam_id", me)
+        return balance
 
     def _read_their_orders(self, spec, discover: bool):
         """Fetch the account's buy orders. Returns (orders, error, path).

@@ -1782,6 +1782,8 @@ def api_analysis_positions():
         # falls as fills spend it, and then amends are refused.
         "allowance": _analysis_limits(db).as_dict().get("allowance"),
         "balance": _analysis_limits(db).balance,
+        "balance_live": _analysis_limits(db).balance_live,
+        "order_cap": _analysis_limits(db).as_dict().get("order_cap"),
         "outbid": sum(1 for r in rows if not r["first"]),
         # One sweep answers it: if the book names its orders we can point at
         # ours exactly, and the price-and-bounds guess retires.

@@ -210,6 +210,8 @@
     });
     const tiles = [
       ["стоит ордеров", pos ? rows.length : d.held, ""],
+      [pos && pos.balance_live ? "баланс (с аккаунта)" : "баланс (из настроек)",
+        pos && pos.balance ? cash(pos.balance) : "—", ""],
       [pos && pos.allowance ? `на сумму (лимит CSFloat ${cash(pos.allowance)})`
         : "на сумму", pos ? cash(pos.face) : "—",
         pos && pos.allowance && pos.face > pos.allowance ? "bad" : ""],

@@ -122,6 +122,17 @@ class Limits:
     # take it and CSFloat drops the rest - the rank no longer decides where
     # the money goes.
     full_allowance: bool = False
+    # How many times the money the orders may add up to. CSFloat allows ten;
+    # standing right at ten leaves no room at all: one fill takes ten times
+    # its price off the allowance and only its price off the orders, and from
+    # then on every amend - raising and lowering - is refused for balance.
+    # Below ten is the room the defence keeps to answer outbids.
+    leverage: float = LEVERAGE
+    # Whether `balance` was read from the account rather than typed in, and
+    # the typed one - kept for the page, which must not write the read value
+    # back into the field as if someone had typed it.
+    balance_live: bool = False
+    balance_typed: float = 0.0
 
     @property
     def allowance(self) -> float:
@@ -137,12 +148,14 @@ class Limits:
 
     @property
     def order_cap(self) -> float:
-        """The face value the plan may place: CSFloat's allowance, or - when
-        it is spent in full - ten times our own budget, so the limit typed on
-        the page still means something."""
+        """The face value the plan may place: `leverage` times the balance,
+        or - when the allowance is spent in full - times our own budget, so
+        the limit typed on the page still means something. Never past what
+        CSFloat itself allows."""
+        lev = min(max(float(self.leverage or LEVERAGE), 1.0), LEVERAGE)
         if self.full_allowance:
-            return LEVERAGE * self.budget
-        return self.allowance
+            return min(lev * self.budget, self.allowance)
+        return self.balance * lev if self.balance > 0 else float("inf")
 
     @property
     def capped_by_balance(self) -> bool:
@@ -159,6 +172,7 @@ class Limits:
         cap = self.order_cap
         out["order_cap"] = round(cap, 2) if cap != float("inf") else None
         out["full_allowance"] = bool(self.full_allowance)
+        out["balance_live"] = bool(self.balance_live)
         return out
 
 
@@ -396,8 +410,8 @@ def select_portfolio(candidates: Sequence[tuple[str, Band]], limits: Limits,
         if band.bid > budget + 1e-9:
             return f"одна покупка (${band.bid:.0f}) дороже бюджета"
         if face + band.bid * band.quantity > allowance + 1e-9:
-            return (f"лимит CSFloat: ордеров не больше чем на "
-                    f"${allowance:.0f} (10× баланса)")
+            return (f"лимит ордеров: не больше чем на ${allowance:.0f} "
+                    f"({limits.leverage:g}× баланса)")
         need = band.bid * n
         if limits.full_allowance:
             return ""

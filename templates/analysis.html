@@ -120,8 +120,13 @@
     <div class="field-grid analysis-params">
       <label>баланс на CSFloat, $
         <input type="number" id="l-balance" class="input" step="10" min="0" value="0">
-        <small class="muted">CSFloat разрешает ордеров на 10× баланса.<br>
-          0 — не знаю, тогда проверка отключена</small></label>
+        <small class="muted" id="l-balance-note">CSFloat разрешает ордеров на 10× баланса.<br>
+          Бот читает баланс с аккаунта сам; это поле — на случай, если не смог</small></label>
+      <label>ордеров на N× баланса
+        <input type="number" id="l-leverage" class="input" step="0.5" min="1" max="10" value="10">
+        <small class="muted">CSFloat разрешает до 10×. Меньше — запас, чтобы после<br>
+          покупок защита могла поднимать цены: каждая покупка на $X<br>
+          уменьшает лимит CSFloat на 10×$X. 6–7 — разумно</small></label>
       <label>денег в сделках, $
         <input type="number" id="l-total" class="input" step="10" min="0" value="0">
         <small class="muted">сколько денег могут держать купленные предметы:<br>
@@ -155,7 +160,7 @@
         <small class="muted">0 — планировать по среднему, 1 — денег хватит<br>
           в ~84% дней, 2 — в ~98%. Не хватило — CSFloat просто снимет ордер</small></label>
       <label class="arm-line">
-        <input type="checkbox" id="l-full"> ставить на весь лимит CSFloat (10× баланса)
+        <input type="checkbox" id="l-full"> ставить на весь лимит (N× баланса)
         <small class="muted">больше ордеров — быстрее прилетают предметы. Деньги<br>
           забирают те, что исполнятся первыми; кончились — CSFloat снимает<br>
           остальные. Запас на всплеск тогда не учитывается</small></label>

@@ -136,6 +136,28 @@ def parse_trade(raw: dict, me: str | None = None,
     }
 
 
+BALANCE_PATHS = ("user.balance", "balance", "user.wallet.balance")
+
+
+def my_balance(payload: Any) -> float | None:
+    """The account's balance in dollars, from GET /api/v1/me.
+
+    CSFloat quotes money in cents everywhere else, so a whole number is cents;
+    one with a fractional part is already dollars."""
+    raw = _first(payload, BALANCE_PATHS)
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    if isinstance(raw, int) or (isinstance(raw, str) and raw.strip().isdigit()):
+        return round(value / 100.0, 2)
+    return round(value, 2) if value != int(value) else round(value / 100.0, 2)
+
+
 def my_id(payload: Any) -> str | None:
     """Our own Steam id, from GET /api/v1/me."""
     for path in ("user.steam_id", "steam_id", "user.id", "id"):
