@@ -26,7 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import (
-    Flask, abort, g, jsonify, redirect, render_template, request, session, url_for,
+    Flask, Response, abort, g, jsonify, redirect, render_template, request, session,
+    url_for,
 )
 from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
@@ -1220,6 +1221,9 @@ def api_analysis_plan():
 
     trace: list = []
     wanted_by_item = select_portfolio(candidates, limits, holding, trace=trace)
+    # Kept for the Excel export, which needs every row and the fields the
+    # page does not show.
+    g.plan_trace = trace
 
     actions: list[dict] = []
     ranked: dict[tuple, tuple[float, float]] = {}
@@ -1537,6 +1541,100 @@ def api_analysis_apply():
         "note": ("Сборщик занят: " + "; ".join(waiting)) if waiting else
                 "Передано сборщику — выполнит в ближайшем цикле.",
     })
+
+
+KIND_RU = {"place": "поставить", "raise": "поднять", "lower": "снизить",
+           "cancel": "снять", "keep": "оставить"}
+
+
+@app.route("/api/analysis/plan.xlsx")
+def api_analysis_plan_xlsx():
+    """The plan as an Excel file: the whole placement queue, the actions, and
+    the settings it was built with - so two plans (say, before and after the
+    pricing changed) can be laid side by side."""
+    from src.executor import rank as rank_of
+    from src.xlsx import workbook
+
+    db = get_db()
+    plan = api_analysis_plan().get_json()
+    trace = getattr(g, "plan_trace", []) or []
+    params = _analysis_params(db)
+
+    def num(v, nd=2):
+        return None if v is None or v == float("inf") else round(float(v), nd)
+
+    def pct(v):
+        return None if v is None else round(float(v) * 100, 2)
+
+    queue, running = [], 0.0
+    for n, row in enumerate(trace, 1):
+        b = row["band"]
+        cost = row["cost"]
+        finite = cost is not None and cost != float("inf")
+        if row["taken"] and finite:
+            running += cost
+        margin = b.margin_expected if b.margin_expected is not None else b.margin
+        profit = ((b.lam or 0) * (b.bid or 0) * (margin or 0)) if b.bid else None
+        queue.append([
+            n, row["item"], num(b.float_min, 4), num(b.float_max, 4),
+            "да" if row["taken"] else "нет", "да" if row["held"] else "",
+            row["reason"] or "",
+            num(b.bid), num(b.ceiling), pct(b.margin), pct(b.margin_expected),
+            num(b.lam, 3), num(b.t_sell, 1), num(rank_of(b), 5), b.quantity,
+            num(cost) if finite else None,
+            num(running) if row["taken"] else None, num(profit),
+            num(b.market), num(b.market_plain), num(b.market_then), b.sample,
+            num(b.window, 0), pct(b.shift), b.priced_from, num(b.top),
+        ])
+    actions = [[KIND_RU.get(a["kind"], a["kind"]), a["item"],
+                num(a["float_min"], 4), num(a["float_max"], 4),
+                num(a.get("was")), num(a["price"]), num(a.get("ceiling")),
+                a.get("quantity") or 1, num(a.get("rank"), 5), a.get("reason") or ""]
+               for a in plan["actions"]]
+    lim = plan["limits"]
+    stamp = datetime.now(timezone.utc) + timedelta(hours=3)
+    settings_rows = [
+        ["выгружено (МСК)", stamp.strftime("%Y-%m-%d %H:%M")],
+        ["расчёт цен", "новый" if params.adaptive else "старый"],
+        ["окно истории, дн", params.window_days],
+        ["минимальная выборка", params.min_sample],
+        ["минимальная маржа, %", pct(params.min_margin)],
+        ["комиссия, %", pct(params.fee)],
+        ["подешевел за неделю не больше, %", pct(params.max_drop)],
+        ["баланс", lim.get("balance")],
+        ["баланс с аккаунта", "да" if lim.get("balance_live") else "нет"],
+        ["ордеров на N× баланса", lim.get("leverage")],
+        ["предел суммы ордеров", lim.get("order_cap")],
+        ["денег в сделках", lim.get("total_capital")],
+        ["максимум ордеров", lim.get("max_orders")],
+        ["максимум на предмет", lim.get("max_orders_per_item")],
+        ["полос в очереди", len(queue)],
+        ["в плане", sum(1 for r in queue if r[4] == "да")],
+        ["новых к постановке", sum(1 for a in plan["actions"] if a["kind"] == "place")],
+        ["предметов с фазой (не в плане)", plan.get("phase_items", 0)],
+    ]
+    body = workbook([
+        ("Очередь",
+         ["№", "предмет", "float от", "float до", "в плане", "уже стоит",
+          "почему нет", "ставка $", "потолок $", "маржа %", "ожид. маржа %",
+          "налив /сут", "продажа, дн", "ранг", "штук", "держит $", "итого $",
+          "приб./сут $", "цена выхода $", "медиана $", "медиана без пересчёта $",
+          "продаж в выборке", "окно, дн", "приведение %", "цена от",
+          "соперник $"],
+         queue,
+         [5, 44, 9, 9, 8, 9, 40, 10, 10, 9, 11, 10, 10, 10, 6, 10, 10, 11,
+          12, 10, 14, 10, 8, 11, 10, 10]),
+        ("Действия",
+         ["действие", "предмет", "float от", "float до", "было $", "цена $",
+          "потолок $", "штук", "ранг", "почему"],
+         actions, [11, 44, 9, 9, 9, 9, 10, 6, 10, 60]),
+        ("Настройки", ["параметр", "значение"], settings_rows, [34, 20]),
+    ])
+    name = (f"plan_{stamp.strftime('%Y-%m-%d_%H%M')}_"
+            f"{'new' if params.adaptive else 'old'}.xlsx")
+    return Response(body, mimetype=(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.route("/api/analysis/cancel_lowest", methods=["POST"])

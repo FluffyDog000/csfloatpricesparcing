@@ -1227,3 +1227,40 @@ def test_every_band_carries_what_the_other_pricing_makes_of_it():
     assert r.get_json()["params"]["adaptive"] == 1
     body = c.get("/api/analysis").get_json()
     assert body["params"]["adaptive"] == 1
+
+
+def test_the_plan_downloads_as_an_excel_file():
+    """Two plans side by side - before and after the pricing changed - is how
+    the switch gets decided, and that takes the whole queue in a file."""
+    import io
+    import zipfile
+
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
+    r = c.get("/api/analysis/plan.xlsx")
+    assert r.status_code == 200
+    assert r.mimetype.endswith("spreadsheetml.sheet")
+    assert "plan_" in r.headers["Content-Disposition"] and "_old.xlsx" in \
+        r.headers["Content-Disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.data))
+    names = z.namelist()
+    assert "xl/workbook.xml" in names and "xl/worksheets/sheet3.xml" in names
+    queue = z.read("xl/worksheets/sheet1.xml").decode()
+    assert "Specialist Gloves" in queue and "потолок $" in queue
+    settings = z.read("xl/worksheets/sheet3.xml").decode()
+    assert "старый" in settings
+    c.post("/api/analysis/params", json={"an_adaptive": "1"})
+    r = c.get("/api/analysis/plan.xlsx")
+    assert "_new.xlsx" in r.headers["Content-Disposition"]
+
+
+def test_the_xlsx_writer_keeps_numbers_numbers_and_escapes_text():
+    import io
+    import zipfile
+
+    from src.xlsx import _col, workbook
+
+    assert [_col(i) for i in (0, 25, 26, 27)] == ["A", "Z", "AA", "AB"]
+    data = workbook([("Лист", ["a", "b"], [[1.5, "x < y & z"], [None, True]])])
+    sheet = zipfile.ZipFile(io.BytesIO(data)).read("xl/worksheets/sheet1.xml").decode()
+    assert "<v>1.5</v>" in sheet and "x &lt; y &amp; z" in sheet and ">да<" in sheet
