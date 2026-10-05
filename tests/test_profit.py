@@ -461,3 +461,31 @@ def test_a_purchase_still_in_its_trade_is_held_and_valued():
         ._run_script("static/profit.js", body)
     assert "ждёт обмена" in got["profit"]
     assert "ожидаемая прибыль" in got["profit"]
+
+
+def test_held_skins_read_newest_first_with_a_percentage():
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.add_item(NAME)
+    for t in parsed(trade("1", "buy", 9000, state="verified",
+                          at="2026-10-01T10:00:00Z"),
+                    trade("2", "buy", 8000, flt=0.1551, state="pending",
+                          at="2026-10-05T08:30:00Z"),
+                    trade("3", "buy", 8500, flt=0.1552, state="pending",
+                          at="2026-10-04T15:00:00Z")):
+        db.upsert_trade(t)
+    from src.db import utcnow_iso
+    for i in range(6):
+        db.conn.execute(
+            "INSERT INTO sales (sale_id, item_id, market_hash_name, price, "
+            "float_value, sold_at, scraped_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (f"s{i}", item_id, NAME, 100.0, 0.155, utcnow_iso(), utcnow_iso()))
+    db.conn.commit()
+    db.close()
+
+    body = c.get("/api/profit?days=0").get_json()
+    assert [h["trade_id"] for h in body["holding"]] == ["2", "3", "1"]
+    first = body["holding"][0]
+    assert first["est_pct"] == pytest.approx((98 - 80) / 80 * 100, abs=0.1)
+    t = body["holding_totals"]
+    assert t["est_pct"] == pytest.approx(t["est_profit"] / t["spent"] * 100, abs=0.1)

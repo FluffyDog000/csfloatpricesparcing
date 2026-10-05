@@ -1820,6 +1820,8 @@ def api_profit():
             "basis": basis,
             "est_profit": (round(est * (1 - fee) - bought, 2)
                            if est is not None else None),
+            "est_pct": (round((est * (1 - fee) - bought) / bought * 100.0, 1)
+                        if est is not None and bought else None),
             "by_bot": pf.by_bot(t, events),
             "tracked": bool(sales_cache[name]),
             "trade_id": t["trade_id"],
@@ -1827,7 +1829,12 @@ def api_profit():
             "state": t.get("state"),
         })
 
+    # Newest first, whichever list a purchase came from: running trades were
+    # appended after the finished ones and read upside down.
+    holding.sort(key=lambda h: h["bought_at"] or "", reverse=True)
     valued = [h for h in holding if h["estimate"] is not None]
+    valued_spent = sum(h["bought"] for h in valued)
+    valued_profit = sum(h["est_profit"] for h in valued)
     return jsonify({
         "fee": fee,
         "days": days,
@@ -1839,7 +1846,9 @@ def api_profit():
             "count": len(holding),
             "spent": round(sum(h["bought"] for h in holding), 2),
             "estimate": round(sum(h["estimate"] for h in valued), 2),
-            "est_profit": round(sum(h["est_profit"] for h in valued), 2),
+            "est_profit": round(valued_profit, 2),
+            "est_pct": (round(valued_profit / valued_spent * 100.0, 1)
+                        if valued_spent else None),
             "unvalued": len(holding) - len(valued),
             "pending": sum(1 for h in holding if h["pending"]),
         },

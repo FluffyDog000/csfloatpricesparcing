@@ -40,6 +40,16 @@
     return t.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
   }
 
+  /** Date and time, for a purchase: the day alone does not say which of
+   *  today's fills came first. */
+  function stamp(iso) {
+    if (!iso) return "—";
+    const t = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+    if (isNaN(t)) return iso;
+    return t.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit",
+      year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
   function node(tag, cls, text) {
     const el = document.createElement(tag);
     if (cls) el.className = cls;
@@ -102,8 +112,9 @@
       ["комиссия", cash(closed.reduce((a, x) => a + x.fee, 0)), ""],
       ["срок, медиана", median === null ? "—" : median + " дн", ""],
       ["в наличии", `${h.count || 0} · ${cash(h.spent || 0)}`, ""],
-      ["ожидаемая прибыль", h.count ? signed(h.est_profit || 0) : "—",
-        tone(h.est_profit)],
+      ["ожидаемая прибыль", h.count ? signed(h.est_profit || 0)
+        + (h.est_pct !== null && h.est_pct !== undefined ? ` · ${pct(h.est_pct)}` : "")
+        : "—", tone(h.est_profit)],
     ].forEach(([label, value, cls]) => {
       const tile = node("div", "journal-tile");
       tile.appendChild(node("b", cls, value));
@@ -191,8 +202,8 @@
         [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
-        [`${cash(x.bought)} · ${when(x.bought_at)}`],
-        [`${cash(x.sold)} · ${when(x.sold_at)}`],
+        [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
+        [`${cash(x.sold)} · ${stamp(x.sold_at)}`],
         [cash(x.fee), "muted"],
         [signed(x.profit), tone(x.profit)],
         [pct(x.pct), tone(x.profit)],
@@ -208,24 +219,26 @@
     $("f-holding-note").textContent = h.count
       ? `Куплено на ${cash(h.spent)}; по оценке стоит ${cash(h.estimate)}, `
         + `после комиссии это ${signed(h.est_profit)}`
+        + (h.est_pct !== null && h.est_pct !== undefined ? ` (${pct(h.est_pct)})` : "")
         + (h.unvalued ? ` — без ${h.unvalued} скин(ов), которые не оценить` : "")
         + ". Оценка, а не сделка: цена может уйти."
         + (h.pending ? ` ${h.pending} из них ещё ждут обмена — если продавец `
           + "не отдаст скин, сделка отменится и деньги вернутся." : "")
       : "";
     table($("f-holding"),
-      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", ""],
+      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", "%", ""],
       holding.map((x) => [
         [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
-        [`${cash(x.bought)} · ${when(x.bought_at)}`],
+        [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
         [x.pending ? "ждёт обмена" : (x.days === null ? "—" : x.days + " дн"),
           x.pending ? "warn-text" : "mono",
           x.pending ? `сделка ещё не завершена (${STATES[x.state] || x.state || "—"})` : ""],
         [cash(x.estimate), "", x.tracked ? x.basis
           : "предмет не отслеживается — добавь его, чтобы была история продаж"],
         [signed(x.est_profit), tone(x.est_profit)],
+        [pct(x.est_pct), tone(x.est_profit)],
         dropButton([x.trade_id], "например, оставил себе или продал не на CSFloat"),
       ]),
       "Всё купленное продано.");
