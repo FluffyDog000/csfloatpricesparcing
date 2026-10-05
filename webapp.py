@@ -1252,6 +1252,7 @@ def api_analysis_plan():
         "pending": bool(db.get_setting("analysis_pending_actions")),
         "defend": defending(db),
         "defend_minutes": defend_minutes(db),
+        "auto_free": (db.get_setting("an_auto_free") or "1") == "1",
         "defend_at": db.get_setting("defend_last_at") or None,
         "last_defend": _json_setting(db, "defend_result"),
         "last_apply": _json_setting(db, "analysis_apply_result"),
@@ -1351,13 +1352,16 @@ def api_analysis_arm():
         db.set_setting("an_defend", "1" if data["defend"] else "0")
     if "defend_minutes" in data:
         db.set_setting("an_defend_minutes", str(data["defend_minutes"]).strip())
+    if "auto_free" in data:
+        db.set_setting("an_auto_free", "1" if data["auto_free"] else "0")
     log.warning("Analysis arming set to %s (dry run %s, defence %s)", on,
                 db.get_setting("analysis_dry_run", "1"),
                 db.get_setting("an_defend", "0"))
     return jsonify({"armed": on,
                     "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
                     "defend": defending(db),
-                    "defend_minutes": defend_minutes(db)})
+                    "defend_minutes": defend_minutes(db),
+                    "auto_free": (db.get_setting("an_auto_free") or "1") == "1"})
 
 
 @app.route("/api/analysis/apply", methods=["POST"])

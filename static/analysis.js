@@ -657,6 +657,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("plan-dry").checked = d.dry_run !== false;
     $("plan-defend").checked = !!d.defend;
     $("plan-defend-min").value = d.defend_minutes || 60;
+    if ($("plan-autofree")) $("plan-autofree").checked = d.auto_free !== false;
     renderDefence(d);
     renderApplyResult(d.last_apply, d.pending);
 
@@ -1163,6 +1164,7 @@ float, который принимает ордер. Ниже «ожид.» — 
         dry_run: $("plan-dry").checked,
         defend: on,
         defend_minutes: $("plan-defend-min").value,
+        auto_free: $("plan-autofree") ? $("plan-autofree").checked : true,
       }, token());
       say(r.defend
         ? `Автозащита включена, каждые ${r.defend_minutes} мин.`
@@ -1182,6 +1184,7 @@ float, который принимает ордер. Ниже «ожид.» — 
       });
     };
     $("plan-defend-min").onchange = saveDefence;
+    if ($("plan-autofree")) $("plan-autofree").onchange = saveDefence;
 
     $("plan-apply").onclick = () => {
       const real = $("plan-arm").checked && !$("plan-dry").checked;

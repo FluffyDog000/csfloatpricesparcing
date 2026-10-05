@@ -55,6 +55,41 @@ MAX_QUOTA_PAUSE_SECONDS = 3600.0   # re-check at least hourly while waiting
 # `defend_orders`); read by the journal's positions.
 VERDICTS_KEY = "defend_verdicts"
 
+# Amends refused for balance, and what the account looked like then (see
+# `Collector._hold_amends`). Held back until that changes, or for an hour.
+AMEND_HOLD_KEY = "defend_amend_hold"
+AMEND_HOLD_SECONDS = 3600.0
+# A write cooldown longer than the client itself would wait out: trying is a
+# refusal logged for nothing.
+AMEND_WAIT_SKIP = 180.0
+# Orders the defence may take down in one pass to make room for stronger ones.
+FREE_PER_PASS = 3
+AUTO_FREE_KEY = "an_auto_free"
+
+
+def auto_free_on(db) -> bool:
+    """Free room for outbid orders by taking down weaker ones. On unless
+    turned off: asked for, and it only ever trades down in rank."""
+    return (db.get_setting(AUTO_FREE_KEY) or "1") == "1"
+
+
+def balance_refusal(detail: str | None) -> bool:
+    import re
+
+    return bool(re.search(r"insufficient|balance|not enough|недостат",
+                          str(detail or "").lower()))
+
+
+def _safe_rank(band) -> float:
+    from .executor import rank
+
+    try:
+        if band is None or band.ceiling is None or band.bid is None:
+            return 0.0
+        return float(rank(band))
+    except Exception:  # noqa: BLE001 - an unscoreable band ranks lowest
+        return 0.0
+
 
 
 NETWORK_MARKS = ("ConnectionError", "ProxyError", "Timeout", "SSLError",
@@ -1357,6 +1392,12 @@ class Collector:
         # this the page could not say why an outbid order was left alone.
         verdicts: dict[str, dict] = {}
         looked = self._read_held_books(by_item, defend_minutes(self.db))
+
+        # First every item is scored, then anything is sent. Freeing room for
+        # an outbid order means taking down one the plan values less, and
+        # "less" is only known once all of them have a rank.
+        work: list[tuple[int, str, list[dict], list]] = []
+        ranks: dict[int, float] = {}
         for item_id, rows in by_item.items():
             name = self.db.item_name(item_id)
             if not name:
@@ -1386,9 +1427,11 @@ class Collector:
                 # opening today" and "worth closing" are different questions,
                 # and dropping the unscored ones here made the defence read a
                 # missing band as a dead one and withdraw a sound position.
-                wanted.append(evaluate(
+                band = evaluate(
                     float(row["float_min"]), float(row["float_max"]),
-                    sales, book, span, depth, params, own=own))
+                    sales, book, span, depth, params, own=own)
+                wanted.append(band)
+                ranks[int(row["id"])] = _safe_rank(band)
 
             decided = reconcile(name, wanted, rows, book, limits)
             for a in decided:
@@ -1397,15 +1440,53 @@ class Collector:
                         "kind": a.kind, "reason": a.reason,
                         "ceiling": a.ceiling, "price": a.price,
                         "at": utcnow_iso()}
+                if a.kind == CANCEL and a.order_id is not None:
+                    ranks[int(a.order_id)] = -1.0     # going anyway
             actions = [a for a in decided if a.kind in (RAISE, LOWER, CANCEL)]
-            if not actions:
-                continue
+            if actions:
+                work.append((item_id, name, rows, actions))
+
+        held_by_id = {int(r["id"]): r for r in held}
+        gone: set[int] = set()
+        freed = 0
+        auto_free = auto_free_on(self.db)
+        for item_id, name, rows, actions in work:
             self.client.pool.pin(for_orders=True)
             try:
                 sender = Sender(self.config.http.base_url, spec,
                                 self.client.send_json, dry_run=dry)
                 for action in actions:
+                    if action.order_id is not None and int(action.order_id) in gone:
+                        continue                  # taken down to make room
+                    if action.kind in (RAISE, LOWER) and not dry:
+                        why = self._amend_held_back()
+                        if why:
+                            # Known to fail and nothing has changed since: the
+                            # same refusal every ten minutes is a journal full
+                            # of noise and requests spent on nothing.
+                            verdicts.setdefault(str(action.order_id), {}).update(
+                                {"held_back": why})
+                            continue
                     out = sender.perform(action)
+                    if (not out.ok and not dry and action.kind in (RAISE, LOWER)
+                            and balance_refusal(out.detail)):
+                        while auto_free and freed < FREE_PER_PASS:
+                            victim = self._weakest_below(
+                                ranks, held_by_id, gone,
+                                ranks.get(int(action.order_id or -1), 0.0),
+                                exclude=int(action.order_id or -1))
+                            if victim is None:
+                                break
+                            if not self._free_room(sender, victim, action,
+                                                   results, dry):
+                                break
+                            gone.add(int(victim["id"]))
+                            freed += 1
+                            out = sender.perform(action)
+                            if out.ok or not balance_refusal(out.detail):
+                                break
+                        if not out.ok and balance_refusal(out.detail):
+                            self._hold_amends(limits)
                     results.append(out.as_dict())
                     self._log_order_event(out, "defence", dry, item_id=item_id)
                     if not out.ok or dry:
@@ -1419,6 +1500,7 @@ class Collector:
                     if action.kind == CANCEL:
                         self.db.set_our_order_state(int(row["id"]), "cancelled",
                                                     out.detail)
+                        gone.add(int(row["id"]))
                     else:
                         self.db.upsert_our_order(
                             item_id, action.float_min, action.float_max,
@@ -1439,6 +1521,90 @@ class Collector:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    # -- room on CSFloat's allowance -----------------------------------------
+
+    def _face_now(self) -> float:
+        """What every standing order adds up to, the way CSFloat counts it."""
+        return sum(float(r["price"]) * int(r.get("quantity") or 1)
+                   for r in self.db.our_orders(live_only=False)
+                   if r["state"] in ("live", "manual"))
+
+    def _hold_amends(self, limits) -> None:
+        """Remember that amends are refused for balance, and against what.
+        Lifted by a change that can make room - the balance up, the orders
+        down - or by time, in case the account moved some other way."""
+        import json as _json
+
+        self.db.set_setting(AMEND_HOLD_KEY, _json.dumps({
+            "balance": limits.balance, "face": round(self._face_now(), 2),
+            "at": utcnow_iso()}))
+
+    def _amend_held_back(self) -> str:
+        """Why amends should not be tried now, or "" when they may be."""
+        import json as _json
+        from datetime import datetime, timezone
+
+        from .pacing import parse_iso
+        from .settings import limits as read_limits
+
+        raw = self.db.get_setting(AMEND_HOLD_KEY)
+        if raw:
+            try:
+                hold = _json.loads(raw)
+            except ValueError:
+                hold = None
+            when = parse_iso((hold or {}).get("at"))
+            lift = (hold is None or when is None
+                    or (datetime.now(timezone.utc) - when).total_seconds()
+                    > AMEND_HOLD_SECONDS
+                    or read_limits(self.db).balance > float(hold["balance"]) + 0.01
+                    or self._face_now() < float(hold["face"]) - 0.01)
+            if lift:
+                self.db.set_setting(AMEND_HOLD_KEY, "")
+            else:
+                return ("CSFloat отказывает «не хватило баланса» — жду, пока "
+                        "вырастет баланс или станет меньше ордеров")
+        wait = getattr(self.client, "main_key_wait", lambda kind: 0.0)("write")
+        if wait > AMEND_WAIT_SKIP:
+            return f"лимит правок главного ключа — ещё {wait / 60:.0f} мин"
+        return ""
+
+    def _weakest_below(self, ranks: dict[int, float], held: dict[int, dict],
+                       gone: set[int], rank: float, exclude: int) -> dict | None:
+        """The standing order of ours ranked lowest, if lower than `rank`:
+        room for a stronger order is never bought with a stronger one."""
+        best = None
+        for oid, row in held.items():
+            if oid == exclude or oid in gone or not row.get("remote_id"):
+                continue
+            r = ranks.get(oid, 0.0)
+            if r >= rank:
+                continue
+            face = float(row["price"]) * int(row.get("quantity") or 1)
+            key = (r, -face)
+            if best is None or key < best[0]:
+                best = (key, row)
+        return best[1] if best else None
+
+    def _free_room(self, sender, victim: dict, action, results: list,
+                   dry: bool) -> bool:
+        from .executor import CANCEL, Action as _Action
+
+        name = self.db.item_name(int(victim["item_id"])) or "?"
+        cancel = _Action(
+            CANCEL, name, float(victim["float_min"]), float(victim["float_max"]),
+            float(victim["price"]), float(victim["ceiling"]),
+            f"освободить лимит CSFloat: «не хватило баланса» при правке "
+            f"{action.item} — снят как более слабый",
+            order_id=victim.get("id"), remote_id=victim.get("remote_id"),
+            quantity=int(victim.get("quantity") or 1))
+        out = sender.perform(cancel)
+        results.append(out.as_dict())
+        self._log_order_event(out, "defence", dry, item_id=int(victim["item_id"]))
+        if out.ok and not dry:
+            self.db.set_our_order_state(int(victim["id"]), "cancelled", out.detail)
+        return out.ok
 
     def _follow_in_book(self, item_id: int, action) -> None:
         """An amended order moves in the stored book too (see

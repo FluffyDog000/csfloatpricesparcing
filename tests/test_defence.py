@@ -27,6 +27,7 @@ def _collector(dry_run=False):
                    json.dumps(SUGGESTED.as_dict(), ensure_ascii=False))
     db.set_setting("analysis_dry_run", "1" if dry_run else "0")
     col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+    col.read_balance = lambda: None      # no account to ask in a test
     return col, db
 
 
@@ -488,4 +489,95 @@ def test_after_moving_an_order_the_stored_book_no_longer_shows_its_old_price():
     sent.clear()
     col.defend_orders()                      # the same, unrefreshed book
     assert sent == [], "and the next pass does not answer itself"
+    db.close()
+
+
+def _two_orders(col, db):
+    """A: outbid and worth answering. B: a weak order on another item, on a
+    range with no sales near its top - nothing to rank it by."""
+    rival = [{"price": 153.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    a_item, _ = _stock(db, rival=rival)
+    b_item = db.add_item("★ Driver Gloves | King Snake (Field-Tested)")
+    db.upsert_our_order(a_item, 0.35, 0.38, 152.0, 190.0, state="live",
+                        remote_id="A")
+    db.upsert_our_order(b_item, 0.20, 0.25, 40.0, 45.0, state="live",
+                        remote_id="B")
+    _quiet_sweep(col)
+    db.set_setting("an_patience_min", "720")
+    return a_item, b_item
+
+
+def test_an_outbid_order_gets_room_by_taking_down_a_weaker_one():
+    """Fills shrank the balance, the allowance fell under what stood, and
+    every raise came back "insufficient balance" for hours. A weaker order
+    taken down makes the room, and the raise goes through."""
+    col, db = _collector()
+    a_item, b_item = _two_orders(col, db)
+    calls = []
+
+    def send(method, url, body=None, headers=None):
+        calls.append((method, url.rsplit("/", 1)[-1]))
+        if method == "PATCH" and ("DELETE", "B") not in calls:
+            raise RuntimeError("HTTP 400 — insufficient balance")
+        return {}
+
+    col.client.send_json = send
+    out = col.defend_orders()
+    assert calls == [("PATCH", "A"), ("DELETE", "B"), ("PATCH", "A")], calls
+    assert [r["ok"] for r in out["results"]] == [True, True]
+    assert db.our_orders(b_item) == [], "the weaker one is down"
+    assert db.our_orders(a_item)[0]["price"] == 154.0, "and A raised"
+    events = [e for e in db.order_events() if e["kind"] == "cancel"]
+    assert events and "освободить лимит" in events[0]["reason"]
+    db.close()
+
+
+def test_room_is_never_bought_with_a_stronger_order():
+    col, db = _collector()
+    a_item, b_item = _two_orders(col, db)
+    import src.collector as collector_mod
+    real = collector_mod._safe_rank
+    # B now ranks above A: nothing may be taken down for A.
+    collector_mod._safe_rank = lambda band: 5.0 if band.float_min < 0.3 else real(band)
+    calls = []
+
+    def send(method, url, body=None, headers=None):
+        calls.append(method)
+        if method == "PATCH":
+            raise RuntimeError("HTTP 400 — insufficient balance")
+        return {}
+
+    try:
+        col.client.send_json = send
+        col.defend_orders()
+    finally:
+        collector_mod._safe_rank = real
+    assert calls == ["PATCH"]
+    assert len(db.our_orders(b_item)) == 1
+    db.close()
+
+
+def test_a_refused_amend_is_not_tried_again_until_something_changes():
+    """Thirty orders refused for balance, every ten minutes: 792 refusals in
+    a day, all of them known before they were sent."""
+    col, db = _collector()
+    a_item, b_item = _two_orders(col, db)
+    db.set_setting("an_auto_free", "0")
+    calls = []
+
+    def send(method, url, body=None, headers=None):
+        calls.append(method)
+        raise RuntimeError("HTTP 400 — insufficient balance")
+
+    col.client.send_json = send
+    col.defend_orders()
+    col.defend_orders()
+    assert calls == ["PATCH"], "the second pass held back"
+    assert "не хватило баланса" in col._amend_held_back()
+
+    # The orders get smaller - room may be there now.
+    db.set_our_order_state(db.our_orders(b_item)[0]["id"], "cancelled", "")
+    assert col._amend_held_back() == ""
+    col.defend_orders()
+    assert calls == ["PATCH", "PATCH"]
     db.close()

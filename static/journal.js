@@ -192,7 +192,8 @@
   function verdictLine(r) {
     const v = r && r.verdict;
     if (!v) return null;
-    return `защита ${when(v.at)}: ${v.reason}`;
+    return `защита ${when(v.at)}: ${v.reason}`
+      + (v.held_back ? ` · не отправлено: ${v.held_back}` : "");
   }
 
   // -- tiles -------------------------------------------------------------------

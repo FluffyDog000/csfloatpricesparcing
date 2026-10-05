@@ -62,6 +62,11 @@
                   step="10" min="10" max="1440" value="60"> мин
     <span class="muted">— только перебить или снять, новые ордера не ставит</span>
   </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-autofree"> освобождать место для перебивания
+    <span class="muted">— CSFloat отказал «не хватило баланса»: снять самый слабый
+      ордер (только если он слабее перебиваемого, до 3 за проверку) и повторить</span>
+  </label>
   <button class="btn danger" id="plan-apply">Применить план</button>
   <div id="plan-queue"></div>
   <div id="plan-out"></div>
