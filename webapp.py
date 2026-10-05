@@ -1160,9 +1160,18 @@ def api_analysis_plan():
     mine_by_item: dict[str, list] = {}
     candidates: list[tuple[str, object]] = []
     holding: list[tuple[str, float, float]] = []
+    from src.phases import is_phase
+    phase_items = 0
     for name in _analysis_items(db):
         item_id = db.get_item_id(name)
         if item_id is None:
+            continue
+        if is_phase(name):
+            # An order is placed by market name, and every Doppler phase
+            # shares one: an order for "Phase 2" would buy a Phase 1 or a Ruby
+            # just as readily. Scored on the analysis page, never placed,
+            # until orders can be tied to a paint index.
+            phase_items += 1
             continue
         sales = _sales_for(db, item_id, params)
         orders = db.buy_orders(item_id)
@@ -1251,6 +1260,7 @@ def api_analysis_plan():
         "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
         "pending": bool(db.get_setting("analysis_pending_actions")),
         "creates": _creates_status(db),
+        "phase_items": phase_items,
         "defend": defending(db),
         "defend_minutes": defend_minutes(db),
         "auto_free": (db.get_setting("an_auto_free") or "1") == "1",

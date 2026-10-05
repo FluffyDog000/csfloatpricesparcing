@@ -68,10 +68,16 @@ class ImageService:
             "User-Agent": self.config.http.user_agent,
             "Accept": "application/json",
         }
+        from .phases import split
+
+        base, index = split(market_hash_name)
+        params = {"market_hash_name": base, "limit": 1}
+        if index is not None:
+            params["paint_index"] = index
         try:
             resp = requests.get(
                 url,
-                params={"market_hash_name": market_hash_name, "limit": 1},
+                params=params,
                 headers=headers,
                 timeout=self.config.http.timeout_seconds,
             )

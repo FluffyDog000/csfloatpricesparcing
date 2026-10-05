@@ -46,8 +46,10 @@ def depth_url(base_url: str, name: str, lo: float, hi: float,
     server-side: without them the same answer costs several pages of the whole
     item, and on a liquid item the band may not appear in them at all.
     """
+    from .phases import query
+
     return (f"{base_url}{LISTINGS_PATH}"
-            f"?market_hash_name={quote(name, safe='')}"
+            f"?{query(name)}"
             f"&min_float={lo:g}&max_float={hi:g}"
             f"&type=buy_now&sort_by=lowest_price&limit={limit}")
 

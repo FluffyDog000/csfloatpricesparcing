@@ -899,8 +899,15 @@ class CSFloatClient:
 
     def sales_url(self, market_hash_name: str) -> str:
         # market_hash_name contains spaces, "|", "★" etc. — encode safely.
-        encoded = quote(market_hash_name, safe="")
+        # A Doppler phase is the item's real name plus its paint index (see
+        # src/phases.py); asked for by the phase's own name, CSFloat has none.
+        from .phases import split
+
+        base, index = split(market_hash_name)
+        encoded = quote(base, safe="")
         path = self.http.sales_path_template.format(name=encoded)
+        if index is not None:
+            path += ("&" if "?" in path else "?") + f"paint_index={index}"
         return self.http.base_url + path
 
     def _sales_headers(self) -> dict[str, str | None]:

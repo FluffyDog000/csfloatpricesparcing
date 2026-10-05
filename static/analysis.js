@@ -660,6 +660,11 @@ float, который принимает ордер. Ниже «ожид.» — 
     if ($("plan-autofree")) $("plan-autofree").checked = d.auto_free !== false;
     if ($("plan-autofill")) $("plan-autofill").checked = !!d.auto_fill;
     renderCreates(d.creates);
+    if ($("plan-creates") && d.phase_items) {
+      $("plan-creates").textContent += ` ${d.phase_items} предмет(ов) с фазой Doppler `
+        + "в план не входят: ордер ставится по имени, а у всех фаз оно одно — "
+        + "ордер купил бы любую фазу.";
+    }
     renderDefence(d);
     renderApplyResult(d.last_apply, d.pending);
 

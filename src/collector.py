@@ -429,8 +429,10 @@ class Collector:
         fetch, which clears it and re-resolves next time."""
         if cached:
             return cached
+        from .phases import query
+
         url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
-               f"?market_hash_name={quote(name, safe='')}&limit=1")
+               f"?{query(name)}&limit=1")
         payload = self.client.fetch_json(url)
         listing_id = extract_listing_id(payload)
         if listing_id:
@@ -499,8 +501,10 @@ class Collector:
         return "key" if self.config.http.api_key else "cookie"
 
     def _fetch_listings(self, name: str, sort_by: str | None = None) -> object:
+        from .phases import query
+
         url = (f"{self.config.http.base_url}{LISTINGS_PATH}"
-               f"?market_hash_name={quote(name, safe='')}&limit={LISTINGS_PAGE}")
+               f"?{query(name)}&limit={LISTINGS_PAGE}")
         if sort_by:
             url += f"&sort_by={sort_by}"
         # /api/v1/listings is the documented API and authenticates with the
@@ -2516,6 +2520,11 @@ class Collector:
             payload, item_id=item_id, fallback_name=name,
             scraped_at_iso=scraped_at, now=now,
         )
+        # A Doppler phase is asked for by paint index; should CSFloat ignore
+        # the parameter, the other phases are dropped here rather than stored
+        # as this one's.
+        from .phases import keep
+        sales = keep(name, sales)
         fetched = len(sales)
 
         if fetched == 0:
