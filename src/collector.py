@@ -738,6 +738,7 @@ class Collector:
                         action.price, action.ceiling, state="live",
                         remote_id=out.remote_id, note=out.detail,
                         quantity=action.quantity)
+                    self._follow_in_book(item_id, action)
         finally:
             self.client.pool.unpin()
 
@@ -1321,6 +1322,7 @@ class Collector:
                             item_id, action.float_min, action.float_max,
                             action.price, action.ceiling, state="live",
                             remote_id=row.get("remote_id"), note=out.detail)
+                        self._follow_in_book(item_id, action)
             finally:
                 self.client.pool.unpin()
 
@@ -1335,6 +1337,17 @@ class Collector:
             log.info("Defence: %d action(s) across %d item(s)%s",
                      len(results), looked, " (вхолостую)" if dry else "")
         return summary
+
+    def _follow_in_book(self, item_id: int, action) -> None:
+        """An amended order moves in the stored book too (see
+        `Database.move_in_book`); a new one is not there to move."""
+        if action.was is None or abs(action.was - action.price) < 1e-9:
+            return
+        try:
+            self.db.move_in_book(item_id, action.float_min, action.float_max,
+                                 action.was, action.price)
+        except Exception as exc:  # noqa: BLE001 - the amend itself went through
+            log.warning("Could not follow an amend in the stored book: %s", exc)
 
     def _store_verdicts(self, verdicts: dict[str, dict], held: list[dict]) -> None:
         """Keep the latest verdict for every order still held: an item skipped

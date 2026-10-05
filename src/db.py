@@ -601,6 +601,30 @@ class Database:
         self.conn.commit()
         return len(orders)
 
+    def move_in_book(self, item_id: int, float_min: float, float_max: float,
+                     old_price: float, new_price: float) -> bool:
+        """Follow our own amend in the stored book.
+
+        The book is read before the defence acts, so right after it moves an
+        order the snapshot still shows that order at its old price. Ours are
+        told apart from rivals by price and bounds, and at the new price the
+        old entry no longer matched: an order brought down from $91.60 to
+        $91.40 read as outbid by a rival at $91.60 - itself - until the next
+        sweep. Moves one entry, the one at the old price on the same range.
+        """
+        row = self.conn.execute(
+            "SELECT rowid FROM buy_orders WHERE item_id = ? "
+            "AND ROUND(price, 2) = ROUND(?, 2) "
+            "AND ABS(COALESCE(float_min, 0) - ?) < 1e-6 "
+            "AND ABS(COALESCE(float_max, 1) - ?) < 1e-6 LIMIT 1",
+            (item_id, old_price, float_min, float_max)).fetchone()
+        if row is None:
+            return False
+        self.conn.execute("UPDATE buy_orders SET price = ? WHERE rowid = ?",
+                          (new_price, row["rowid"]))
+        self.conn.commit()
+        return True
+
     def mark_book_swept(self, item_id: int) -> None:
         """Note that the book was read through, whatever it held."""
         self.conn.execute(

@@ -458,3 +458,34 @@ def test_a_verdict_goes_with_its_order():
     assert "999" not in kept, "an order no longer held drops its verdict"
     assert str(db.our_orders(item_id)[0]["id"]) in kept
     db.close()
+
+
+def test_after_moving_an_order_the_stored_book_no_longer_shows_its_old_price():
+    """Brought down from $175 with the book read before: the snapshot still
+    held us at $175, ours were matched at the new price, and the old entry
+    read as a rival standing above us - the journal said "outbid" while we
+    led, and a pass on that book would answer ourselves."""
+    from src.holdings import strip_own
+
+    col, db = _collector()
+    book = [{"price": 175.0, "qty": 1, "float_min": 0.35, "float_max": 0.38},
+            {"price": 150.0, "qty": 1, "float_min": 0.35, "float_max": 0.38}]
+    item_id, name = _stock(db, rival=book)
+    db.upsert_our_order(item_id, 0.35, 0.38, 175.0, 190.0, state="live",
+                        remote_id="r1")
+    _quiet_sweep(col)
+    sent = []
+    col.client.send_json = lambda m, u, b=None, h=None: sent.append(m) or {}
+
+    col.defend_orders()
+    assert sent == ["PATCH"]
+    held = db.our_orders(item_id)
+    prices = sorted(o["price"] for o in db.buy_orders(item_id))
+    assert 175.0 not in prices, prices
+    rivals = strip_own(db.buy_orders(item_id), held)
+    assert [o["price"] for o in rivals] == [150.0], "only the real rival is left"
+
+    sent.clear()
+    col.defend_orders()                      # the same, unrefreshed book
+    assert sent == [], "and the next pass does not answer itself"
+    db.close()
