@@ -198,6 +198,9 @@ def sweep_cost(name: str) -> int:
     return buy + sell
 
 
+SPARES = 2                 # other lots of a band tried when its first fails
+
+
 def plan_bands(listings: list[dict], step: float = BAND_STEP,
                max_bands: int = MAX_BANDS) -> list[dict]:
     """Pick one listing per float band — the sweep's request plan.
@@ -207,6 +210,7 @@ def plan_bands(listings: list[dict], step: float = BAND_STEP,
     queried once, since they may be the only way into their part of the range.
     """
     by_band: dict[int, dict] = {}
+    others: dict[int, list[dict]] = {}
     unknown: list[dict] = []
     for listing in listings:
         value = listing.get("float")
@@ -217,12 +221,19 @@ def plan_bands(listings: list[dict], step: float = BAND_STEP,
         # int(value / step) drops it into the band below and the listing is
         # lost to whichever neighbour shares that band.
         band = math.floor(round(value / step, 6))
+        others.setdefault(band, []).append(listing)
         # Keep the lowest float in each band: low-float orders are the narrow,
         # high-value ones, so they are the ones worth not missing.
         if band not in by_band or value < by_band[band]["float"]:
             by_band[band] = listing
 
-    plan = [dict(listing, band=round(band * step, 6))
+    # Other lots of the band, lowest float first: a lot sold between the
+    # sample and its request answers 404, and any other lot in the band shows
+    # the same orders.
+    plan = [dict(listing, band=round(band * step, 6),
+                 spares=[o["id"] for o in sorted(
+                     others[band], key=lambda o: o["float"])
+                     if o["id"] != listing["id"]][:SPARES])
             for band, listing in sorted(by_band.items())]
     if not plan and unknown:
         plan = [dict(unknown[0], band=None)]

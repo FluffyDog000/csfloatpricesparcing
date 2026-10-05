@@ -2241,3 +2241,49 @@ def test_an_account_read_moves_to_the_next_address_when_one_is_dead():
     assert client.fetch_json("https://csfloat.com/api/v1/me/trades",
                              account=True) is not None
     assert len(used) == 2 and used[0] != used[1]
+
+
+def test_a_band_whose_lot_is_gone_is_read_from_another_lot_of_it():
+    """A knife that sells hourly lost one band in six: the lot sampled was
+    sold before its buy orders were asked for. Any other lot of the band
+    shows the same orders."""
+    import logging
+    import os
+    import tempfile
+
+    import requests
+    logging.disable(logging.WARNING)
+    from src.config import load_config
+    from src.db import Database
+    from src.csfloat_client import CSFloatClient
+    from src.collector import Collector
+    from src.orders import plan_bands
+
+    os.environ["CSFLOAT_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
+    cfg = load_config()
+    cfg.db_path = os.environ["CSFLOAT_DB_PATH"]
+    db = Database(cfg.db_path)
+    item_id = db.add_item("Gloves")
+    col = Collector(cfg, db, CSFloatClient(cfg.http, cfg.polling))
+
+    lots = [("A", 0.151), ("B", 0.155), ("C", 0.158), ("D", 0.165)]
+    listings = {"data": [{"id": i, "item": {"float_value": f}} for i, f in lots]}
+    plan = plan_bands([{"id": i, "float": f} for i, f in lots])
+    assert plan[0]["id"] == "A" and plan[0]["spares"] == ["B", "C"]
+    asked = []
+
+    def flaky(url, headers=None):
+        if "/buy-orders" in url:
+            listing = url.split("/listings/")[1].split("/")[0]
+            asked.append(listing)
+            if listing == "A":
+                raise requests.HTTPError("404 Not Found")
+            return {"data": [{"price": 20000, "qty": 1, "min_float": 0.15,
+                              "max_float": 0.16 if listing == "B" else 0.17}]}
+        return listings
+
+    col.client.fetch_json = flaky
+    result = col.sweep_buy_orders("Gloves", item_id)
+    assert asked == ["A", "B", "D"], asked
+    assert result["bands"] == 2 and result["failed_bands"] == 0
+    assert not result["error"]

@@ -451,6 +451,34 @@ class Collector:
         key = self.config.http.api_key
         return {"Authorization": key} if key else None
 
+    def _band_orders(self, step: dict, result: dict):
+        """The buy orders one band's lot shows, from another lot of the band
+        when the first is gone - sold or delisted between the sample and the
+        request, which on a knife that sells hourly was one band in six.
+
+        Only a plain failure moves on to the next lot. A refusal, a limit or a
+        blocked address answers the same for every lot and is raised at once.
+        """
+        ids = [step["id"]] + list(step.get("spares") or [])
+        for n, listing_id in enumerate(ids):
+            url = (f"{self.config.http.base_url}"
+                   f"{ORDERS_PATH.format(listing_id=listing_id)}"
+                   f"?limit={DEFAULT_LIMIT}")
+            try:
+                payload = self._fetch_band(url, headers=self._book_headers(),
+                                           tries=1 if n + 1 < len(ids) else 2)
+                result["requests"] += 1
+                return payload
+            except (VpnBlocked, AuthError, RateLimited):
+                raise
+            except Exception as exc:  # noqa: BLE001 - the next lot may answer
+                result["requests"] += 1
+                if n + 1 >= len(ids):
+                    raise
+                log.info("Lot %s of band %s failed (%s); trying another",
+                         listing_id, step.get("band"), exc)
+        raise RuntimeError("unreachable")
+
     def _fetch_band(self, url: str, headers=None, tries: int = 2):
         """One band, retried once when the connection itself failed.
 
@@ -600,12 +628,7 @@ class Collector:
         failed = 0
         for step in plan:
             try:
-                url = (f"{self.config.http.base_url}"
-                       f"{ORDERS_PATH.format(listing_id=step['id'])}"
-                       f"?limit={DEFAULT_LIMIT}")
-                batches.append(parse_orders(
-                    self._fetch_band(url, headers=self._book_headers())))
-                result["requests"] += 1
+                batches.append(parse_orders(self._band_orders(step, result)))
                 result["bands"] += 1
             except VpnBlocked as exc:
                 # This address is refused, not the account: every band would
