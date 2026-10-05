@@ -1268,3 +1268,19 @@ def test_the_xlsx_writer_keeps_numbers_numbers_and_escapes_text():
     data = workbook([("Лист", ["a", "b"], [[1.5, "x < y & z"], [None, True]])])
     sheet = zipfile.ZipFile(io.BytesIO(data)).read("xl/worksheets/sheet1.xml").decode()
     assert "<v>1.5</v>" in sheet and "x &lt; y &amp; z" in sheet and ">да<" in sheet
+
+
+def test_an_order_dropped_for_a_limit_says_so_not_that_it_went_bad():
+    """54 cancels for the 6× cap all read "больше не проходит фильтры"."""
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000",
+                                         "an_max_orders": "0"})
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.upsert_our_order(item_id, 0.15, 0.16, 171.0, 196.0, state="live",
+                        remote_id="r1")
+    db.close()
+    plan = c.get("/api/analysis/plan").get_json()
+    cancels = [a for a in plan["actions"] if a["kind"] == "cancel"]
+    assert cancels and "не помещается в план" in cancels[0]["reason"], cancels

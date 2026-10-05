@@ -1242,6 +1242,21 @@ def api_analysis_plan():
                     reconcile(name, wanted, mine_by_item[name],
                               books[name], limits)]
 
+    # A held order the plan drops is withdrawn either because its band no
+    # longer qualifies or because it qualifies and does not fit a limit. Both
+    # read "больше не проходит фильтры" before, and 54 orders about to come
+    # down for the 6× cap looked like 54 that had gone bad.
+    not_taken = {(row["item"], round(row["band"].float_min, 4),
+                  round(row["band"].float_max, 4)): row["reason"]
+                 for row in trace if not row["taken"] and row["reason"]}
+    for action in actions:
+        if action["kind"] != "cancel":
+            continue
+        why = not_taken.get((action["item"], round(action["float_min"], 4),
+                             round(action["float_max"], 4)))
+        if why:
+            action["reason"] = f"проходит, но не помещается в план: {why}"
+
     # The rank travels with the action, not just the sort. Ordering by a
     # number the page never shows leaves "why is this one first" unanswerable
     # from the table, which is the question the order exists to answer.
