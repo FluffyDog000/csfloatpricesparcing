@@ -297,6 +297,7 @@ tr.agg-row.open .caret { transform: rotate(90deg); color: var(--accent); }
 /* highlight extremes */
 td.hi-max { color: var(--good); }
 td.hi-min { color: var(--bad); }
+.poll-note { font-size: 12px; max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
 
 /* velocity column colouring (relative to item's own median) */
 td.vel { font-weight: 600; }

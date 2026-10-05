@@ -242,7 +242,8 @@ function renderRecent(list) {
       <td class="num">${r.fetched_count}</td>
       <td class="num">${r.new_count}</td>
       <td class="num">${r.overlap_count}</td>
-      <td class="${cls}">${esc(r.status)}</td></tr>`;
+      <td class="${cls}">${esc(r.status)}${r.status !== "ok" && r.note
+        ? `<div class="muted poll-note">${esc(r.note)}</div>` : ""}</td></tr>`;
   }).join("");
 }
 
