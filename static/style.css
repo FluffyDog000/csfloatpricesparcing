@@ -417,6 +417,7 @@ ul.attention li { display: flex; gap: 10px; align-items: flex-start; }
             cursor: pointer; font-size: 16px; line-height: 1; }
 .att-hide:hover { color: var(--text, #e6edf3); border-color: var(--muted); }
 td.drop-cell { width: 34px; text-align: right; }
+td.warn-text { color: #d29922; }
 .profit-settings { margin-top: 10px; }
 .profit-settings input[type=number] { max-width: 120px; }
 #f-excluded-box summary { cursor: pointer; }

@@ -1791,7 +1791,12 @@ def api_profit():
     sales_cache: dict[str, list] = {}
     holding = []
     cutoff = pf.since_iso(conf["estimate_days"])
-    for t in book.holding:
+    # A purchase still in its trade is money already spent on a skin that is
+    # on its way: it belongs with what is held, marked, rather than at the
+    # foot of the page. Every fill of a new bot spends its first week there.
+    coming = [t for t in book.pending if t.get("role") == pf.BUY]
+    coming_ids = {t["trade_id"] for t in coming}
+    for t in list(book.holding) + coming:
         if not counted(t.get("done_at") or t.get("created_at")):
             continue
         name = t["market_hash_name"] or ""
@@ -1818,6 +1823,8 @@ def api_profit():
             "by_bot": pf.by_bot(t, events),
             "tracked": bool(sales_cache[name]),
             "trade_id": t["trade_id"],
+            "pending": t["trade_id"] in coming_ids,
+            "state": t.get("state"),
         })
 
     valued = [h for h in holding if h["estimate"] is not None]
@@ -1834,11 +1841,13 @@ def api_profit():
             "estimate": round(sum(h["estimate"] for h in valued), 2),
             "est_profit": round(sum(h["est_profit"] for h in valued), 2),
             "unvalued": len(holding) - len(valued),
+            "pending": sum(1 for h in holding if h["pending"]),
         },
         "unmatched": [dict(t) for t in book.unmatched
                       if ((t.get("done_at") or t.get("created_at") or "") >= since)
                       and counted(t.get("done_at") or t.get("created_at"))],
-        "pending": [dict(t) for t in book.pending],
+        "pending": [dict(t) for t in book.pending
+                    if t["trade_id"] not in coming_ids],
         "trades": len(everything),
         "settings": {"since": start, "estimate_days": conf["estimate_days"]},
         "excluded": [{"trade_id": t["trade_id"], "role": t.get("role"),

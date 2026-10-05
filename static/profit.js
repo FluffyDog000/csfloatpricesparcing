@@ -102,6 +102,8 @@
       ["комиссия", cash(closed.reduce((a, x) => a + x.fee, 0)), ""],
       ["срок, медиана", median === null ? "—" : median + " дн", ""],
       ["в наличии", `${h.count || 0} · ${cash(h.spent || 0)}`, ""],
+      ["ожидаемая прибыль", h.count ? signed(h.est_profit || 0) : "—",
+        tone(h.est_profit)],
     ].forEach(([label, value, cls]) => {
       const tile = node("div", "journal-tile");
       tile.appendChild(node("b", cls, value));
@@ -208,6 +210,8 @@
         + `после комиссии это ${signed(h.est_profit)}`
         + (h.unvalued ? ` — без ${h.unvalued} скин(ов), которые не оценить` : "")
         + ". Оценка, а не сделка: цена может уйти."
+        + (h.pending ? ` ${h.pending} из них ещё ждут обмена — если продавец `
+          + "не отдаст скин, сделка отменится и деньги вернутся." : "")
       : "";
     table($("f-holding"),
       ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", ""],
@@ -216,7 +220,9 @@
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
         [`${cash(x.bought)} · ${when(x.bought_at)}`],
-        [x.days === null ? "—" : x.days + " дн", "mono"],
+        [x.pending ? "ждёт обмена" : (x.days === null ? "—" : x.days + " дн"),
+          x.pending ? "warn-text" : "mono",
+          x.pending ? `сделка ещё не завершена (${STATES[x.state] || x.state || "—"})` : ""],
         [cash(x.estimate), "", x.tracked ? x.basis
           : "предмет не отслеживается — добавь его, чтобы была история продаж"],
         [signed(x.est_profit), tone(x.est_profit)],

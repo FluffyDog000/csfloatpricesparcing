@@ -426,3 +426,38 @@ def test_the_page_shows_the_settings_and_the_excluded():
     assert "Сделки до 01.09.2026 не учитываются" in got["settingsNote"]
     assert "Убранные из учёта (1)" in got["excludedTitle"]
     assert "вернуть" in got["excludedText"]
+
+
+def test_a_purchase_still_in_its_trade_is_held_and_valued():
+    """A new bot's every fill spends its first week in a running trade, and
+    the page read zero across the board with eleven skins on their way."""
+    import datetime as dt
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.add_item(NAME)
+    for t in parsed(trade("1", "buy", 9000, state="pending",
+                          at="2026-10-04T15:00:00Z"),
+                    trade("2", "sell", 5000, flt=0.4, state="pending",
+                          at="2026-10-04T16:00:00Z")):
+        db.upsert_trade(t)
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    for i in range(6):
+        db.conn.execute(
+            "INSERT INTO sales (sale_id, item_id, market_hash_name, price, "
+            "float_value, sold_at, scraped_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (f"s{i}", item_id, NAME, 100.0, 0.155, now, now))
+    db.conn.commit()
+    db.close()
+
+    body = c.get("/api/profit?days=0").get_json()
+    held = body["holding"]
+    assert len(held) == 1 and held[0]["pending"] is True
+    assert held[0]["est_profit"] == pytest.approx(100 * 0.98 - 90, abs=0.01)
+    assert body["holding_totals"]["pending"] == 1
+    assert [t["trade_id"] for t in body["pending"]] == ["2"], \
+        "listed once: the sale still waits below"
+    got = __import__("tests.test_analysis_js", fromlist=["_run_script"]) \
+        ._run_script("static/profit.js", body)
+    assert "ждёт обмена" in got["profit"]
+    assert "ожидаемая прибыль" in got["profit"]
