@@ -489,3 +489,23 @@ def test_held_skins_read_newest_first_with_a_percentage():
     assert first["est_pct"] == pytest.approx((98 - 80) / 80 * 100, abs=0.1)
     t = body["holding_totals"]
     assert t["est_pct"] == pytest.approx(t["est_profit"] / t["spent"] * 100, abs=0.1)
+
+
+def test_an_order_brought_down_and_then_filled_is_still_the_bots():
+    """The price a purchase is matched on is the order's last one, and a
+    lowered order's last price came from a "lower" - which was not looked at,
+    so its fill read as a purchase made by hand."""
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.add_item(NAME)
+    db.upsert_trade(parsed(trade("1", "buy", 8800, state="pending",
+                                 at="2026-10-05T10:00:00Z"))[0])
+    db.record_order_event(name=NAME, kind="place", ok=True, dry=False,
+                          source="plan", item_id=item_id, price=90.0,
+                          float_min=0.15, float_max=0.16, reason="")
+    db.record_order_event(name=NAME, kind="lower", ok=True, dry=False,
+                          source="defence", item_id=item_id, price=88.0,
+                          was=90.0, float_min=0.15, float_max=0.16, reason="")
+    db.close()
+    held = c.get("/api/profit?days=0").get_json()["holding"]
+    assert held[0]["by_bot"] is True

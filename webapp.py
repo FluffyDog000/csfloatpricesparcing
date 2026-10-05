@@ -1777,7 +1777,7 @@ def api_profit():
     book = pf.pair([t for t in everything
                     if t["trade_id"] not in conf["excluded"]], fee)
     events = [e for e in db.order_events(limit=50000, include_dry=False)
-              if e["ok"] and e["kind"] in ("place", "raise")]
+              if e["ok"] and e["kind"] in ("place", "raise", "lower")]
 
     # Bought before the date and sold after goes too: the purchase is part of
     # what the date leaves out, and half a deal is no profit to report.
