@@ -409,6 +409,36 @@ ul.attention li { padding: 8px 12px; border-radius: 8px; border-left: 3px solid;
                   background: var(--panel2); word-break: break-word; }
 ul.attention li.att-bad { border-color: var(--bad); }
 ul.attention li.att-warn { border-color: #d29922; }
+ul.attention li { display: flex; gap: 10px; align-items: flex-start; }
+.att-text { flex: 1 1 auto; min-width: 0; }
+.att-when { white-space: nowrap; }
+.att-hide { flex: none; background: none; border: 1px solid var(--line);
+            color: var(--muted); border-radius: 6px; width: 26px; height: 26px;
+            cursor: pointer; font-size: 16px; line-height: 1; }
+.att-hide:hover { color: var(--text, #e6edf3); border-color: var(--muted); }
+
+/* Журнал: шапка, панель проблем с прокруткой */
+.journal-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+               justify-content: space-between; margin: 4px 0 12px; }
+.journal-bar-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.journal-bar-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.journal-tile.good b { color: var(--good); }
+.problems-block { padding-top: 12px; padding-bottom: 12px; }
+.problems-head { display: flex; align-items: center; justify-content: space-between;
+                 gap: 10px; margin-bottom: 8px; }
+.problems-head h2 { margin: 0; }
+.problems-scroll { max-height: 230px; overflow-y: auto; padding-right: 4px; }
+.problems-scroll p { margin: 0; }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.grow-title { margin: 0 auto 8px 0; align-self: center; flex: 1 1 100%; }
+.inline-h2 { display: inline; margin: 0; }
+#j-history-box > summary { cursor: pointer; list-style: none; }
+#j-history-box > summary::-webkit-details-marker { display: none; }
+#j-history-box > summary::before { content: "▸ "; color: var(--muted); }
+#j-history-box[open] > summary::before { content: "▾ "; }
+#j-history-box[open] > summary { margin-bottom: 12px; }
+.order-group.og-manual { opacity: .7; }
+.order-group > summary .og-next { margin: 6px 0 0; }
 
 /* Журнал по ордерам: строка на ордер, история раскрывается */
 .order-groups { display: flex; flex-direction: column; gap: 6px; }

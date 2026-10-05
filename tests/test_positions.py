@@ -224,3 +224,32 @@ def test_the_ceiling_shown_is_the_one_the_defence_last_arrived_at():
     assert row["ceiling"] == 110.0 and row["placed_ceiling"] == 120.0
     assert row["room"] == 10.0
     assert row["verdict"]["reason"] == "мы первые в полосе"
+
+
+def test_an_order_gone_with_a_purchase_behind_it_reads_as_filled():
+    """The account's list only says an order is no longer there. With a buy
+    on the same item, inside the order's float range, just before it went,
+    the journal says "filled" - not "taken down", which most of them were not."""
+    c = _app()
+    db = _db()
+    item_id = db.add_item(NAME)
+    db.record_order_event(name=NAME, kind="cancel", ok=True, dry=False,
+                          source="sync", item_id=item_id, float_min=0.15,
+                          float_max=0.17, price=100.0,
+                          reason="нет на сайте — снят вручную или исполнен")
+    db.record_order_event(name=NAME, kind="cancel", ok=True, dry=False,
+                          source="sync", item_id=item_id, float_min=0.20,
+                          float_max=0.22, price=90.0,
+                          reason="нет на сайте — снят вручную или исполнен")
+    from src.db import utcnow_iso
+    db.upsert_trade({"trade_id": "t1", "role": "buy", "state": "verified",
+                     "market_hash_name": NAME, "float_value": 0.1612,
+                     "paint_seed": 1, "asset_id": "a", "price": 100.0,
+                     "created_at": utcnow_iso(), "done_at": None})
+    db.close()
+
+    events = c.get("/api/analysis/journal").get_json()["events"]
+    by_band = {e["float_min"]: e for e in events}
+    assert by_band[0.15]["kind"] == "fill"
+    assert "0.1612" in by_band[0.15]["reason"]
+    assert by_band[0.20]["kind"] == "cancel", "no purchase, no claim of one"

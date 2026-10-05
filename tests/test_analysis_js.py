@@ -271,96 +271,10 @@ def _run_script(script, api_response):
         os.unlink(path)
 
 
-def test_the_journal_page_script_renders_what_the_endpoint_returns():
-    """The analysis tab shipped dead once - a parse error, a page that looked
-    fine and did nothing. A second page deserves the same check before it goes
-    out, not after."""
-    reply = {
-        "events": [
-            {"id": 2, "at": "2026-09-19T13:55:00", "item_id": 1,
-             "market_hash_name": "★ Gloves | Fade (FT)", "float_min": 0.15,
-             "float_max": 0.17, "kind": "raise", "price": 151.0, "was": 150.0,
-             "ceiling": 160.0, "remote_id": "r1", "ok": True, "dry": False,
-             "source": "defence", "reason": "перебили", "detail": "цена изменена"},
-            {"id": 1, "at": "2026-09-19T12:49:00", "item_id": 1,
-             "market_hash_name": "★ Gloves | Fade (FT)", "float_min": 0.15,
-             "float_max": 0.17, "kind": "place", "price": 150.0, "was": None,
-             "ceiling": 160.0, "remote_id": "r1", "ok": True, "dry": False,
-             "source": "plan", "reason": "полоса проходит", "detail": "поставлен"},
-        ],
-        "held": 1, "items": ["★ Gloves | Fade (FT)"],
-        "defend": True, "defend_minutes": 60, "defend_at": "2026-09-19T14:00:00",
-    }
-    got = _run_script("static/journal.js", reply)
-    assert "Ошибка" not in got["status"], got["status"]
-    assert got["orderGroups"] == 1, "two events of one order are one row"
-    assert "поставлен" in got["journalText"] and "поднят" in got["journalText"], \
-        "and both are in its history"
-    assert got["tiles"] >= 5, "the summary tiles must render"
-    assert "60" in got["defence"], "the defence interval must be stated"
 
 
-def _event(id_, kind, ok=True, name="A (FT)", lo=0.15, hi=0.17, price=10.0,
-           detail="", at="2026-09-19T12:00:00"):
-    return {"id": id_, "at": at, "item_id": 1, "market_hash_name": name,
-            "float_min": lo, "float_max": hi, "kind": kind, "price": price,
-            "was": None, "ceiling": 20.0, "remote_id": None, "ok": ok,
-            "dry": False, "source": "plan", "reason": "", "detail": detail}
 
 
-def _journal(events, **extra):
-    body = {"events": events, "held": 0, "manual": 0, "items": [],
-            "defend": False, "defend_minutes": 60, "defend_at": None,
-            "sync": {"seen": 0, "error": "", "counts": {}},
-            "sync_at": "2026-09-20T10:00:00", "sync_pending": False}
-    body.update(extra)
-    return body
-
-
-def test_one_row_per_order_however_many_times_it_moved():
-    events = [_event(5, "raise", price=14.0), _event(4, "raise", price=13.0),
-              _event(3, "raise", price=12.0), _event(2, "place", price=11.0),
-              _event(1, "place", name="B (FT)", lo=0.2, hi=0.21)]
-    got = _run_script("static/journal.js", _journal(events))
-    assert got["orderGroups"] == 2
-    assert "поднят ×3" in got["journalText"]
-
-
-def test_an_unanswered_refusal_is_on_top_and_explained():
-    events = [_event(2, "place", ok=False,
-                     detail="HTTP 400 для /api/v1/buy-orders — price too low"),
-              _event(1, "place", ok=False, detail="HTTP 400")]
-    got = _run_script("static/journal.js", _journal(events))
-    assert "не поставлен (2 раза подряд)" in got["attention"]
-    assert "отклонил параметры ордера: price too low" in got["attention"]
-
-
-def test_a_refusal_answered_since_is_history_not_a_problem():
-    events = [_event(2, "place"), _event(1, "place", ok=False, detail="HTTP 500")]
-    got = _run_script("static/journal.js", _journal(events))
-    assert "Всё в порядке" in got["attention"]
-
-
-def test_an_order_outbid_past_its_ceiling_is_flagged():
-    got = _run_script("static/journal.js", _journal([], held=1, positions={
-        "outbid": 1, "checking": False,
-        "orders": [{"id": 1, "item": "A (FT)", "float_min": 0.15,
-                    "float_max": 0.17, "price": 10.0, "ceiling": 12.0,
-                    "state": "live", "remote_id": "r1", "top": 12.5,
-                    "ahead": 1, "first": False, "seen_in_book": True,
-                    "swept_at": "2026-09-20T10:00:00", "book": 3}]}))
-    assert "выше потолка не поднимаем" in got["attention"]
-    assert "стоит позади" in got["attention"], "kept, not taken down"
-
-
-def test_the_journal_says_so_when_nothing_has_happened():
-    got = _run_script("static/journal.js",
-                      {"events": [], "held": 0, "items": [], "defend": False,
-                       "defend_minutes": 60, "defend_at": None})
-    assert "Ошибка" not in got["status"], got["status"]
-    assert got["orderGroups"] == 0
-    assert "Пока ничего не происходило" in got["journalText"]
-    assert "выключена" in got["defence"]
 
 
 def test_only_items_with_orders_can_be_shown():
@@ -395,18 +309,6 @@ def test_the_journal_says_the_count_is_unverified_until_it_is():
     assert "бот записал себе" in got["sync"]
 
 
-def test_the_journal_reports_what_the_comparison_found():
-    got = _run_script("static/journal.js", {
-        "events": [], "held": 0, "manual": 1, "items": [],
-        "defend": False, "defend_minutes": 60, "defend_at": None,
-        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
-        "sync": {"seen": 1, "error": "",
-                 "counts": {"gone": 4, "filled": 0, "repriced": 0,
-                            "adopted": 1, "matched": 0}},
-    })
-    assert "4 нет на сайте" in got["sync"]
-    assert "1 не наших" in got["sync"]
-    assert got["tiles"] >= 6, "the manual tile must render too"
 
 
 def test_a_failed_comparison_is_not_reported_as_agreement():
@@ -556,33 +458,6 @@ def test_the_report_states_no_monthly_rate():
     source = pathlib.Path("static/analysis.js").read_text(encoding="utf-8")
     row = source.split("function bandRow")[1].split("\n  }")[0]
     assert "%/мес" not in row and "monthly" not in row
-
-
-def test_the_journal_shows_where_each_order_stands():
-    """"Am I still first" is not answered by the plan or by the log, and the
-    only other route to it was the defence - which also acts."""
-    got = _run_script("static/journal.js", {
-        "events": [], "held": 2, "manual": 0, "items": [],
-        "defend": False, "defend_minutes": 60, "defend_at": None,
-        "sync": None, "sync_at": None, "sync_pending": False,
-        "positions": {
-            "outbid": 1, "checking": False, "test_pending": False,
-            "test_amend": None,
-            "orders": [
-                {"id": 1, "item": "A (FT)", "float_min": 0.15,
-                 "float_max": 0.17, "price": 100.0, "ceiling": 120.0,
-                 "state": "live", "remote_id": "r1", "top": 90.0, "ahead": 0,
-                 "first": True, "swept_at": "2026-09-20T10:00:00", "book": 3},
-                {"id": 2, "item": "B (FT)", "float_min": 0.20,
-                 "float_max": 0.22, "price": 50.0, "ceiling": 60.0,
-                 "state": "live", "remote_id": "r2", "top": 55.0, "ahead": 2,
-                 "first": False, "swept_at": "2026-09-20T10:00:00", "book": 4},
-            ],
-        },
-    })
-    assert "Ошибка" not in got["status"], got["status"]
-    assert got["positionRows"] == 2
-    assert "Перебили 1 из 2" in got["positions"]
 
 
 
@@ -737,56 +612,205 @@ def test_nothing_queued_says_which_filter_took_the_items():
     assert "все предметы отсеяны" in block
 
 
+# -- the journal page -------------------------------------------------------
+
+
+def _ago(minutes=5):
+    import datetime as dt
+    return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes)) \
+        .replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _event(id_, kind, ok=True, name="A (FT)", lo=0.15, hi=0.17, price=10.0,
+           detail="", at=None, source="plan", reason=""):
+    return {"id": id_, "at": at or _ago(60 - id_), "item_id": 1,
+            "market_hash_name": name, "float_min": lo, "float_max": hi,
+            "kind": kind, "price": price, "was": None, "ceiling": 20.0,
+            "remote_id": None, "ok": ok, "dry": False, "source": source,
+            "reason": reason, "detail": detail}
+
+
+def _journal(events, **extra):
+    body = {"events": events, "held": 0, "manual": 0, "items": [],
+            "defend": False, "defend_minutes": 60, "defend_at": None,
+            "sync": {"seen": 0, "error": "", "counts": {}},
+            "sync_at": _ago(10), "sync_pending": False}
+    body.update(extra)
+    return body
+
+
+def _row(**over):
+    row = {"id": 1, "item": "A (FT)", "float_min": 0.15, "float_max": 0.17,
+           "price": 10.0, "ceiling": 12.0, "placed_ceiling": 12.0, "room": 2.0,
+           "quantity": 1, "state": "live", "remote_id": "r1", "top": 9.0,
+           "ahead": 0, "first": True, "seen_in_book": True,
+           "swept_at": _ago(5), "book": 3, "verdict": None}
+    row.update(over)
+    return row
+
+
+def _position(*rows, **over):
+    rows = list(rows) or [_row(**over)]
+    return {"orders": rows, "outbid": sum(1 for r in rows if not r["first"]),
+            "book_named": 0, "book_rows": 3, "checking": False}
+
+
+def test_the_journal_page_script_renders_what_the_endpoint_returns():
+    """The analysis tab shipped dead once - a parse error, a page that looked
+    fine and did nothing. A second page deserves the same check before it goes
+    out, not after."""
+    events = [_event(2, "raise", price=11.0, source="defence"),
+              _event(1, "place", price=10.0)]
+    got = _run_script("static/journal.js", _journal(
+        events, held=1, defend=True, positions=_position(_row(price=11.0))))
+    assert "Ошибка" not in got["bar"], got["bar"]
+    assert got["orderGroups"] == 1, "two events of one order are one card"
+    assert "поставлен" in got["ordersText"] and "поднят" in got["ordersText"], \
+        "and both are in its history"
+    assert "поставлен" in got["journalText"], "and in the history below"
+    assert got["tiles"] >= 6
+    assert "60" in got["defence"], "the defence interval must be stated"
+
+
+def test_only_orders_standing_now_are_listed():
+    """A filled or withdrawn order is history: listing it beside the live
+    ones made the page a long scroll of things that no longer exist."""
+    events = [_event(3, "cancel", name="Gone (FT)", source="sync"),
+              _event(2, "place", name="Gone (FT)"),
+              _event(1, "place")]
+    got = _run_script("static/journal.js", _journal(
+        events, positions=_position(_row())))
+    assert got["orderGroups"] == 1
+    assert "Gone" not in got["ordersText"]
+    assert "Gone" in got["journalText"], "it is in the history"
+
+
+def test_each_order_carries_its_own_history():
+    events = [_event(5, "raise", price=14.0), _event(4, "raise", price=13.0),
+              _event(3, "raise", price=12.0), _event(2, "place", price=11.0),
+              _event(1, "place", name="B (FT)", lo=0.2, hi=0.21)]
+    got = _run_script("static/journal.js", _journal(events, positions=_position(
+        _row(price=14.0), _row(id=2, item="B (FT)", float_min=0.2,
+                               float_max=0.21))))
+    assert got["orderGroups"] == 2
+    assert got["ordersText"].count("поднят") == 3
+
+
+def test_an_unanswered_refusal_is_a_problem_and_explained():
+    events = [_event(2, "place", ok=False,
+                     detail="HTTP 400 для /api/v1/buy-orders — price too low"),
+              _event(1, "place", ok=False, detail="HTTP 400")]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "не поставлен (2 раза подряд)" in got["attention"]
+    assert "отклонил параметры ордера: price too low" in got["attention"]
+    assert "Проблемы (1)" in got["problemsTitle"]
+
+
+def test_a_refusal_answered_since_is_history_not_a_problem():
+    events = [_event(2, "place"), _event(1, "place", ok=False, detail="HTTP 500")]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "Проблем нет" in got["attention"]
+
+
+def test_an_old_refusal_is_not_a_problem_any_more():
+    """Errors already fixed stayed on top of the page for days."""
+    events = [_event(1, "raise", ok=False, detail="HTTP 500",
+                     at=_ago(60 * 30))]
+    got = _run_script("static/journal.js", _journal(
+        events, positions=_position(_row())))
+    assert "Проблем нет" in got["attention"]
+
+
+def test_a_refusal_the_defence_has_looked_at_since_is_settled():
+    events = [_event(1, "raise", ok=False, at=_ago(30),
+                     detail="NoRouteAvailable: адреса главного ключа недоступны")]
+    verdict = {"kind": "keep", "reason": "мы первые в полосе", "ceiling": 12.0,
+               "price": 10.0, "at": _ago(5)}
+    got = _run_script("static/journal.js", _journal(
+        events, positions=_position(_row(verdict=verdict))))
+    assert "Проблем нет" in got["attention"]
+
+
+def test_a_refusal_on_an_order_no_longer_held_is_not_a_problem():
+    events = [_event(1, "raise", ok=False, detail="HTTP 500")]
+    got = _run_script("static/journal.js", _journal(events))
+    assert "Проблем нет" in got["attention"]
+
 
 def test_one_cause_failing_many_orders_is_one_line():
     """Forty raises refused by one limit read as forty lines on top of the
     page, and the one line that mattered was lost among them."""
     events = [_event(i, "raise", ok=False, name=f"Item {i} (FT)",
-                     detail="NoRouteAvailable: лимит CSFloat")
+                     detail="лимит CSFloat")
               for i in range(1, 9)]
-    got = _run_script("static/journal.js", _journal(events))
+    rows = [_row(id=i, item=f"Item {i} (FT)") for i in range(1, 9)]
+    got = _run_script("static/journal.js", _journal(
+        events, positions=_position(*rows)))
     assert "8 ордер(ов): не поднят" in got["attention"]
     assert got["attention"].count("Item ") == 8, "the orders are listed under it"
 
 
-def _position(**over):
-    row = {"id": 1, "item": "A (FT)", "float_min": 0.15, "float_max": 0.17,
-           "price": 10.0, "ceiling": 12.0, "placed_ceiling": 12.0, "room": 2.0,
-           "quantity": 1, "state": "live", "remote_id": "r1", "top": 9.0,
-           "ahead": 0, "first": True, "seen_in_book": True,
-           "swept_at": "2026-09-19T12:00:00", "book": 3, "verdict": None}
-    row.update(over)
-    return {"orders": [row], "outbid": 0 if row["first"] else 1,
-            "book_named": 0, "book_rows": 3, "checking": False}
+def test_the_journal_reports_what_the_comparison_found():
+    got = _run_script("static/journal.js", {
+        "events": [], "held": 0, "manual": 1, "items": [],
+        "defend": False, "defend_minutes": 60, "defend_at": None,
+        "sync_pending": False, "sync_at": "2026-09-20T10:00:00",
+        "sync": {"seen": 1, "error": "",
+                 "counts": {"gone": 4, "filled": 0, "repriced": 0,
+                            "adopted": 1, "matched": 0, "duplicate": 2}},
+    })
+    assert "4 ушло с сайта" in got["sync"]
+    assert "1 не наших" in got["sync"]
+    assert "2 повторных записей убрано" in got["sync"]
+
+
+def test_the_journal_says_so_when_nothing_has_happened():
+    got = _run_script("static/journal.js",
+                      {"events": [], "held": 0, "items": [], "defend": False,
+                       "defend_minutes": 60, "defend_at": None})
+    assert "Ошибка" not in got["bar"], got["bar"]
+    assert got["orderGroups"] == 0
+    assert "ордеров нет" in got["ordersText"]
+    assert "Пока ничего не происходило" in got["journalText"]
+    assert "выключена" in got["defence"]
+
+
+def test_outbid_orders_come_first():
+    rows = [_row(id=1, item="A (FT)"),
+            _row(id=2, item="B (FT)", float_min=0.2, float_max=0.22,
+                 first=False, ahead=2, top=11.0)]
+    got = _run_script("static/journal.js", _journal([], positions=_position(*rows)))
+    text = got["ordersText"]
+    assert text.index("B (FT)") < text.index("A (FT)")
+    assert "перебит: впереди 2" in text
 
 
 def test_an_order_shows_its_ceiling_and_what_comes_next():
     got = _run_script("static/journal.js", _journal(
         [_event(1, "place")], defend=True, positions=_position()))
-    assert "потолок $12.00" in got["journalText"]
-    assert "запас $2.00" in got["journalText"]
-    assert "поднимем максимум до $12.00" in got["journalText"]
+    assert "потолок $12.00" in got["ordersText"]
+    assert "запас $2.00" in got["ordersText"]
+    assert "поднимем максимум до $12.00" in got["ordersText"]
 
 
 def test_an_order_outbid_past_its_ceiling_says_it_will_not_answer():
-    """The user's question exactly: outbid, and the bot does nothing - is
-    that a decision or a miss? The page has to say which."""
+    """Outbid, and the bot does nothing - is that a decision or a miss? The
+    card says which, and it is not raised as a problem: it is a decision."""
     pos = _position(first=False, ahead=1, top=12.5, verdict={
-        "kind": "keep", "at": "2026-09-19T12:05:00", "ceiling": 12.0,
-        "price": 10.0,
+        "kind": "keep", "at": _ago(3), "ceiling": 12.0, "price": 10.0,
         "reason": "перебили до $12.50, ответ $12.51 выше потолка $12.00 — "
                   "стоим позади, ордер сохраняем"})
     got = _run_script("static/journal.js", _journal(
         [_event(1, "place")], defend=True, positions=pos))
-    assert "не перебиваем, стоим позади" in got["journalText"]
-    assert "стоим позади, ордер сохраняем" in got["journalText"], \
+    assert "не перебиваем, стоим позади" in got["ordersText"]
+    assert "стоим позади, ордер сохраняем" in got["ordersText"], \
         "and the defence's own last verdict is shown"
-    assert "не перебиваем" in got["positionTable"]
+    assert "Проблем нет" in got["attention"]
 
 
 def test_an_order_at_its_ceiling_is_marked_as_such():
     got = _run_script("static/journal.js", _journal(
         [_event(1, "place", price=12.0)], defend=True,
         positions=_position(price=12.0, room=0.0)))
-    assert "на потолке" in got["journalText"]
-    assert "выше не пойдём" in got["journalText"]
+    assert "на потолке" in got["ordersText"]
+    assert "выше не пойдём" in got["ordersText"]

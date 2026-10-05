@@ -1512,6 +1512,7 @@ def api_analysis_journal():
             .replace(microsecond=0).isoformat()
     events = db.order_events(limit=limit, name=name, include_dry=include_dry,
                              since=since)
+    _infer_fills(db, events)
 
     # The same band, over time: the rows for one order are its history, and
     # the count is what says "it has been outbid nine times today".
@@ -1540,6 +1541,67 @@ def api_analysis_journal():
         "defend_minutes": defend_minutes(db),
         "defend_at": db.get_setting("defend_last_at") or None,
     })
+
+
+def _infer_fills(db, events: list[dict]) -> None:
+    """Tell a filled order from one taken down, where the trades can.
+
+    The account's list only says an order is no longer there, so the sync
+    logs every disappearance as "taken down or filled" - and most of them are
+    fills. A purchase on the same item, at a float inside the order's range,
+    made in the days before the order vanished, says which: the event is
+    shown as filled, with the deal that filled it. Each trade answers for one
+    order only."""
+    gone = [e for e in events
+            if e.get("kind") == "cancel" and e.get("source") == "sync"
+            and e.get("ok")]
+    if not gone:
+        return
+    try:
+        trades = db.all_trades()
+    except Exception:  # noqa: BLE001 - an older DB has no trades yet
+        return
+    buys: dict[str, list[dict]] = {}
+    for t in trades:
+        state = str(t.get("state") or "").lower()
+        if t.get("role") == "sell" or "cancel" in state or "fail" in state:
+            continue
+        if t.get("float_value") is None or not t.get("market_hash_name"):
+            continue
+        buys.setdefault(t["market_hash_name"], []).append(t)
+    used: set[str] = set()
+    for e in sorted(gone, key=lambda e: e["at"]):
+        lo, hi = e.get("float_min"), e.get("float_max")
+        if lo is None or hi is None:
+            continue
+        try:
+            at = datetime.fromisoformat(str(e["at"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        for t in buys.get(e.get("market_hash_name") or "", []):
+            if t["trade_id"] in used:
+                continue
+            if not (float(lo) - 1e-6 <= float(t["float_value"]) <= float(hi) + 1e-6):
+                continue
+            try:
+                made = datetime.fromisoformat(
+                    str(t.get("created_at") or "").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if made.tzinfo is None:
+                made = made.replace(tzinfo=timezone.utc)
+            if not (at - timedelta(days=3) <= made <= at + timedelta(hours=1)):
+                continue
+            used.add(t["trade_id"])
+            e["kind"] = "fill"
+            e["inferred"] = True
+            price = t.get("price")
+            e["reason"] = ("куплено: сделка"
+                           + (f" ${float(price):.2f}" if price is not None else "")
+                           + f", float {float(t['float_value']):.4f}")
+            break
 
 
 @app.route("/api/analysis/sync", methods=["POST"])
