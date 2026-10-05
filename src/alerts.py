@@ -103,6 +103,18 @@ class AlertService:
         else:
             self._clear("limited")
 
+        # 4) Orders: the account unreadable, amends refused for balance, the
+        # main key's proxy down, refusals by the dozen. The history stall
+        # is (2) above, worded for this chat already.
+        from . import digest
+        active = digest.alerts(self.db)
+        active.pop("history", None)
+        for key in ("sync", "balance", "route", "refusals"):
+            if key in active:
+                self._fire("orders_" + key, "⚠️ CSFloat бот: " + active[key])
+            else:
+                self._clear("orders_" + key)
+
     def tick(self, monotonic_now: float) -> None:
         """Called from the collector loop; throttles its own frequency."""
         if monotonic_now - self._last_check < CHECK_EVERY_SECONDS:

@@ -364,3 +364,17 @@ class BackupService:
                 self._check_schedule()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Export schedule check error: %s", exc)
+            if tg_on:
+                try:
+                    self._check_digest()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Digest/alert check error: %s", exc)
+
+    def _check_digest(self) -> None:
+        """The daily summary, when it is due."""
+        from . import digest
+
+        if digest.digest_due(self.db):
+            if self.tg.send_message(digest.summary_text(self.db),
+                                    parse_mode="HTML"):
+                digest.mark_sent(self.db)

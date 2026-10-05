@@ -21,6 +21,11 @@ async function loadSettings() {
       : "Бэкап ещё не отправлялся";
     document.getElementById("alerts-enabled").checked = !!s.alerts_enabled;
     document.getElementById("alert-stale").value = s.alert_stale_minutes;
+    const d = s.digest || {};
+    document.getElementById("digest-time").value = d.time || "";
+    document.getElementById("digest-last").textContent = !d.time
+      ? "Ежедневная сводка выключена — /summary работает всё равно."
+      : d.last ? `Последняя сводка: ${d.last}` : "Сводка ещё не отправлялась.";
     if (!s.telegram_configured) setMsg("settings-msg", "Telegram не настроен — бэкапы и уведомления не будут отправляться.", true);
   } catch (e) {
     setMsg("settings-msg", "Ошибка загрузки настроек: " + e.message, true);
@@ -84,3 +89,55 @@ document.getElementById("save-alerts").addEventListener("click", async () => {
     setMsg("alerts-msg", "Ошибка: " + e.message, true);
   }
 });
+
+async function saveDigest(time) {
+  try {
+    await postJSON("/api/settings", { digest_time: time }, token());
+    setMsg("digest-msg", time ? `Сводка каждый день в ${time} МСК.` : "Ежедневная сводка выключена.");
+    loadSettings();
+  } catch (e) {
+    setMsg("digest-msg", "Ошибка: " + e.message, true);
+  }
+}
+document.getElementById("save-digest").addEventListener("click",
+  () => saveDigest(document.getElementById("digest-time").value));
+document.getElementById("digest-off").addEventListener("click", () => saveDigest(""));
+
+function bytes(n) {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " ГБ";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " МБ";
+  return Math.round(n / 1024) + " КБ";
+}
+
+const TABLE_NAMES = {
+  sales: "история продаж", poll_log: "журнал опросов", order_events: "журнал ордеров",
+  buy_orders: "стаканы", listing_depth: "листинги", trades: "сделки аккаунта",
+  our_orders: "наши ордера", items: "предметы",
+};
+
+async function loadStorage() {
+  const box = document.getElementById("storage");
+  try {
+    const s = await getJSON("/api/settings/storage");
+    box.innerHTML = "";
+    const line = (text) => { const p = document.createElement("div"); p.textContent = text; box.appendChild(p); };
+    line(`База: ${bytes(s.db)}` + (s.wal ? ` + журнал WAL ${bytes(s.wal)}` : "")
+      + ` · бэкапы на сервере: ${bytes(s.backups)}`);
+    if (s.disk_free !== null) {
+      const used = s.disk_total ? Math.round((1 - s.disk_free / s.disk_total) * 100) : null;
+      line(`Свободно на диске: ${bytes(s.disk_free)} из ${bytes(s.disk_total)}`
+        + (used !== null ? ` (занято ${used}%)` : ""));
+      if (s.disk_total && s.disk_free / s.disk_total < 0.15) {
+        box.lastChild.className = "err";
+      }
+    }
+    const rows = s.tables.filter((t) => t.rows).sort((a, b) => b.rows - a.rows)
+      .map((t) => `${TABLE_NAMES[t.table] || t.table} ≈ ${t.rows.toLocaleString("ru-RU")}`);
+    if (rows.length) line("Строк: " + rows.join(" · "));
+  } catch (e) {
+    box.textContent = "Не удалось посчитать: " + e.message;
+  }
+}
+document.getElementById("storage-reload").addEventListener("click", loadStorage);
+loadStorage();

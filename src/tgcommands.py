@@ -16,6 +16,7 @@ log = logging.getLogger("csfloat.tgcommands")
 
 HELP = (
     "<b>Что умею</b>\n"
+    "/summary — сводка: баланс, ордера, сутки, заработок, проблемы\n"
     "/orders — сколько в ордерах и какая ожидаемая прибыль\n"
     "/items — список ордеров по одному\n"
     "/status — состояние бота: защита, лимиты, последняя сверка\n"
@@ -27,11 +28,12 @@ HELP = (
 # answer() deliberately returns None for it. Listed here so the help stays
 # honest and an unknown-command reply is not sent for it.
 SENDS_A_FILE = ("dump",)
+SUMMARY = ("summary", "svodka", "s")
 
 
 def known(text: str) -> bool:
     return command(text) in ("orders", "items", "status", "help", "start",
-                             *SENDS_A_FILE)
+                             *SUMMARY, *SENDS_A_FILE)
 
 
 def argument(text: str) -> str:
@@ -59,6 +61,9 @@ def answer(text: str, db) -> str | None:
         return _items(db)
     if name == "status":
         return _status(db)
+    if name in SUMMARY:
+        from .digest import summary_text
+        return summary_text(db)
     return None
 
 

@@ -1837,155 +1837,33 @@ def profit_page():
 
 @app.route("/api/profit")
 def api_profit():
-    """Earnings, worked out from the account's trades.
-
-    Each sale is paired with the purchase of the same skin - same name, float
-    and pattern - and the profit is what the sale brought after CSFloat's cut
-    less what the purchase cost. What was bought and not sold yet is valued at
-    the median of recent sales in its own hundredth of float."""
-    from src import profit as pf
-    from src.pacing import parse_iso
+    """Earnings, worked out from the account's trades (see
+    `src.profit_report`)."""
+    from src import profit_report
 
     db = get_db()
-    fee = _analysis_params(db).fee
     try:
         days = float(request.args.get("days") or 0)
     except (TypeError, ValueError):
         days = 0.0
-    since = pf.since_iso(days) if days > 0 else ""
-    conf = _profit_settings(db)
-    start = conf["since"]
-
-    def counted(when: str | None) -> bool:
-        """On or after the date the owner counts from. Compared by date:
-        trades arrive as "...Z" and "+00:00" alike, and a day is the unit."""
-        return not start or (when or "")[:10] >= start
-
-    everything = db.all_trades()
-    # Taken out before pairing: a purchase left in would still claim the
-    # sale of the same skin, and the sale would vanish with it.
-    book = pf.pair([t for t in everything
-                    if t["trade_id"] not in conf["excluded"]], fee)
-    events = [e for e in db.order_events(limit=50000, include_dry=False)
-              if e["ok"] and e["kind"] in ("place", "raise", "lower")]
-
-    # Bought before the date and sold after goes too: the purchase is part of
-    # what the date leaves out, and half a deal is no profit to report.
-    counted_closed = [d for d in book.closed if counted(d["bought_at"])]
-    closed = [d for d in counted_closed if (d["sold_at"] or "") >= since]
-    for d in closed:
-        d["by_bot"] = pf.by_bot({"market_hash_name": d["market_hash_name"],
-                                 "float_value": d["float_value"],
-                                 "price": d["bought"]}, events)
-
-    sales_cache: dict[str, list] = {}
-    holding = []
-    cutoff = pf.since_iso(conf["estimate_days"])
-    # A purchase still in its trade is money already spent on a skin that is
-    # on its way: it belongs with what is held, marked, rather than at the
-    # foot of the page. Every fill of a new bot spends its first week there.
-    coming = [t for t in book.pending if t.get("role") == pf.BUY]
-    coming_ids = {t["trade_id"] for t in coming}
-    for t in list(book.holding) + coming:
-        if not counted(t.get("done_at") or t.get("created_at")):
-            continue
-        name = t["market_hash_name"] or ""
-        if name not in sales_cache:
-            item_id = db.get_item_id(name) if name else None
-            sales_cache[name] = (db.query_sales(int(item_id), since_iso=cutoff)
-                                 if item_id is not None else [])
-        est, basis = pf.estimate(sales_cache[name], t["float_value"])
-        if est is not None:
-            basis += f" за {conf['estimate_days']} дн"
-        bought = float(t["price"] or 0)
-        bought_at = t.get("done_at") or t.get("created_at")
-        when = parse_iso(bought_at)
-        holding.append({
-            "market_hash_name": name, "float_value": t["float_value"],
-            "paint_seed": t["paint_seed"], "bought": bought,
-            "bought_at": bought_at,
-            "days": (round((datetime.now(timezone.utc) - when).total_seconds()
-                           / 86400.0, 1) if when else None),
-            "estimate": round(est, 2) if est is not None else None,
-            "basis": basis,
-            "est_profit": (round(est * (1 - fee) - bought, 2)
-                           if est is not None else None),
-            "est_pct": (round((est * (1 - fee) - bought) / bought * 100.0, 1)
-                        if est is not None and bought else None),
-            "by_bot": pf.by_bot(t, events),
-            "tracked": bool(sales_cache[name]),
-            "trade_id": t["trade_id"],
-            "pending": t["trade_id"] in coming_ids,
-            "state": t.get("state"),
-        })
-
-    # Newest first, whichever list a purchase came from: running trades were
-    # appended after the finished ones and read upside down.
-    holding.sort(key=lambda h: h["bought_at"] or "", reverse=True)
-    valued = [h for h in holding if h["estimate"] is not None]
-    valued_spent = sum(h["bought"] for h in valued)
-    valued_profit = sum(h["est_profit"] for h in valued)
-    return jsonify({
-        "fee": fee,
-        "days": days,
-        "totals": pf.totals(closed),
-        "all_time": pf.totals(counted_closed),
-        "closed": closed[:1000],
-        "holding": holding,
-        "holding_totals": {
-            "count": len(holding),
-            "spent": round(sum(h["bought"] for h in holding), 2),
-            "estimate": round(sum(h["estimate"] for h in valued), 2),
-            "est_profit": round(valued_profit, 2),
-            "est_pct": (round(valued_profit / valued_spent * 100.0, 1)
-                        if valued_spent else None),
-            "unvalued": len(holding) - len(valued),
-            "pending": sum(1 for h in holding if h["pending"]),
-        },
-        "unmatched": [dict(t) for t in book.unmatched
-                      if ((t.get("done_at") or t.get("created_at") or "") >= since)
-                      and counted(t.get("done_at") or t.get("created_at"))],
-        "pending": [dict(t) for t in book.pending
-                    if t["trade_id"] not in coming_ids],
-        "trades": len(everything),
-        "settings": {"since": start, "estimate_days": conf["estimate_days"]},
-        "excluded": [{"trade_id": t["trade_id"], "role": t.get("role"),
-                      "market_hash_name": t.get("market_hash_name"),
-                      "float_value": t.get("float_value"),
-                      "price": t.get("price"),
-                      "at": t.get("done_at") or t.get("created_at")}
-                     for t in everything if t["trade_id"] in conf["excluded"]],
+    out = profit_report.build(db, _analysis_params(db).fee, days)
+    out.update({
         "sync": _json_setting(db, "trades_sync_result"),
         "sync_at": db.get_setting("trades_sync_at") or None,
         "sync_pending": db.get_setting("trades_sync_requested") == "1",
     })
-
-
-PROFIT_SINCE_KEY = "profit_since"
-PROFIT_DAYS_KEY = "profit_estimate_days"
-PROFIT_EXCLUDED_KEY = "profit_excluded"
-PROFIT_DAYS_BOUNDS = (1, 180)
+    return jsonify(out)
 
 
 def _profit_settings(db) -> dict:
-    """What the earnings tab counts: from which date, which trades the owner
-    took out by hand, and how many days of sales value what is still held."""
-    since = (db.get_setting(PROFIT_SINCE_KEY) or "").strip()
-    try:
-        days = int(float(db.get_setting(PROFIT_DAYS_KEY) or 30))
-    except (TypeError, ValueError):
-        days = 30
-    days = min(max(days, PROFIT_DAYS_BOUNDS[0]), PROFIT_DAYS_BOUNDS[1])
-    try:
-        excluded = {str(x) for x in json.loads(
-            db.get_setting(PROFIT_EXCLUDED_KEY) or "[]")}
-    except ValueError:
-        excluded = set()
-    return {"since": since, "estimate_days": days, "excluded": excluded}
+    from src import profit_report
+    return profit_report.settings(db)
 
 
 @app.route("/api/profit/settings", methods=["POST"])
 def api_profit_settings():
+    from src import profit_report
+
     _require_admin()
     data = request.get_json(silent=True) or {}
     db = get_db()
@@ -1999,9 +1877,9 @@ def api_profit_settings():
                 errors.append(f"дата «{since}» — нужен формат ГГГГ-ММ-ДД")
                 since = None
         if since is not None:
-            db.set_setting(PROFIT_SINCE_KEY, since)
+            db.set_setting(profit_report.SINCE_KEY, since)
     if "estimate_days" in data:
-        lo, hi = PROFIT_DAYS_BOUNDS
+        lo, hi = profit_report.DAYS_BOUNDS
         try:
             days = int(float(str(data["estimate_days"]).replace(",", ".")))
         except (TypeError, ValueError):
@@ -2009,7 +1887,7 @@ def api_profit_settings():
         if days is None or not lo <= days <= hi:
             errors.append(f"срок оценки — целое от {lo} до {hi} дней")
         else:
-            db.set_setting(PROFIT_DAYS_KEY, str(days))
+            db.set_setting(profit_report.DAYS_KEY, str(days))
     conf = _profit_settings(db)
     return jsonify({"since": conf["since"], "estimate_days": conf["estimate_days"],
                     "errors": errors, "error": "; ".join(errors)}), \
@@ -2033,7 +1911,8 @@ def api_profit_exclude():
         excluded |= set(ids)
     else:
         excluded -= set(ids)
-    db.set_setting(PROFIT_EXCLUDED_KEY, json.dumps(sorted(excluded)))
+    from src import profit_report
+    db.set_setting(profit_report.EXCLUDED_KEY, json.dumps(sorted(excluded)))
     return jsonify({"excluded": len(excluded)})
 
 
@@ -2654,8 +2533,60 @@ def api_get_settings():
             "telegram_configured": config.telegram.configured(),
             "alerts_enabled": (db.get_setting("alerts_enabled", "1") or "1") != "0",
             "alert_stale_minutes": float(db.get_setting("alert_stale_minutes") or 90),
+            "digest": _digest_settings(db),
         }
     )
+
+
+def _digest_settings(db) -> dict:
+    from src import digest
+    return digest.as_dict(db)
+
+
+# Tables worth a line on the storage panel, biggest first in practice.
+STORAGE_TABLES = ("sales", "poll_log", "order_events", "buy_orders",
+                  "listing_depth", "trades", "our_orders", "items")
+
+
+@app.route("/api/settings/storage")
+def api_settings_storage():
+    """How big the database is, and where the room goes.
+
+    Rows are counted by the largest rowid, which is instant on a table of
+    millions; deleted rows make it an upper bound, hence "≈"."""
+    import shutil
+
+    db = get_db()
+    path = Path(config.db_path)
+
+    def size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
+
+    main = size(path)
+    wal = size(Path(str(path) + "-wal"))
+    backups = 0
+    try:
+        backups = sum(f.stat().st_size for f in Path(config.backups_dir).glob("*")
+                      if f.is_file())
+    except OSError:
+        pass
+    try:
+        disk = shutil.disk_usage(path.parent)
+        free, total = disk.free, disk.total
+    except OSError:
+        free = total = None
+    tables = []
+    for name in STORAGE_TABLES:
+        try:
+            row = db.conn.execute(f"SELECT MAX(rowid) AS n FROM {name}").fetchone()
+            tables.append({"table": name, "rows": int(row["n"] or 0)})
+        except Exception:  # noqa: BLE001 - an older DB lacks a table
+            continue
+    return jsonify({"db": main, "wal": wal, "backups": backups,
+                    "disk_free": free, "disk_total": total, "tables": tables})
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -2676,6 +2607,16 @@ def api_set_settings():
         db.set_setting("export_enabled", "1" if data.get("export_enabled") else "0")
     if "alerts_enabled" in data:
         db.set_setting("alerts_enabled", "1" if data.get("alerts_enabled") else "0")
+    if "digest_time" in data:
+        t = (data.get("digest_time") or "").strip()
+        if t:
+            try:
+                hh, mm = [int(x) for x in t.split(":")]
+                assert 0 <= hh < 24 and 0 <= mm < 60
+            except (ValueError, AssertionError):
+                abort(400, description="Время сводки — ЧЧ:ММ (МСК), пусто — выключить")
+        from src.digest import DIGEST_TIME_KEY
+        db.set_setting(DIGEST_TIME_KEY, t)
     if "alert_stale_minutes" in data:
         raw = data.get("alert_stale_minutes")
         try:

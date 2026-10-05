@@ -40,6 +40,27 @@
 </section>
 
 <section class="settings-block">
+  <h2>Сводка в Telegram</h2>
+  <p class="muted">Раз в день бот присылает сводку: баланс, ордера, что было за
+     сутки, заработок и проблемы. В любой момент её можно запросить командой
+     <code>/summary</code>.</p>
+  <div class="row">
+    <label>время (МСК)
+      <input class="input time" type="time" id="digest-time"></label>
+    <button class="btn btn-primary" id="save-digest">Сохранить</button>
+    <button class="btn" id="digest-off">Не присылать</button>
+  </div>
+  <div class="muted" id="digest-last"></div>
+  <div class="settings-msg" id="digest-msg"></div>
+</section>
+
+<section class="settings-block">
+  <h2>База данных</h2>
+  <div id="storage" class="muted">Считаю…</div>
+  <button class="btn" id="storage-reload">Обновить</button>
+</section>
+
+<section class="settings-block">
   <h2>Восстановление базы</h2>
   <p class="muted">
     Загрузи файл <code>*.db</code> — текущая база будет сохранена в резервную
