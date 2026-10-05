@@ -1217,7 +1217,11 @@ def test_every_band_carries_what_the_other_pricing_makes_of_it():
     would change: each band says what the other one would bid, and the toggle
     sticks."""
     c, name = _stocked()
-    body = c.get("/api/analysis").get_json()
+    plain = c.get("/api/analysis").get_json()
+    item = next(i for i in plain["items"] if i["item"] == name)
+    assert "alt_take" not in item and not any("alt" in b for b in item["bands"]), \
+        "scored once unless a comparison is asked for"
+    body = c.get("/api/analysis?compare=1").get_json()
     item = next(i for i in body["items"] if i["item"] == name)
     assert body["params"]["adaptive"] in (0, False)
     assert item["bands"] and all("alt" in b for b in item["bands"])

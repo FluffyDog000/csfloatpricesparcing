@@ -65,8 +65,8 @@
     }
   }
 
-  async function loadItems(quiet) {
-    const data = await getJSON("/api/analysis");
+  async function loadItems(quiet, compare) {
+    const data = await getJSON("/api/analysis" + (compare ? "?compare=1" : ""));
     lastData = data;
     const names = data.items.map((i) => i.item);
     renderList(names);
@@ -704,6 +704,10 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("plan-defend-min").value = d.defend_minutes || 60;
     if ($("plan-autofree")) $("plan-autofree").checked = d.auto_free !== false;
     if ($("plan-autofill")) $("plan-autofill").checked = !!d.auto_fill;
+    // Unlocked only now: until the plan answers, these show defaults, and a
+    // click then would save "defence off" over a defence that is on.
+    ["plan-dry", "plan-arm", "plan-defend", "plan-defend-min", "plan-autofree",
+     "plan-autofill"].forEach((id) => { if ($(id)) $(id).disabled = false; });
     renderCreates(d.creates);
     if ($("plan-creates") && d.phase_items) {
       $("plan-creates").textContent += ` ${d.phase_items} предмет(ов) с фазой Doppler `
@@ -1193,7 +1197,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     });
 
     $("an-run").onclick = () => action("Считаю", async () => {
-      await loadItems();
+      await loadItems(false, !!($("an-compare") && $("an-compare").checked));
       await loadPlan();
     });
 

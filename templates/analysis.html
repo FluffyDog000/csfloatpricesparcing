@@ -20,6 +20,9 @@
     <button class="btn primary" id="an-sweep">Обойти стаканы</button>
     <button class="btn" id="an-run">Проанализировать</button>
     <button class="btn danger" id="an-clear">Очистить список</button>
+    <label class="arm-line" title="считает каждый предмет дважды — анализ идёт вдвое дольше">
+      <input type="checkbox" id="an-compare"> сравнить с другим расчётом цен
+    </label>
   </div>
   <div class="muted" id="an-note"></div>
 </section>
@@ -53,25 +56,25 @@
   <a class="btn" id="plan-xlsx" href="/api/analysis/plan.xlsx"
      title="вся очередь выставления, действия и настройки, с которыми план посчитан">Скачать план в Excel</a>
   <label class="arm-line">
-    <input type="checkbox" id="plan-dry" checked> вхолостую (ничего не отправлять)
+    <input type="checkbox" id="plan-dry" disabled checked> вхолостую (ничего не отправлять)
   </label>
   <label class="arm-line">
-    <input type="checkbox" id="plan-arm"> <b>разрешить выставление</b>
+    <input type="checkbox" id="plan-arm" disabled> <b>разрешить выставление</b>
     <span class="muted">— тратится при применении</span>
   </label>
   <label class="arm-line">
-    <input type="checkbox" id="plan-defend"> <b>защищать автоматически</b>
-    каждые <input type="number" id="plan-defend-min" class="input inline-num"
+    <input type="checkbox" id="plan-defend" disabled> <b>защищать автоматически</b>
+    каждые <input type="number" id="plan-defend-min" disabled class="input inline-num"
                   step="10" min="10" max="1440" value="60"> мин
     <span class="muted">— только перебить или снять, новые ордера не ставит</span>
   </label>
   <label class="arm-line">
-    <input type="checkbox" id="plan-autofree"> освобождать место для перебивания
+    <input type="checkbox" id="plan-autofree" disabled> освобождать место для перебивания
     <span class="muted">— CSFloat отказал «не хватило баланса»: снять самый слабый
       ордер (только если он слабее перебиваемого, до 3 за проверку) и повторить</span>
   </label>
   <label class="arm-line">
-    <input type="checkbox" id="plan-autofill"> <b>добирать новые ордера сам</b>
+    <input type="checkbox" id="plan-autofill" disabled> <b>добирать новые ордера сам</b>
     <span class="muted">— раз в 30 мин, если остались создания из 200 на сутки:
       ставит лучшие новые ордера из плана со свежим стаканом (не старше 6 ч),
       устаревшие стаканы отправляет на обход. Без кнопки «Применить»; пишет в Telegram</span>
