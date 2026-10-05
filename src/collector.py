@@ -782,6 +782,19 @@ class Collector:
         summary = {"at": utcnow_iso(), "dry_run": dry,
                    "done": done, "failed": len(results) - done,
                    "results": results}
+        if source == "auto" and results:
+            placed = [r["action"] for r in results if r["ok"]]
+            lines = [f"🤖 Автодобор: поставлено {len(placed)} из {len(results)}"
+                     + (" (вхолостую)" if dry else "")]
+            for a in placed[:15]:
+                lines.append(f"• {a['item']} {a['float_min']:.4f}–"
+                             f"{a['float_max']:.4f} за ${a['price']:.2f}"
+                             + (f" ×{a['quantity']}" if a.get("quantity", 1) > 1 else ""))
+            if len(placed) > 15:
+                lines.append(f"… и ещё {len(placed) - 15}")
+            if len(results) > len(placed):
+                lines.append(f"не встало: {len(results) - len(placed)} — см. журнал")
+            self._tell("\n".join(lines))
         self.db.set_setting("analysis_apply_result",
                             _json.dumps(summary, ensure_ascii=False))
         log.info("Applied plan: %d of %d%s", done, len(results),

@@ -131,3 +131,33 @@ def test_cancelling_marks_our_row_rather_than_deleting_it():
     rows = db.our_orders(item_id, live_only=False)
     assert rows[0]["state"] == "cancelled", "but the history is kept"
     db.close()
+
+
+def test_an_auto_round_says_what_it_placed_in_telegram():
+    col, db = _collector(dry_run=False)
+    col.client.send_json = lambda *a, **k: {"id": "new1", "price": 15900, "qty": 1,
+                                         "hybrid_properties": {"min_float": 0.32, "max_float": 0.38},
+                                         "bought_item_count": 0}
+    told = []
+    col._tell = told.append
+    db.set_setting("analysis_pending_actions", json.dumps(
+        {"at": "now", "source": "auto", "actions": [_place()]}))
+    out = col.apply_pending_actions()
+    assert out["done"] == 1
+    assert told and "Автодобор: поставлено 1 из 1" in told[0]
+    assert "Fade" in told[0]
+    assert db.order_events()[0]["source"] == "auto"
+    db.close()
+
+
+def test_a_plan_applied_by_hand_sends_no_message():
+    col, db = _collector(dry_run=False)
+    col.client.send_json = lambda *a, **k: {"id": "new1", "price": 15900, "qty": 1,
+                                         "hybrid_properties": {"min_float": 0.32, "max_float": 0.38},
+                                         "bought_item_count": 0}
+    told = []
+    col._tell = told.append
+    _queue(db, [_place()])
+    col.apply_pending_actions()
+    assert told == []
+    db.close()

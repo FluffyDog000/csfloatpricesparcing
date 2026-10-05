@@ -22,7 +22,7 @@
     fill: ["исполнен", "act-place"],
   };
   const SOURCE = { plan: "план", defence: "защита", sync: "сверка",
-    guard: "защита от слива", manual: "кнопкой", room: "ради места" };
+    guard: "защита от слива", manual: "кнопкой", room: "ради места", auto: "автодобор" };
   // This many orders failing for one reason fold into one line.
   const FOLD_AT = 3;
   // A refusal on an order still held stops being news once this old; one on

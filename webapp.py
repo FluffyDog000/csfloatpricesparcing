@@ -1250,9 +1250,11 @@ def api_analysis_plan():
         "armed": (db.get_setting("analysis_armed") or "0") == "1",
         "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
         "pending": bool(db.get_setting("analysis_pending_actions")),
+        "creates": _creates_status(db),
         "defend": defending(db),
         "defend_minutes": defend_minutes(db),
         "auto_free": (db.get_setting("an_auto_free") or "1") == "1",
+        "auto_fill": (db.get_setting(AUTO_FILL_KEY) or "0") == "1",
         "defend_at": db.get_setting("defend_last_at") or None,
         "last_defend": _json_setting(db, "defend_result"),
         "last_apply": _json_setting(db, "analysis_apply_result"),
@@ -1354,6 +1356,8 @@ def api_analysis_arm():
         db.set_setting("an_defend_minutes", str(data["defend_minutes"]).strip())
     if "auto_free" in data:
         db.set_setting("an_auto_free", "1" if data["auto_free"] else "0")
+    if "auto_fill" in data:
+        db.set_setting(AUTO_FILL_KEY, "1" if data["auto_fill"] else "0")
     log.warning("Analysis arming set to %s (dry run %s, defence %s)", on,
                 db.get_setting("analysis_dry_run", "1"),
                 db.get_setting("an_defend", "0"))
@@ -1361,7 +1365,94 @@ def api_analysis_arm():
                     "dry_run": (db.get_setting("analysis_dry_run", "1") or "1") != "0",
                     "defend": defending(db),
                     "defend_minutes": defend_minutes(db),
-                    "auto_free": (db.get_setting("an_auto_free") or "1") == "1"})
+                    "auto_free": (db.get_setting("an_auto_free") or "1") == "1",
+                    "auto_fill": (db.get_setting(AUTO_FILL_KEY) or "0") == "1"})
+
+
+AUTO_FILL_KEY = "an_auto_fill"
+AUTO_FILL_LAST_KEY = "an_auto_fill_last"
+AUTO_FILL_EVERY_SECONDS = 1800
+# A plan priced from an old book bids against rivals who may have moved; the
+# defence would correct it within minutes, but there is no need to start off.
+AUTO_FILL_FRESH_HOURS = 6.0
+
+
+def auto_fill_once(db) -> dict:
+    """Place the best new orders the plan wants, up to the day's creations
+    left, without anyone pressing "apply". Only placements, and only where
+    the book is fresh: an item with an old book is sent for a sweep instead,
+    for the next round. Handed to the collector the way the button does it,
+    so the brake, dry run and logging all apply unchanged.
+
+    Returns what it did, for logging and tests."""
+    import json as _json
+
+    from src.guard import tripped
+    from src.pacing import parse_iso
+
+    if (db.get_setting(AUTO_FILL_KEY) or "0") != "1":
+        return {"skipped": "выключено"}
+    if tripped(db):
+        return {"skipped": "сработала защита от слива"}
+    if db.get_setting("analysis_pending_actions"):
+        return {"skipped": "в очереди уже есть план"}
+    plan = api_analysis_plan().get_json()
+    if not plan["can_place"]:
+        return {"skipped": "постановка не настроена"}
+    left = int(plan["creates"]["left"])
+    if left <= 0:
+        return {"skipped": "создания на сегодня кончились"}
+
+    now = datetime.now(timezone.utc)
+    fresh, stale = [], []
+    for a in plan["actions"]:
+        if a["kind"] != "place":
+            continue
+        item_id = db.get_item_id(a["item"])
+        swept = parse_iso(db.book_swept_at(item_id)) if item_id else None
+        if swept and (now - swept).total_seconds() <= AUTO_FILL_FRESH_HOURS * 3600:
+            fresh.append(a)
+        else:
+            stale.append(a)
+    take = fresh[:left]
+    asked = []
+    for a in stale:
+        if len(asked) >= max(left - len(take), 0) * 2:
+            break
+        if a["item"] not in asked and db.request_orders(a["item"]):
+            asked.append(a["item"])
+    if take:
+        db.set_setting("analysis_pending_actions", _json.dumps(
+            {"at": now.isoformat(timespec="seconds"), "source": "auto",
+             "actions": take}, ensure_ascii=False))
+        log.warning("Auto-fill queued %d new order(s); %d book(s) sent for a sweep",
+                    len(take), len(asked))
+    return {"queued": len(take), "swept": len(asked), "left": left}
+
+
+def _auto_fill_loop() -> None:
+    """Every half hour, in the background of the web process."""
+    import time as _time
+
+    while True:
+        _time.sleep(60)
+        try:
+            with app.app_context():
+                db = get_db()
+                last = float(db.get_setting(AUTO_FILL_LAST_KEY) or 0)
+                if _time.time() - last < AUTO_FILL_EVERY_SECONDS:
+                    continue
+                if (db.get_setting(AUTO_FILL_KEY) or "0") != "1":
+                    continue
+                db.set_setting(AUTO_FILL_LAST_KEY, str(_time.time()))
+                auto_fill_once(db)
+        except Exception as exc:  # noqa: BLE001 - the dashboard keeps serving
+            log.warning("Auto-fill round failed: %s", exc)
+
+
+def _creates_status(db) -> dict:
+    from src import creates
+    return creates.status(db)
 
 
 @app.route("/api/analysis/apply", methods=["POST"])
@@ -1382,10 +1473,19 @@ def api_analysis_apply():
     if (db.get_setting("analysis_armed") or "0") != "1":
         abort(403, description="не разрешено — включи разрешение на выставление")
 
+    from src.creates import cap_places
+
     plan = api_analysis_plan().get_json()
-    doing = [a for a in plan["actions"] if a["kind"] != "keep"]
+    # New orders only up to what is left of the day's 200 creations, best
+    # first; the rest wait for the reset rather than fail one by one.
+    doing, deferred = cap_places(
+        [a for a in plan["actions"] if a["kind"] != "keep"],
+        plan["creates"]["left"])
     if not doing:
-        return jsonify({"queued": 0, "note": "в плане нечего выполнять"})
+        return jsonify({"queued": 0, "deferred": deferred,
+                        "note": ("создания на сегодня кончились — новые ордера "
+                                 f"({deferred}) встанут после сброса"
+                                 if deferred else "в плане нечего выполнять")})
     if not plan["can_place"]:
         abort(400, description=plan["placement"])
 
@@ -1399,6 +1499,7 @@ def api_analysis_apply():
                 len(doing), db.get_setting("analysis_dry_run", "1"))
     return jsonify({
         "queued": len(doing),
+        "deferred": deferred,
         # Handed back so the page can show what went, rather than only how
         # many: a count is indistinguishable from a button that did nothing.
         "actions": doing,
@@ -2689,5 +2790,7 @@ def bad_gateway(err):
 
 
 if __name__ == "__main__":
+    import threading
+    threading.Thread(target=_auto_fill_loop, name="auto-fill", daemon=True).start()
     log.info("Dashboard on http://%s:%d", config.web.host, config.web.port)
     app.run(host=config.web.host, port=config.web.port, threaded=True)

@@ -658,6 +658,8 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("plan-defend").checked = !!d.defend;
     $("plan-defend-min").value = d.defend_minutes || 60;
     if ($("plan-autofree")) $("plan-autofree").checked = d.auto_free !== false;
+    if ($("plan-autofill")) $("plan-autofill").checked = !!d.auto_fill;
+    renderCreates(d.creates);
     renderDefence(d);
     renderApplyResult(d.last_apply, d.pending);
 
@@ -929,6 +931,19 @@ float, который принимает ордер. Ниже «ожид.» — 
   }
 
   /** The brake: tripped or not, and where today stands against it. */
+  /** How many of the day's 200 creations are left, and when they return. */
+  function renderCreates(c) {
+    const box = $("plan-creates");
+    if (!box || !c) return;
+    const reset = c.reset ? new Date(c.reset).toLocaleTimeString("ru-RU",
+      { hour: "2-digit", minute: "2-digit" }) : null;
+    box.className = c.left ? "muted" : "err";
+    box.textContent = `Создать новых ордеров сегодня можно ещё ${c.left} из ${c.limit}`
+      + (c.used ? ` (создано за сутки ${c.used})` : "")
+      + (reset && c.left < c.limit ? ` · следующие освободятся в ${reset}` : "")
+      + ". «Применить план» ставит столько лучших новых, остальные ждут.";
+  }
+
   function renderGuard(g) {
     const box = $("plan-guard");
     const reset = $("plan-guard-reset");
@@ -1165,6 +1180,7 @@ float, который принимает ордер. Ниже «ожид.» — 
         defend: on,
         defend_minutes: $("plan-defend-min").value,
         auto_free: $("plan-autofree") ? $("plan-autofree").checked : true,
+        auto_fill: $("plan-autofill") ? $("plan-autofill").checked : false,
       }, token());
       say(r.defend
         ? `Автозащита включена, каждые ${r.defend_minutes} мин.`
@@ -1185,6 +1201,15 @@ float, который принимает ордер. Ниже «ожид.» — 
     };
     $("plan-defend-min").onchange = saveDefence;
     if ($("plan-autofree")) $("plan-autofree").onchange = saveDefence;
+    if ($("plan-autofill")) $("plan-autofill").onchange = () => {
+      if ($("plan-autofill").checked && !$("plan-dry").checked
+          && !confirm("Бот будет сам ставить новые ордера (тратит деньги при исполнении), "
+            + "без кнопки «Применить». Включить?")) {
+        $("plan-autofill").checked = false;
+        return;
+      }
+      saveDefence();
+    };
 
     $("plan-apply").onclick = () => {
       const real = $("plan-arm").checked && !$("plan-dry").checked;
@@ -1194,7 +1219,9 @@ float, который принимает ордер. Ниже «ожид.» — 
         const r = await postJSON("/api/analysis/apply", {}, token());
         if (!r.queued) { say(r.note, "err"); return; }
         renderQueued(r.actions, `Передано сборщику: ${r.queued} действий`
-          + (r.dry_run ? " (вхолостую)" : "") + ".");
+          + (r.dry_run ? " (вхолостую)" : "")
+          + (r.deferred ? `; ещё ${r.deferred} новых ждут сброса лимита созданий` : "")
+          + ".");
         say(r.note, "ok");
 
         // The collector picks work up on its own cycle, so the page waits
