@@ -1464,6 +1464,13 @@ AUTO_FILL_EVERY_SECONDS = 1800
 AUTO_FILL_FRESH_HOURS = 6.0
 
 
+def _face_standing(db) -> float:
+    """Face value of every order standing on the account now."""
+    return sum(float(r["price"]) * int(r.get("quantity") or 1)
+               for r in db.our_orders(live_only=False)
+               if r["state"] in ("live", "manual"))
+
+
 def auto_fill_once(db) -> dict:
     """Place the best new orders the plan wants, up to the day's creations
     left, without anyone pressing "apply". Only placements, and only where
@@ -1501,7 +1508,25 @@ def auto_fill_once(db) -> dict:
             fresh.append(a)
         else:
             stale.append(a)
-    take = fresh[:left]
+    # Only into the room actually free. The plan's places assume its cancels
+    # happen too, and auto-fill sends no cancels: placing them on top of every
+    # standing order went past the cap, and took the very room the defence
+    # had just freed to answer an outbid.
+    lim = plan["limits"]
+    caps = [float(v) for v in (lim.get("order_cap"), lim.get("allowance"))
+            if v is not None]
+    room = (min(caps) - _face_standing(db)) if caps else float("inf")
+    take = []
+    for a in fresh:
+        if len(take) >= left:
+            break
+        need = float(a["price"]) * int(a.get("quantity") or 1)
+        if need > room + 1e-9:
+            continue
+        take.append(a)
+        room -= need
+    if fresh and not take:
+        return {"skipped": "нет места под лимитом суммы ордеров", "left": left}
     asked = []
     for a in stale:
         if len(asked) >= max(left - len(take), 0) * 2:

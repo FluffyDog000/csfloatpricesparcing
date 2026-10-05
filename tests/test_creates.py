@@ -108,3 +108,27 @@ def test_auto_fill_places_fresh_ones_and_sends_old_books_for_a_sweep():
         got = webapp.auto_fill_once(db)
         assert got["queued"] == 0 and got["swept"] == 1
         assert not db.get_setting("analysis_pending_actions")
+
+
+def test_auto_fill_places_only_into_the_room_left_under_the_cap():
+    """It sends no cancels, so the plan's places would go on top of every
+    standing order - past the cap, and into the room the defence had just
+    freed for an outbid one."""
+    c, name = _plan_app()
+    import webapp
+    c.post("/api/analysis/params", json={"an_balance": "5000", "an_leverage": "6"})
+    with webapp.app.app_context():
+        db = webapp.get_db()
+        db.set_setting(webapp.AUTO_FILL_KEY, "1")
+        item_id = db.get_item_id(name)
+        other = db.add_item("★ Driver Gloves | King Snake (Field-Tested)")
+        db.upsert_our_order(other, 0.20, 0.25, 29900.0, 30000.0, state="live",
+                            remote_id="full")
+        got = webapp.auto_fill_once(db)
+        assert got.get("queued", 0) == 0, got
+        assert "нет места" in got.get("skipped", ""), got
+        assert not db.get_setting("analysis_pending_actions")
+
+        # Room made: the same order goes.
+        db.set_our_order_state(db.our_orders(other)[0]["id"], "cancelled", "")
+        assert webapp.auto_fill_once(db)["queued"] == 1
