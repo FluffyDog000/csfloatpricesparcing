@@ -1478,6 +1478,15 @@ class Collector:
                         continue                  # taken down to make room
                     if action.kind in (RAISE, LOWER) and not dry:
                         why = self._amend_held_back()
+                        if why and auto_free and freed < FREE_PER_PASS \
+                                and self._weakest_below(
+                                    ranks, held_by_id, gone,
+                                    ranks.get(int(action.order_id or -1), 0.0),
+                                    exclude=int(action.order_id or -1)):
+                            # There is still something weaker to take down:
+                            # the hold would leave room unfreed for an hour,
+                            # three orders an hour against forty outbid.
+                            why = ""
                         if why:
                             # Known to fail and nothing has changed since: the
                             # same refusal every ten minutes is a journal full

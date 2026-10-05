@@ -588,3 +588,28 @@ def test_a_refused_amend_is_not_tried_again_until_something_changes():
     col.defend_orders()
     assert calls == ["PATCH", "PATCH"]
     db.close()
+
+
+def test_with_room_to_free_a_held_amend_is_tried_again_next_pass():
+    """The hold kept the defence from asking for an hour, and with it the
+    freeing of room: three orders an hour against forty outbid."""
+    col, db = _collector()
+    a_item, b_item = _two_orders(col, db)
+    db.set_setting("an_auto_free", "0")
+    calls = []
+
+    def send(method, url, body=None, headers=None):
+        calls.append((method, url.rsplit("/", 1)[-1]))
+        if method == "PATCH" and ("DELETE", "B") not in calls:
+            raise RuntimeError("HTTP 400 — insufficient balance")
+        return {}
+
+    col.client.send_json = send
+    col.defend_orders()
+    assert "не хватило баланса" in col._amend_held_back()
+    db.set_setting("an_auto_free", "1")      # turned on after the refusal
+    col.defend_orders()
+    assert calls == [("PATCH", "A"), ("PATCH", "A"), ("DELETE", "B"),
+                     ("PATCH", "A")], calls
+    assert db.our_orders(b_item) == []
+    db.close()
