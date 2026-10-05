@@ -1251,8 +1251,9 @@ def test_the_plan_downloads_as_an_excel_file():
     assert "xl/workbook.xml" in names and "xl/worksheets/sheet3.xml" in names
     queue = z.read("xl/worksheets/sheet1.xml").decode()
     assert "Specialist Gloves" in queue and "потолок $" in queue
-    settings = z.read("xl/worksheets/sheet3.xml").decode()
-    assert "старый" in settings
+    assert "xl/worksheets/sheet4.xml" in names
+    settings = z.read("xl/worksheets/sheet4.xml").decode()
+    assert "старый" in settings and "осторожность медианы" in settings
     c.post("/api/analysis/params", json={"an_adaptive": "1"})
     r = c.get("/api/analysis/plan.xlsx")
     assert "_new.xlsx" in r.headers["Content-Disposition"]
@@ -1284,3 +1285,68 @@ def test_an_order_dropped_for_a_limit_says_so_not_that_it_went_bad():
     plan = c.get("/api/analysis/plan").get_json()
     cancels = [a for a in plan["actions"] if a["kind"] == "cancel"]
     assert cancels and "не помещается в план" in cancels[0]["reason"], cancels
+
+
+def test_a_dropped_order_says_which_filter_it_fails():
+    """74 cancels read "больше не проходит фильтры" and nothing else: which
+    filter, and by how much, is what decides whether to let them go."""
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000"})
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    # Nothing has sold near 0.30: the rung has no price.
+    db.upsert_our_order(item_id, 0.15, 0.30, 100.0, 120.0, state="live",
+                        remote_id="dry")
+    db.close()
+    plan = c.get("/api/analysis/plan").get_json()
+    cancel = next(a for a in plan["actions"] if a["kind"] == "cancel")
+    assert cancel["reason"].startswith("больше не проходит: мало продаж у верха"), \
+        cancel["reason"]
+
+
+def test_the_excel_file_prices_every_dropped_order_four_ways():
+    """Old pricing, and the new one at each strength of the careful median:
+    what would keep an order is read off its row."""
+    import io
+    import zipfile
+
+    c, name = _stocked()
+    c.post("/api/analysis/params", json={"an_total_capital": "2000",
+                                         "an_adaptive": "1", "an_careful": "0.5"})
+    import webapp
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    item_id = db.get_item_id(name)
+    db.upsert_our_order(item_id, 0.15, 0.30, 100.0, 120.0, state="live",
+                        remote_id="dry")
+    db.close()
+    r = c.get("/api/analysis/plan.xlsx")
+    z = zipfile.ZipFile(io.BytesIO(r.data))
+    dropped = z.read("xl/worksheets/sheet3.xml").decode()
+    for head in ("почему снимается", "старый: итог", "новый, 1: итог",
+                 "новый, ½: итог", "новый, 0: итог"):
+        assert head in dropped, head
+    assert "Specialist Gloves" in dropped and "мало продаж у верха" in dropped
+    settings = z.read("xl/worksheets/sheet4.xml").decode()
+    assert "<v>0.5</v>" in settings
+
+
+def test_the_careful_median_takes_off_as_much_as_it_is_told():
+    from src.recency import careful_median
+
+    prices = [48, 50, 51, 52, 55]
+    full, med = careful_median(prices)
+    half, _ = careful_median(prices, 0.5)
+    none, _ = careful_median(prices, 0.0)
+    assert none == med == 51
+    assert full < half < none
+    assert abs((med - half) * 2 - (med - full)) < 1e-9
+
+
+def test_the_careful_strength_is_saved_and_bounded():
+    c, _ = _stocked()
+    assert c.get("/api/analysis").get_json()["params"]["careful"] == 1.0
+    body = c.post("/api/analysis/params", json={"an_careful": "0.5"}).get_json()
+    assert body["params"]["careful"] == 0.5
+    body = c.post("/api/analysis/params", json={"an_careful": "3"}).get_json()
+    assert body["params"]["careful"] == 1.0

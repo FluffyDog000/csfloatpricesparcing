@@ -80,6 +80,7 @@ class Params:
     # item needs, older sales brought to today's prices, and a resale price
     # less the median's own error. Off: the fixed window and a plain median.
     adaptive: bool = False
+    careful: float = 1.0             # standard errors off the median
 
 
 @dataclass
@@ -531,7 +532,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         # dollar at five. And, for the page, what it read before older sales
         # were brought to today's prices.
         rung.market, rung.market_plain = careful_median(
-            [sale_price(r) for r in near])
+            [sale_price(r) for r in near], params.careful)
         then = [r.get("raw_price") for r in near if r.get("raw_price") is not None]
         rung.market_then = median([float(v) for v in then]) if then else None
     else:

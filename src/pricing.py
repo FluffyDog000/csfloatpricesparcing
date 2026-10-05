@@ -104,6 +104,9 @@ class Params:
     # Window by need, prices brought to today, careful median - see
     # `recency`. Off until turned on from the analysis page.
     adaptive: bool = False
+    # Standard errors the careful median takes off: 1, half, or none (the
+    # window and today's prices still apply).
+    careful: float = 1.0
 
     def ladder_params(self):
         from . import ladder as _ladder
@@ -111,7 +114,8 @@ class Params:
                               window_days=self.window_days,
                               min_sample=self.min_sample,
                               max_drop=self.max_drop,
-                              adaptive=bool(self.adaptive))
+                              adaptive=bool(self.adaptive),
+                              careful=float(self.careful))
 
 
 @dataclass
@@ -217,8 +221,13 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
              orders: Sequence[dict], span: tuple[float, float] | None = None,
              depth: Sequence[dict] = (),
              params: Params | None = None,
-             own: Sequence[float] = ()) -> Band:
+             own: Sequence[float] = (),
+             cache: dict | None = None) -> Band:
     """Price one order that already exists, over exactly [lo, hi].
+
+    `cache`, when given, keeps the windowed and re-priced sales between calls
+    on one item: pricing an order several ways (old and new, each strength of
+    the careful median) then draws the price line once.
 
     Planning asks "which orders are worth placing"; this asks "what is the one
     we are holding worth now", which the defence and the holdings report both
@@ -234,8 +243,17 @@ def evaluate(lo: float, hi: float, sales: Sequence[dict],
     lp = p.ladder_params()
     prep = None
     if lp.adaptive:
+        from dataclasses import replace
+
         from .recency import prepare
-        rows, lp, prep = prepare(sales, lp, span or (lo, hi))
+        key = (lp.window_days, lp.min_sample, lp.top_step, span or (lo, hi))
+        hit = cache.get(key) if cache is not None else None
+        if hit is None:
+            hit = prepare(sales, lp, span or (lo, hi))
+            if cache is not None:
+                cache[key] = hit
+        rows, windowed, prep = hit
+        lp = replace(windowed, careful=lp.careful)
     else:
         rows = _ladder.within(sales, p.window_days)
     rung = _ladder.evaluate(hi, rows, orders, (lo, hi), lots, prices, lp,

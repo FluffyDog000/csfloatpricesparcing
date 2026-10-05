@@ -26,6 +26,7 @@ PARAM_BOUNDS = {
     "window_days": (1.0, 365.0), "min_sample": (1, 1000),
     "max_drop": (0.0, 1.0),
     "adaptive": (0, 1),
+    "careful": (0.0, 1.0),
 }
 PARAM_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
@@ -33,6 +34,7 @@ PARAM_KEYS = (
     ("an_min_sample", "min_sample", int),
     ("an_max_drop", "max_drop", float),
     ("an_adaptive", "adaptive", int),
+    ("an_careful", "careful", float),
 )
 
 LIMIT_BOUNDS = {

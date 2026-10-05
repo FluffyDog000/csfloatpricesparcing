@@ -1186,6 +1186,10 @@ def api_analysis_plan():
     mine_by_item: dict[str, list] = {}
     candidates: list[tuple[str, object]] = []
     holding: list[tuple[str, float, float]] = []
+    # What each held item was priced from, for the orders the plan drops:
+    # their own range is priced again to say why (and, in the Excel export,
+    # how it reads under the other settings).
+    context: dict[str, dict] = {}
     from src.phases import is_phase
     phase_items = 0
     for name in _analysis_items(db):
@@ -1215,10 +1219,14 @@ def api_analysis_plan():
                          for r in mine)
         holding += [(name, float(r["float_min"]), float(r["float_max"]))
                     for r in mine]
+        own = _locked_tops(db, item_id)
         candidates += [(name, b) for b in cap_bids(_refuse_unread_book(
             db, item_id,
             plan_bands(sales, orders, wear_range(name), depth, params,
-                       own=_locked_tops(db, item_id))), screen)]
+                       own=own)), screen)]
+        if mine:
+            context[name] = {"sales": sales, "orders": orders, "depth": depth,
+                             "own": own, "span": wear_range(name), "cache": {}}
 
     # How many items each new order asks for, before the money is shared
     # out: an order for three holds three bids of face value.
@@ -1249,13 +1257,38 @@ def api_analysis_plan():
     not_taken = {(row["item"], round(row["band"].float_min, 4),
                   round(row["band"].float_max, 4)): row["reason"]
                  for row in trace if not row["taken"] and row["reason"]}
+    # The rest no longer qualify - and "не проходит фильтры" alone left the
+    # question every one of 74 such cancels raised: which filter, by how much.
+    scored = {(name, round(b.float_min, 4), round(b.float_max, 4)): b
+              for name, b in candidates}
+    dropped: dict[tuple, object] = {}
     for action in actions:
         if action["kind"] != "cancel":
             continue
-        why = not_taken.get((action["item"], round(action["float_min"], 4),
-                             round(action["float_max"], 4)))
+        key = (action["item"], round(action["float_min"], 4),
+               round(action["float_max"], 4))
+        why = not_taken.get(key)
         if why:
             action["reason"] = f"проходит, но не помещается в план: {why}"
+            continue
+        band = scored.get(key)
+        if band is None and action["item"] in context:
+            # A range the climb never steps on: priced on its own.
+            from src.pricing import evaluate as price_one
+            ctx = context[action["item"]]
+            band = price_one(key[1], key[2], ctx["sales"], ctx["orders"],
+                             ctx["span"], ctx["depth"], params, own=ctx["own"],
+                             cache=ctx["cache"])
+            if band.take:
+                band.reason = ("такой полосы нет в лестнице "
+                               "(сама по себе проходит)")
+        if band is not None:
+            dropped[key] = band
+            if band.reason:
+                action["reason"] = f"больше не проходит: {band.reason}"
+    g.plan_dropped = dropped
+    g.plan_scored = scored
+    g.plan_context = context
 
     # The rank travels with the action, not just the sort. Ordering by a
     # number the page never shows leaves "why is this one first" unanswerable
@@ -1612,11 +1645,51 @@ def api_analysis_plan_xlsx():
                 num(a.get("was")), num(a["price"]), num(a.get("ceiling")),
                 a.get("quantity") or 1, num(a.get("rank"), 5), a.get("reason") or ""]
                for a in plan["actions"]]
+    # Every order the plan takes down, priced on its own range now and under
+    # the other settings: the old pricing, and the new one at each strength
+    # of the careful median. What would keep it is then read off a row rather
+    # than guessed.
+    from dataclasses import replace
+
+    from src.pricing import evaluate as price_one
+    variants = [("старый", replace(params, adaptive=False)),
+                ("новый, 1", replace(params, adaptive=True, careful=1.0)),
+                ("новый, ½", replace(params, adaptive=True, careful=0.5)),
+                ("новый, 0", replace(params, adaptive=True, careful=0.0))]
+    dropped = getattr(g, "plan_dropped", {}) or {}
+    scored = getattr(g, "plan_scored", {}) or {}
+    context = getattr(g, "plan_context", {}) or {}
+    cancels = []
+    for a in plan["actions"]:
+        if a["kind"] != "cancel":
+            continue
+        key = (a["item"], round(a["float_min"], 4), round(a["float_max"], 4))
+        b = dropped.get(key) or scored.get(key)
+        row = [a["item"], num(a["float_min"], 4), num(a["float_max"], 4),
+               num(a.get("was") if a.get("was") is not None else a["price"]),
+               num(a.get("ceiling")), a.get("reason") or ""]
+        if b is not None:
+            row += [num(b.ceiling), num(b.bid), num(b.top), pct(b.margin),
+                    num(b.market), num(b.market_plain), b.sample,
+                    num(b.window, 0)]
+        else:
+            row += [None] * 8
+        ctx = context.get(a["item"])
+        for _, vp in variants:
+            if ctx is None:
+                row += [None, None]
+                continue
+            v = price_one(key[1], key[2], ctx["sales"], ctx["orders"],
+                          ctx["span"], ctx["depth"], vp, own=ctx["own"],
+                          cache=ctx["cache"])
+            row += [num(v.ceiling), "проходит" if v.take else (v.reason or "нет")]
+        cancels.append(row)
     lim = plan["limits"]
     stamp = datetime.now(timezone.utc) + timedelta(hours=3)
     settings_rows = [
         ["выгружено (МСК)", stamp.strftime("%Y-%m-%d %H:%M")],
         ["расчёт цен", "новый" if params.adaptive else "старый"],
+        ["осторожность медианы, погрешностей", params.careful],
         ["окно истории, дн", params.window_days],
         ["минимальная выборка", params.min_sample],
         ["минимальная маржа, %", pct(params.min_margin)],
@@ -1649,6 +1722,16 @@ def api_analysis_plan_xlsx():
          ["действие", "предмет", "float от", "float до", "было $", "цена $",
           "потолок $", "штук", "ранг", "почему"],
          actions, [11, 44, 9, 9, 9, 9, 10, 6, 10, 60]),
+        ("Снимаемые",
+         ["предмет", "float от", "float до", "наша цена $",
+          "потолок при постановке $", "почему снимается",
+          "потолок сейчас $", "ставка сейчас $", "соперник $", "маржа %",
+          "цена выхода $", "медиана без поправки $", "продаж у верха",
+          "окно, дн"]
+         + [f"{n}: {c}" for n, _ in variants for c in ("потолок $", "итог")],
+         cancels,
+         [44, 9, 9, 10, 12, 50, 11, 11, 10, 8, 11, 12, 9, 7]
+         + [11, 40] * len(variants)),
         ("Настройки", ["параметр", "значение"], settings_rows, [34, 20]),
     ])
     name = (f"plan_{stamp.strftime('%Y-%m-%d_%H%M')}_"

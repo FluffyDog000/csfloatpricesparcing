@@ -226,8 +226,8 @@ def prepare(sales, params, span):
     return rows, replace(params, window_days=window), info
 
 
-def careful_median(prices) -> tuple[float | None, float | None]:
-    """(median less one standard error, plain median)."""
+def careful_median(prices, k: float = SE_K) -> tuple[float | None, float | None]:
+    """(median less `k` standard errors, plain median)."""
     values = [float(p) for p in prices if p is not None]
     if not values:
         return None, None
@@ -236,4 +236,4 @@ def careful_median(prices) -> tuple[float | None, float | None]:
         return med, med
     mad = st.median([abs(v - med) for v in values])
     se = MEDIAN_SE * MAD_TO_SIGMA * mad / math.sqrt(len(values))
-    return med - SE_K * se, med
+    return med - k * se, med
