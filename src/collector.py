@@ -2378,8 +2378,19 @@ class Collector:
 
     # -- API quota (x-ratelimit-*) -------------------------------------------
 
+    def flush_traffic(self) -> None:
+        """Write out what the client has counted since the last call."""
+        traffic = getattr(self.client, "traffic", None)
+        if traffic is None:
+            return
+        try:
+            self.db.add_traffic(traffic.drain())
+        except Exception as exc:  # noqa: BLE001 - a count is not the bot
+            log.debug("Could not store the traffic counts: %s", exc)
+
     def store_rate_state(self) -> None:
         """Persist the latest quota snapshot so the dashboard can show it."""
+        self.flush_traffic()
         key_pool = getattr(self.client, "key_pool", None)
         self.db.set_setting("key_proxy_state",
                             key_pool.to_json() if key_pool is not None else "[]")

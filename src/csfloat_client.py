@@ -70,6 +70,26 @@ WRITE_TRIES = 3
 MAIN_KEY_HOLD_MAX = 24 * 3600.0
 
 
+def _measured(resp, how) -> int:
+    """Bytes on the wire, or 0 when a response cannot say - counting must
+    never be what fails a request."""
+    import urllib3
+    try:
+        return int(how(resp) or 0)
+    except (urllib3.exceptions.HTTPError, OSError) as exc:
+        # The body broke off mid-read: the same network failure the request
+        # itself would have raised unstreamed, so it is handled as one.
+        raise requests.ConnectionError(str(exc)) from exc
+    except Exception:  # noqa: BLE001 - a stand-in response has no wire to read
+        return 0
+
+
+def _ring_kind(kind: str) -> str:
+    """A keyring kind as a traffic kind: the two the sweeps spend on, and
+    everything else on the analysis keys together."""
+    return kind if kind in ("book", "listings") else "ring"
+
+
 def account_kind(method: str, url: str) -> str:
     """Which of the main key's counters a request is counted against.
 
@@ -264,6 +284,9 @@ class CSFloatClient:
         # Wire size of the last successful response, so the traffic report
         # matches what a metered proxy bills for.
         self.last_response_bytes: int | None = None
+        from .traffic import Traffic
+        # Every response, by kind - see traffic.py. Written out by the collector.
+        self.traffic = Traffic()
         # Set when CSFloat complains about one account using too many IPs.
         self.account_ip_block_at: str | None = None
         self.session = requests.Session()
@@ -643,7 +666,10 @@ class CSFloatClient:
                     else self._with_key(headers, key))
             try:
                 resp = self.session.get(url, timeout=self.http.timeout_seconds,
-                                        proxies=route.proxies(), headers=sent)
+                                        proxies=route.proxies(), headers=sent,
+                                        stream=True)
+                self.traffic.add("account" if account else _ring_kind(kind_of(url)),
+                                 _measured(resp, absorb))
             except requests.RequestException as exc:
                 # Fault the route like a sales poll does, so a proxy that
                 # keeps dropping connections leaves rotation.
@@ -677,7 +703,9 @@ class CSFloatClient:
             try:
                 resp = self.session.get(url, timeout=self.http.timeout_seconds,
                                         proxies=route.proxies(),
-                                        headers=self._with_key(headers, key))
+                                        headers=self._with_key(headers, key),
+                                        stream=True)
+                self.traffic.add(_ring_kind(kind), _measured(resp, absorb))
             except requests.RequestException as exc:
                 self.pool.record_failure(route, exc)
                 self.keyring.note_failure(key.key, f"{type(exc).__name__}: {exc}")
@@ -716,6 +744,7 @@ class CSFloatClient:
                 resp = self.session.request(
                     method.upper(), url, json=body, headers=headers,
                     timeout=self.http.timeout_seconds, proxies=route.proxies())
+                self.traffic.add("account", _measured(resp, wire_bytes))
             except requests.RequestException as exc:
                 self.pool.record_failure(route, exc)
                 raise
@@ -955,6 +984,7 @@ class CSFloatClient:
                                         headers=self._sales_headers(),
                                         stream=True)
                 measured = absorb(resp)
+                self.traffic.add("history", measured)
             except requests.RequestException as exc:
                 self.pool.record_failure(route, exc)
                 attempt += 1

@@ -2855,7 +2855,18 @@ def _usage_forecast(db, reqs_per_min: float, day_iso: str,
     # What the schedule predicts vs what actually went out: they diverge after a
     # settings change, a restart, or a stretch of downtime.
     actual = stats_day.get("total", 0) if stats_day else 0
+    from src.traffic import KINDS, LABELS
+    try:
+        measured_kinds = db.traffic_since(day_iso[:13] + ":00:00+00:00"
+                                          if len(day_iso) >= 13 else day_iso)
+    except Exception:  # noqa: BLE001 - an older database, or a stand-in
+        measured_kinds = {}
+    by_kind = [{"kind": k, "label": LABELS[k],
+                "requests": measured_kinds.get(k, {}).get("requests", 0),
+                "mb": round(measured_kinds.get(k, {}).get("bytes", 0) / 1_048_576, 1)}
+               for k in KINDS]
     return {
+        "traffic_by_kind": by_kind,
         "requests_day_actual": actual,
         "traffic_day_actual_mb": round(sizes["total_bytes"] / 1_048_576, 1),
         "requests_per_day": round(per_day),

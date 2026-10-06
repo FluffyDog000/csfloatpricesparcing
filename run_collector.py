@@ -182,6 +182,7 @@ def run_forever(collector: Collector) -> None:
             # was approved against a book that is already minutes old.
             collector.apply_pending_actions()
 
+            collector.flush_traffic()
             # Old logs and snapshots out, hourly; the file compressed on request.
             try:
                 collector.maintain_db()

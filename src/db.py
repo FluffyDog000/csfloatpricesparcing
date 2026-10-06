@@ -190,6 +190,16 @@ CREATE TABLE IF NOT EXISTS poll_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_poll_item ON poll_log(item_id, id);
+
+-- Requests and bytes on the wire per hour and kind (see traffic.py): every
+-- response, not only the sales polls poll_log measures.
+CREATE TABLE IF NOT EXISTS traffic_log (
+    hour                TEXT    NOT NULL,
+    kind                TEXT    NOT NULL,
+    requests            INTEGER NOT NULL DEFAULT 0,
+    bytes               INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (hour, kind)
+);
 """
 
 
@@ -915,6 +925,9 @@ class Database:
             "our_orders": ("SELECT rowid FROM our_orders WHERE updated_at < ? "
                            "AND state NOT IN ('live', 'manual', 'planned')",
                            (ord_cut,)),
+            # Two rows an hour per kind: two months for the monthly bill.
+            "traffic_log": ("SELECT rowid FROM traffic_log WHERE hour < ?",
+                            (iso(60),)),
         }
         removed: dict[str, int] = {}
         for table, (select, args) in jobs.items():
@@ -937,6 +950,28 @@ class Database:
         conn.execute("DROP TABLE IF EXISTS temp.keep_depth")
         conn.commit()
         return removed
+
+    def add_traffic(self, rows) -> None:
+        """(hour, kind, requests, bytes) rows, added to what is stored."""
+        rows = list(rows)
+        if not rows:
+            return
+        self.conn.executemany(
+            "INSERT INTO traffic_log (hour, kind, requests, bytes) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(hour, kind) DO UPDATE SET "
+            "requests = requests + excluded.requests, bytes = bytes + excluded.bytes",
+            rows)
+        self.conn.commit()
+
+    def traffic_since(self, since_iso: str) -> dict[str, dict[str, int]]:
+        """{kind: {"requests", "bytes"}} for the hours from `since_iso` on."""
+        out: dict[str, dict[str, int]] = {}
+        for row in self.conn.execute(
+                "SELECT kind, SUM(requests) AS r, SUM(bytes) AS b FROM traffic_log "
+                "WHERE hour >= ? GROUP BY kind", (since_iso,)):
+            out[row["kind"]] = {"requests": int(row["r"] or 0),
+                                "bytes": int(row["b"] or 0)}
+        return out
 
     def vacuum(self) -> tuple[int, int]:
         """Give the room freed by deletes back to the disk. (before, after)

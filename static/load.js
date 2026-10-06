@@ -671,6 +671,29 @@ function usageRow(label, value, note) {
     <td>${note ? esc(note) : ""}</td></tr>`;
 }
 
+/** Every request the bot made in the last day, by kind - the polls above
+ *  are only the first of these rows. */
+function trafficRows(kinds) {
+  if (!kinds || !kinds.length) return "";
+  const any = kinds.some((k) => k.requests);
+  if (!any) {
+    return usageRow("все запросы по видам", "—",
+      "счёт идёт с обновления бота — цифры появятся в течение часа");
+  }
+  const fmt = (r, mb) => `${r.toLocaleString("ru-RU")} запр. · ${fmtMb(mb)}`;
+  let out = "";
+  let resR = 0, resMb = 0;
+  kinds.forEach((k) => {
+    if (k.kind !== "account") { resR += k.requests; resMb += k.mb; }
+    out += usageRow(`за сутки (факт): ${k.label}`, fmt(k.requests, k.mb),
+      k.kind === "account" ? "через прокси главного ключа"
+        : `в месяц ≈ ${fmtMb(k.mb * 30)}`);
+  });
+  out += usageRow("за сутки (факт): всё, кроме своего аккаунта", fmt(resR, resMb),
+    `в месяц ≈ ${fmtMb(resMb * 30)} — столько идёт через прокси сбора и ключей анализа`);
+  return out;
+}
+
 function renderUsage(d) {
   const body = document.getElementById("usage-body");
   if (!body) return;
@@ -704,7 +727,8 @@ function renderUsage(d) {
                : "оценка — реальных замеров пока нет") +
     usageRow("трафик в сутки (план)", fmtMb(d.traffic_day_mb), "") +
     usageRow("трафик в месяц (план)", fmtMb(d.traffic_month_mb),
-             "столько спишет прокси с тарификацией по трафику");
+             "столько спишет прокси с тарификацией по трафику")
+    + trafficRows(d.traffic_by_kind);
 
   const parts = [`${d.active_items} активных предм.`];
   if (d.routes_total && !d.routes_usable) {
