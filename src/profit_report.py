@@ -44,6 +44,58 @@ def settings(db) -> dict:
             "hold_sweep_hours": hours}
 
 
+def attach_forecast(db, deal: dict) -> None:
+    """What the bot expected a closed deal to sell for, and how far off it
+    was: the forecast in force when the order bought it (see forecast.py)."""
+    from .forecast import exit_gross
+    deal["forecast_exit"] = deal["forecast_error"] = None
+    fc = db.forecast_for(deal["market_hash_name"], deal["float_value"],
+                         deal["bought"], _iso(deal["bought_at"]))
+    if not fc:
+        return
+    data = fc.get("data") or {}
+    exit_ = fc.get("exit") or exit_gross(data)
+    if not exit_:
+        return
+    deal["forecast_exit"] = round(float(exit_), 2)
+    deal["forecast_error"] = round((deal["sold"] - exit_) / exit_ * 100.0, 1)
+    deal["forecast_sample"] = data.get("sample")
+    deal["forecast_from"] = data.get("priced_from")
+    deal["forecast_width"] = round(float(fc["float_max"]) - float(fc["float_min"]), 4)
+    deal["forecast_queue"] = data.get("queue")
+
+
+def accuracy(closed: list[dict]) -> dict:
+    """How the forecasts fared, overall and by what they rested on. Error is
+    (sold - expected) / expected: negative means sold for less than expected."""
+    import statistics as st
+
+    def block(rows):
+        errs = [r["forecast_error"] for r in rows]
+        if not errs:
+            return {"count": 0}
+        return {"count": len(errs),
+                "median": round(st.median(errs), 1),
+                "mean": round(sum(errs) / len(errs), 1),
+                "mean_abs": round(sum(abs(e) for e in errs) / len(errs), 1),
+                "below": round(sum(e < 0 for e in errs) / len(errs) * 100, 0)}
+
+    rows = [d for d in closed if d.get("forecast_error") is not None]
+    groups = [
+        ("все", rows),
+        ("до 15 продаж у верха", [r for r in rows if (r.get("forecast_sample") or 0) < 15]),
+        ("15–39 продаж", [r for r in rows if 15 <= (r.get("forecast_sample") or 0) < 40]),
+        ("40+ продаж", [r for r in rows if (r.get("forecast_sample") or 0) >= 40]),
+        ("цена от истории", [r for r in rows if r.get("forecast_from") == "история"]),
+        ("цена от очереди", [r for r in rows if r.get("forecast_from") == "очередь"]),
+        ("узкие полосы (до 0.02)", [r for r in rows if (r.get("forecast_width") or 1) <= 0.0201]),
+        ("широкие полосы", [r for r in rows if (r.get("forecast_width") or 0) > 0.0201]),
+    ]
+    return {"groups": [{"group": g, **block(rs)} for g, rs in groups],
+            "with_forecast": len(rows),
+            "closed": len(closed)}
+
+
 def _iso(when: str | None) -> str | None:
     """A trade's time in the form the forecasts are stamped with."""
     at = parse_iso(when) if when else None
@@ -82,6 +134,7 @@ def build(db, fee: float, days: float = 0.0) -> dict:
         d["by_bot"] = pf.by_bot({"market_hash_name": d["market_hash_name"],
                                  "float_value": d["float_value"],
                                  "price": d["bought"]}, events)
+        attach_forecast(db, d)
 
     holding = []
     # A purchase still in its trade is money already spent on a skin that is
@@ -128,6 +181,7 @@ def build(db, fee: float, days: float = 0.0) -> dict:
         "fee": fee,
         "days": days,
         "totals": pf.totals(closed),
+        "accuracy": accuracy(closed),
         "all_time": pf.totals(counted_closed),
         "closed": closed[:1000],
         "holding": holding,

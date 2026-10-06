@@ -2486,8 +2486,14 @@ def api_profit_export():
     closed = [[d["market_hash_name"], d["float_value"], d.get("paint_seed"),
                msk(d["bought_at"]), d["bought"], msk(d["sold_at"]), d["sold"],
                d["fee"], d["profit"], d["pct"], d["days"],
-               "да" if d.get("by_bot") else ""]
+               "да" if d.get("by_bot") else "",
+               d.get("forecast_exit"), d.get("forecast_error"),
+               d.get("forecast_sample"), d.get("forecast_from"),
+               d.get("forecast_width"), d.get("forecast_queue")]
               for d in data["closed"] if keep(d)]
+    accuracy = [[g["group"], g["count"], g.get("median"), g.get("mean"),
+                 g.get("mean_abs"), g.get("below")]
+                for g in data["accuracy"]["groups"]]
     holding = [[h["market_hash_name"], h["float_value"], h.get("paint_seed"),
                 msk(h["bought_at"]), h["bought"],
                 "ждёт обмена" if h["pending"] else "у нас", h["days"],
@@ -2524,8 +2530,13 @@ def api_profit_export():
         ("Закрытые сделки",
          ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
           "продано (МСК)", "цена продажи $", "комиссия $", "профит $", "%",
-          "дней", "ордер бота"],
-         closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10]),
+          "дней", "ордер бота", "прогноз $", "отклонение %", "продаж у верха",
+          "цена от", "ширина полосы", "лотов в очереди"],
+         closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10, 10, 12, 12, 10, 12, 12]),
+        ("Прогноз против факта",
+         ["группа", "сделок", "медиана откл. %", "среднее откл. %",
+          "средняя ошибка ±%", "продано дешевле прогноза, %"],
+         accuracy, [26, 8, 15, 15, 17, 24]),
         ("В наличии",
          ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
           "статус", "дней", "оценка $", "ожид. профит $", "%", "медиана $",

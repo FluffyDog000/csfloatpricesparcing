@@ -530,11 +530,41 @@ def test_the_earnings_download_as_an_excel_file():
     assert "profit_" in r.headers["Content-Disposition"]
     z = zipfile.ZipFile(io.BytesIO(r.data))
     closed = z.read("xl/worksheets/sheet1.xml").decode()
-    held = z.read("xl/worksheets/sheet2.xml").decode()
-    buys = z.read("xl/worksheets/sheet3.xml").decode()
+    accuracy = z.read("xl/worksheets/sheet2.xml").decode()
+    held = z.read("xl/worksheets/sheet3.xml").decode()
+    buys = z.read("xl/worksheets/sheet4.xml").decode()
+    assert "медиана откл. %" in accuracy
     assert "цена покупки $" in closed and "<v>100" in closed and "<v>110" in closed
     assert "<v>90" in held, "the unsold purchase is held"
     assert buys.count("<row ") == 3, "header and both purchases"
     only_bot = zipfile.ZipFile(io.BytesIO(
         c.get("/api/profit/export.xlsx?days=0&bot=1").data))
-    assert only_bot.read("xl/worksheets/sheet3.xml").decode().count("<row ") == 1
+    assert only_bot.read("xl/worksheets/sheet4.xml").decode().count("<row ") == 1
+
+
+def test_a_sale_is_set_against_what_the_bot_expected_when_it_bought():
+    from src.forecast import snapshot
+    from src.pricing import Band, Params
+    from src import profit_report
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    for t in parsed(trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+                    trade("2", "sell", 11000, at="2026-09-09T10:00:00Z")):
+        db.upsert_trade(t)
+    item = db.get_item_id(NAME) or db.add_item(NAME)
+    band = Band(float_min=0.15, float_max=0.16, market=120.0, exit_net=117.6,
+                sample=9, priced_from="история")
+    db.record_forecast(order_id=1, item_id=item, name=NAME, float_min=0.15,
+                       float_max=0.16, price=100.0, data=snapshot(band, Params(fee=0.02)))
+    db.conn.execute("UPDATE forecasts SET at = '2026-08-30T10:00:00+00:00'")
+    db.conn.commit()
+    out = profit_report.build(db, 0.02, 0)
+    deal = out["closed"][0]
+    assert deal["forecast_exit"] == 120.0
+    assert deal["forecast_error"] == round((110.0 - 120.0) / 120.0 * 100, 1)
+    groups = {g["group"]: g for g in out["accuracy"]["groups"]}
+    assert groups["все"]["count"] == 1 and groups["все"]["below"] == 100
+    assert groups["до 15 продаж у верха"]["count"] == 1
+    assert groups["40+ продаж"]["count"] == 0
+    db.close()

@@ -129,6 +129,20 @@
       : `Комиссия CSFloat при продаже — ${(d.fee * 100).toFixed(1)}%.`;
   }
 
+  function accuracyTable(a) {
+    const box = $("f-accuracy");
+    if (!box) return;
+    const rows = ((a && a.groups) || []).filter((g) => g.count);
+    table(box, ["группа", "сделок", "медиана откл.", "среднее", "в среднем ошибка", "дешевле ожидания"],
+      rows.map((g) => [
+        [g.group], [String(g.count), "mono"],
+        [pct(g.median), tone(g.median)], [pct(g.mean), tone(g.mean)],
+        [`±${g.mean_abs}%`, "muted"], [`${g.below}%`, "mono"],
+      ]),
+      "Пока нет проданных сделок с прогнозом: прогнозы записываются с этого "
+      + "обновления, первые появятся, когда купленное ботом продастся.");
+  }
+
   /** "3 → 1": lots under the median now, and left when ours unlocks. */
   function queueCell(x) {
     if (x.ahead === null || x.ahead === undefined) return "—";
@@ -242,13 +256,19 @@
     tiles(d, closed);
 
     table($("f-closed"),
-      ["предмет", "float", "паттерн", "купили", "продали", "комиссия", "профит", "%", "дней", ""],
+      ["предмет", "float", "паттерн", "купили", "продали", "прогноз", "комиссия", "профит", "%", "дней", ""],
       closed.map((x) => [
         named(x.market_hash_name, x.by_bot),
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
         [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
         [`${cash(x.sold)} · ${stamp(x.sold_at)}`],
+        x.forecast_exit === null || x.forecast_exit === undefined
+          ? ["—", "muted", "прогноза нет: куплено не ордером бота или до записи прогнозов"]
+          : [`${cash(x.forecast_exit)} · ${pct(x.forecast_error)}`, tone(x.forecast_error),
+            `ожидалось ${cash(x.forecast_exit)}, продано ${cash(x.sold)}`
+            + (x.forecast_sample ? ` · продаж у верха было ${x.forecast_sample}` : "")
+            + (x.forecast_from ? ` · цена от ${x.forecast_from === "очередь" ? "очереди" : "истории"}` : "")],
         [cash(x.fee), "muted"],
         [signed(x.profit), tone(x.profit)],
         [pct(x.pct), tone(x.profit)],
@@ -257,6 +277,8 @@
       ]),
       d.trades ? "За этот период закрытых сделок нет."
         : "Сделок ещё нет — нажми «Прочитать сделки».");
+
+    accuracyTable(d.accuracy);
 
     const holding = d.holding.filter((x) => matches(x.market_hash_name)
       && (!onlyBot() || x.by_bot));
