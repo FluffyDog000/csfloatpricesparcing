@@ -199,6 +199,9 @@ class Action:
     sent: dict[str, Any] | None = None
     # Items the order asks for. Sent on create and kept on every amend.
     quantity: int = 1
+    # What the band this action prices expects to sell for (forecast.snapshot),
+    # kept with the order once the action has gone through.
+    forecast: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -590,6 +593,12 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
             + (f" Количество {band.quantity}: столько придёт примерно за "
                f"срок ордера." if band.quantity > 1 else ""),
             quantity=band.quantity))
+
+    from .forecast import snapshot
+    for a in actions:
+        band = by_band.get((round(a.float_min, 4), round(a.float_max, 4)))
+        if band is not None and a.kind != CANCEL:
+            a.forecast = snapshot(band)
 
     order = {CANCEL: 0, RAISE: 1, LOWER: 1, PLACE: 2, KEEP: 3}
     actions.sort(key=lambda a: (order[a.kind], a.float_min))

@@ -191,6 +191,24 @@ CREATE TABLE IF NOT EXISTS poll_log (
 
 CREATE INDEX IF NOT EXISTS idx_poll_item ON poll_log(item_id, id);
 
+-- What the bot expected each order's purchase to sell for (see forecast.py),
+-- with a copy of what it rested on. Kept until long after the sale.
+CREATE TABLE IF NOT EXISTS forecasts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id            INTEGER,
+    item_id             INTEGER,
+    market_hash_name    TEXT    NOT NULL,
+    float_min           REAL    NOT NULL,
+    float_max           REAL    NOT NULL,
+    price               REAL    NOT NULL,   -- our bid when this was the forecast
+    exit                REAL,               -- expected sale price, before the fee
+    at                  TEXT    NOT NULL,
+    data                TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_forecasts_name ON forecasts(market_hash_name, at);
+CREATE INDEX IF NOT EXISTS idx_forecasts_order ON forecasts(order_id, id);
+
 -- Requests and bytes on the wire per hour and kind (see traffic.py): every
 -- response, not only the sales polls poll_log measures.
 CREATE TABLE IF NOT EXISTS traffic_log (
@@ -925,6 +943,8 @@ class Database:
             "our_orders": ("SELECT rowid FROM our_orders WHERE updated_at < ? "
                            "AND state NOT IN ('live', 'manual', 'planned')",
                            (ord_cut,)),
+            # Forecasts are compared with sales that come weeks later.
+            "forecasts": ("SELECT rowid FROM forecasts WHERE at < ?", (iso(180),)),
             # Two rows an hour per kind: two months for the monthly bill.
             "traffic_log": ("SELECT rowid FROM traffic_log WHERE hour < ?",
                             (iso(60),)),
@@ -950,6 +970,61 @@ class Database:
         conn.execute("DROP TABLE IF EXISTS temp.keep_depth")
         conn.commit()
         return removed
+
+    def record_forecast(self, *, order_id: int | None, item_id: int | None,
+                        name: str, float_min: float, float_max: float,
+                        price: float, data: dict) -> bool:
+        """Keep `data` as the forecast for this order at `price`, unless the
+        last one on file says the same thing (same price, exit within half a
+        percent, younger than six hours). Returns whether a row was written."""
+        from datetime import timedelta
+
+        from .forecast import EXIT_MOVE, REFRESH_HOURS, exit_gross
+        exit_ = exit_gross(data)
+        if order_id is not None:
+            last = self.conn.execute(
+                "SELECT price, exit, at FROM forecasts WHERE order_id = ? "
+                "ORDER BY id DESC LIMIT 1", (order_id,)).fetchone()
+            if last is not None:
+                try:
+                    age = datetime.now(timezone.utc) - datetime.fromisoformat(last["at"])
+                except (TypeError, ValueError):
+                    age = timedelta(days=1)
+                same_price = abs(float(last["price"]) - float(price)) < 0.005
+                old_exit = last["exit"]
+                same_exit = (old_exit is None and exit_ is None) or (
+                    old_exit is not None and exit_ is not None and old_exit > 0
+                    and abs(exit_ - old_exit) / old_exit <= EXIT_MOVE)
+                if same_price and same_exit and age < timedelta(hours=REFRESH_HOURS):
+                    return False
+        self.conn.execute(
+            "INSERT INTO forecasts (order_id, item_id, market_hash_name, float_min, "
+            "float_max, price, exit, at, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (order_id, item_id, name, float_min, float_max, price, exit_,
+             utcnow_iso(), json.dumps(data, ensure_ascii=False)))
+        self.conn.commit()
+        return True
+
+    def forecast_for(self, name: str, float_value: float | None, price: float | None,
+                     at: str | None = None) -> dict | None:
+        """The forecast in force when a purchase of `name` at `price`, float
+        `float_value`, was made: an order of ours on a range holding that float
+        and bidding that price, the latest written before the purchase (or,
+        when none is that early, the earliest after it)."""
+        if float_value is None or price is None or not name:
+            return None
+        rows = self.conn.execute(
+            "SELECT id, order_id, float_min, float_max, price, exit, at, data "
+            "FROM forecasts WHERE market_hash_name = ? AND float_min <= ? "
+            "AND float_max >= ? AND ABS(price - ?) < 0.011 ORDER BY at",
+            (name, float_value, float_value, price)).fetchall()
+        if not rows:
+            return None
+        before = [r for r in rows if not at or r["at"] <= at]
+        row = before[-1] if before else rows[0]
+        out = dict(row)
+        out["data"] = json.loads(out["data"]) if out.get("data") else {}
+        return out
 
     def add_traffic(self, rows) -> None:
         """(hour, kind, requests, bytes) rows, added to what is stored."""

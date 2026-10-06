@@ -826,12 +826,15 @@ class Collector:
                             self.db.set_our_order_state(int(row["id"]),
                                                         "cancelled", out.detail)
                 else:
-                    self.db.upsert_our_order(
+                    order_id = self.db.upsert_our_order(
                         item_id, action.float_min, action.float_max,
                         action.price, action.ceiling, state="live",
                         remote_id=out.remote_id, note=out.detail,
                         quantity=action.quantity)
                     self._follow_in_book(item_id, action)
+                    self._keep_forecast(order_id, item_id, action.item,
+                                        action.float_min, action.float_max,
+                                        action.price, action.forecast)
             placing["finished_at"] = utcnow_iso()
             note(None)
         finally:
@@ -1416,6 +1419,26 @@ class Collector:
         except Exception as exc:  # noqa: BLE001 - the sync matters more
             log.warning("Could not write the order journal: %s", exc)
 
+    def _keep_forecast(self, order_id, item_id, name, float_min, float_max,
+                       price, data, params=None) -> None:
+        """Write down what an order expects to sell for (see forecast.py).
+        Never what fails the pass: a forecast is for later, the order is now."""
+        if not data or not name:
+            return
+        try:
+            if params is None:
+                from .settings import params as read_params
+                params = read_params(self.db)
+            if "settings" not in data:
+                from .forecast import settings_of
+                data = dict(data, settings=settings_of(params))
+            self.db.record_forecast(order_id=order_id, item_id=item_id, name=name,
+                                    float_min=float(float_min),
+                                    float_max=float(float_max),
+                                    price=float(price), data=data)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Could not keep the forecast for '%s': %s", name, exc)
+
     def maintain_db(self, now: float | None = None) -> dict | None:
         """Clear old logs and snapshots once an hour, or at once when asked
         from the settings page; compress the file when asked. Results are kept
@@ -1469,6 +1492,7 @@ class Collector:
         import json as _json
 
         from .executor import CANCEL, LOWER, RAISE, reconcile
+        from .forecast import snapshot
         from .holdings import locked_tops, strip_own
         from .ladder import LOCK_DAYS
         from .placement import PLACEMENT_KEY, load
@@ -1542,6 +1566,11 @@ class Collector:
                     sales, book, span, depth, params, own=own)
                 wanted.append(band)
                 ranks[int(row["id"])] = _safe_rank(band)
+                # What this order expects its purchase to sell for, at the
+                # price it stands at now - kept for when it fills.
+                self._keep_forecast(int(row["id"]), item_id, name, row["float_min"],
+                                    row["float_max"], float(row["price"]),
+                                    snapshot(band), params)
 
             decided = reconcile(name, wanted, rows, book, limits)
             for a in decided:
@@ -1636,6 +1665,9 @@ class Collector:
                             action.price, action.ceiling, state="live",
                             remote_id=row.get("remote_id"), note=out.detail)
                         self._follow_in_book(item_id, action)
+                        self._keep_forecast(int(row["id"]), item_id, name,
+                                            action.float_min, action.float_max,
+                                            action.price, action.forecast, params)
             finally:
                 self.client.pool.unpin()
 

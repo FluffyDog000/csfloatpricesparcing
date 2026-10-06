@@ -122,6 +122,10 @@ class Rung:
     # alone cannot be checked against anything: "21 lots" is a claim, and the
     # prices are the evidence for it.
     asks: list[float] = field(default_factory=list)
+    # The same lots with their floats, [price, float], cheapest first: what a
+    # forecast keeps, so the queue it was priced from can be looked at after
+    # the listings themselves have been cleared from the database.
+    queue_lots: list = field(default_factory=list)
     lots_cleared: float = 0.0        # ...of which the lock disposes
     fills: int = 0                   # past sales our bid would have taken
     lam: float = 0.0                 # fills per day
@@ -574,9 +578,11 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         # The median is the reference rather than the exit price, which is not
         # known yet and is derived from this count. It is also the safe end of
         # the two: pricing under it only shortens the queue further.
-        ours = [p for p, f in pairs
+        kept = [(p, f) for p, f in pairs
                 if (f is None or f <= top)
                 and (rung.market is None or p <= rung.market)]
+        ours = [p for p, _ in kept]
+        rung.queue_lots = [[p, f] for p, f in sorted(kept, key=lambda x: x[0])]
         rung.lots = len(ours)
     else:
         # Partial: older rows kept only the cheapest ask. Dropping the count
@@ -584,6 +590,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
         # direction and the wrong one - so the recorded count stands and the
         # prices we do have are used as they were before.
         ours = [p for p, _ in pairs]
+        rung.queue_lots = [[p, f] for p, f in sorted(pairs, key=lambda x: x[0])]
         rung.lots = lots
     rung.asks = sorted(ours)
     # A band read to the endpoint's page limit holds only its cheapest fifty,

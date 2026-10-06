@@ -191,12 +191,21 @@ class Band:
     window: float | None = None
     shift: float | None = None
 
+    # The queue's lots with their floats, [price, float] - see ladder.Rung.
+    queue_lots: list = field(default_factory=list)
+    exit_net: float | None = None
+
     # How many items one order asks for. One create out of the day's 200
     # buys up to this many; set from the fill rate (executor.size_orders).
     quantity: int = 1
 
     def as_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__)
+        # The lots behind a forecast stay out of the page's payload: sixty
+        # pairs a band across every band of every item is megabytes for a
+        # table that shows a count.
+        out = dict(self.__dict__)
+        out.pop("queue_lots", None)
+        return out
 
 
 def _order_span(order: dict, span: tuple[float, float] | None) -> tuple[float, float]:
@@ -339,4 +348,6 @@ def _as_band(rung) -> Band:
         market_then=rung.market_then,
         window=rung.window,
         shift=rung.shift,
+        queue_lots=list(rung.queue_lots)[:60],
+        exit_net=rung.exit_net,
     )
