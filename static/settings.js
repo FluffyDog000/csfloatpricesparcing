@@ -114,6 +114,7 @@ const TABLE_NAMES = {
   sales: "история продаж", poll_log: "журнал опросов", order_events: "журнал ордеров",
   buy_orders: "стаканы", listing_depth: "листинги", trades: "сделки аккаунта",
   our_orders: "наши ордера", items: "предметы", book_history: "история стаканов",
+  forecasts: "прогнозы покупок", traffic_log: "учёт трафика",
 };
 
 function storageStamp(iso) {

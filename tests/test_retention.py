@@ -114,3 +114,25 @@ def test_the_settings_page_sets_the_days_and_asks_for_housekeeping():
                             "vacuum_pending": False}
     body = c.get("/api/settings/storage").get_json()
     assert body["keep_days"] == 30.0 and body["prune_pending"]
+
+
+def test_forecasts_of_orders_that_never_bought_go_after_a_month():
+    from src.forecast import snapshot
+    from src.pricing import Band
+    db = _db()
+    item = db.add_item("A")
+    data = snapshot(Band(float_min=0.15, float_max=0.17, market=50.0))
+    for i, price in enumerate((40.0, 41.0, 42.0)):
+        db.record_forecast(order_id=i, item_id=item, name="A", float_min=0.15,
+                           float_max=0.17, price=price, data=data)
+    db.conn.execute("UPDATE forecasts SET at = ? WHERE price = 40.0", (_ago(45),))
+    db.conn.execute("UPDATE forecasts SET at = ? WHERE price = 41.0", (_ago(45),))
+    db.conn.execute("UPDATE forecasts SET at = ? WHERE price = 42.0", (_ago(10),))
+    # A purchase at 41: that forecast is evidence, kept.
+    db.conn.execute("INSERT INTO trades (trade_id, role, state, market_hash_name, "
+                    "float_value, price, updated_at) VALUES ('t', 'buy', 'verified', "
+                    "'A', 0.16, 41.0, ?)", (_ago(40),))
+    db.conn.commit()
+    assert db.prune_history(2)["forecasts"] == 1
+    assert sorted(r[0] for r in db.conn.execute("SELECT price FROM forecasts")) == [41.0, 42.0]
+    db.close()

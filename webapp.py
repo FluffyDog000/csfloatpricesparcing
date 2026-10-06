@@ -3394,7 +3394,8 @@ def _digest_settings(db) -> dict:
 
 # Tables worth a line on the storage panel, biggest first in practice.
 STORAGE_TABLES = ("sales", "poll_log", "order_events", "buy_orders",
-                  "listing_depth", "book_history", "trades", "our_orders", "items")
+                  "listing_depth", "book_history", "trades", "our_orders", "items",
+                  "forecasts", "traffic_log")
 
 
 @app.route("/api/settings/storage")

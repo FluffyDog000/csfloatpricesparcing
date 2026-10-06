@@ -943,8 +943,15 @@ class Database:
             "our_orders": ("SELECT rowid FROM our_orders WHERE updated_at < ? "
                            "AND state NOT IN ('live', 'manual', 'planned')",
                            (ord_cut,)),
-            # Forecasts are compared with sales that come weeks later.
-            "forecasts": ("SELECT rowid FROM forecasts WHERE at < ?", (iso(180),)),
+            # Forecasts are compared with sales that come weeks later - but
+            # only the ones an order actually bought on. An order that never
+            # filled leaves forecasts nobody will read: a month, then out.
+            "forecasts": (
+                "SELECT rowid FROM forecasts f WHERE f.at < ? OR (f.at < ? AND NOT EXISTS ("
+                "SELECT 1 FROM trades t WHERE t.role = 'buy' "
+                "AND t.market_hash_name = f.market_hash_name "
+                "AND t.float_value BETWEEN f.float_min AND f.float_max "
+                "AND ABS(t.price - f.price) < 0.011))", (iso(180), iso(30))),
             # Two rows an hour per kind: two months for the monthly bill.
             "traffic_log": ("SELECT rowid FROM traffic_log WHERE hour < ?",
                             (iso(60),)),
