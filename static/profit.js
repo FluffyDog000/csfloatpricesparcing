@@ -129,6 +129,24 @@
       : `Комиссия CSFloat при продаже — ${(d.fee * 100).toFixed(1)}%.`;
   }
 
+  /** The item's name as a link to its sales history, with the order mark
+   *  after it - the cell `table` expects. */
+  function named(name, byBot) {
+    const wrap = node("span");
+    if (name) {
+      const a = document.createElement("a");
+      a.href = "/item/" + encodeURIComponent(name);
+      a.className = "item-link";
+      a.textContent = name;
+      a.title = "история продаж";
+      wrap.appendChild(a);
+    } else {
+      wrap.appendChild(node("span", "", "?"));
+    }
+    if (byBot) wrap.appendChild(node("span", "muted", "  · ордер бота"));
+    return ["", "", "", wrap];
+  }
+
   /** A × that takes trades out of the count; put back from the list below. */
   function dropButton(ids, what) {
     const b = node("button", "att-hide", "×");
@@ -166,7 +184,7 @@
         };
         return [
           [x.role === "buy" ? "покупка" : x.role === "sell" ? "продажа" : "?", "muted"],
-          [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
+          named(x.market_hash_name), [flt(x.float_value), "mono"],
           [cash(x.price)], [when(x.at), "mono"], ["", "", "", b],
         ];
       }), "");
@@ -199,7 +217,7 @@
     table($("f-closed"),
       ["предмет", "float", "паттерн", "купили", "продали", "комиссия", "профит", "%", "дней", ""],
       closed.map((x) => [
-        [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
+        named(x.market_hash_name, x.by_bot),
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
         [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
@@ -228,7 +246,7 @@
     table($("f-holding"),
       ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", "%", ""],
       holding.map((x) => [
-        [x.market_hash_name + (x.by_bot ? "  · ордер бота" : "")],
+        named(x.market_hash_name, x.by_bot),
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
         [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
@@ -247,7 +265,7 @@
     $("f-unmatched-box").hidden = !unmatched.length;
     table($("f-unmatched"), ["предмет", "float", "паттерн", "продали", "когда", ""],
       unmatched.map((x) => [
-        [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
+        named(x.market_hash_name), [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"], [cash(x.price)],
         [when(x.done_at || x.created_at), "mono"],
         dropButton([x.trade_id], "продажа без покупки"),
@@ -259,7 +277,7 @@
     table($("f-pending"), ["", "предмет", "float", "цена", "состояние", "создана"],
       pending.map((x) => [
         [x.role === "buy" ? "покупка" : x.role === "sell" ? "продажа" : "?"],
-        [x.market_hash_name || "?"], [flt(x.float_value), "mono"],
+        named(x.market_hash_name), [flt(x.float_value), "mono"],
         [cash(x.price)], [STATES[x.state] || x.state || "—", "muted"],
         [when(x.created_at), "mono"],
       ]), "");

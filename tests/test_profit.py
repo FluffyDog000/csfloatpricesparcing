@@ -282,6 +282,9 @@ def test_the_earnings_script_renders_what_the_endpoint_returns():
     assert "+$7.80" in text, text
     assert "AK-47 | Redline (FT)" in text, "a sale with no purchase is listed apart"
     assert "Сделки ещё не читались" in text
+    links = got["profitLinks"]
+    assert "/item/AK-47%20%7C%20Redline%20(FT)" in links, links
+    assert all(h.startswith("/item/") for h in links) and len(links) >= 2
 
 
 def test_a_dead_proxy_is_not_reported_as_a_missing_trades_path():

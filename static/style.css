@@ -600,3 +600,7 @@ a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
 .neg { color: var(--bad); }
 .journal-tile b.pos { color: var(--good); }
 .journal-tile b.neg { color: var(--bad); }
+
+/* Item names on the profit page lead to the item's sales history. */
+a.item-link { color: inherit; text-decoration: underline; text-decoration-color: var(--accent, #58a6ff); text-underline-offset: 3px; }
+a.item-link:hover, a.item-link:focus-visible { color: var(--accent, #58a6ff); }

@@ -124,6 +124,16 @@ function deepText(node) {
     settingsNote: deepText(nodes["f-settings-note"]),
     excludedTitle: deepText(nodes["f-excluded-title"]),
     excludedText: deepText(nodes["f-excluded"]),
+    profitLinks: ["f-closed", "f-holding", "f-unmatched"].flatMap((id) => {
+      const out = [];
+      const walk = (n) => {
+        if (!n) return;
+        if (n.tag === "a" && n.href) out.push(n.href);
+        (n.children || []).forEach(walk);
+      };
+      walk(nodes[id]);
+      return out;
+    }),
     profit: ["f-tiles", "f-alltime", "f-closed", "f-holding-note", "f-holding",
              "f-unmatched", "f-sync-state"]
       .map((id) => deepText(nodes[id])).join(" | "),
