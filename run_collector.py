@@ -183,6 +183,10 @@ def run_forever(collector: Collector) -> None:
             collector.apply_pending_actions()
 
             collector.flush_traffic()
+            try:
+                collector.check_holding_alerts()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Holding check failed: %s", exc)
             # Old logs and snapshots out, hourly; the file compressed on request.
             try:
                 collector.maintain_db()

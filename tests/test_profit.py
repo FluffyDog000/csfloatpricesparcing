@@ -411,7 +411,7 @@ def test_bad_settings_are_refused_with_a_reason():
     r = c.post("/api/profit/settings", json={"estimate_days": 0})
     assert r.status_code == 400
     body = c.get("/api/profit").get_json()
-    assert body["settings"] == {"since": "", "estimate_days": 30}
+    assert body["settings"] == {"since": "", "estimate_days": 30, "hold_sweep_hours": 4.0}
     assert c.post("/api/profit/settings", json={"since": ""}).status_code == 200
 
 

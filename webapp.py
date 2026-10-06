@@ -1639,6 +1639,39 @@ def _sweep_finished_after(db, epoch: float) -> bool:
             and not db.pending_order_requests())
 
 
+HOLD_SWEEP_LAST_KEY = "profit_hold_sweep_last"
+
+
+def hold_sweep_once(db, now: float | None = None) -> dict:
+    """Send for a sweep the items we hold skins of, whose listings are older
+    than the configured hours: the earnings tab values each by the queue it
+    will join, and that queue is in the listings."""
+    import time as _time
+
+    from src import profit as pf
+    from src import profit_report
+    from src.pacing import parse_iso
+
+    now = _time.time() if now is None else now
+    hours = profit_report.settings(db)["hold_sweep_hours"]
+    if hours <= 0:
+        return {"skipped": "выключено"}
+    book = pf.pair(db.all_trades(), _analysis_params(db).fee)
+    names = {t.get("market_hash_name") for t in book.holding}
+    names |= {t.get("market_hash_name") for t in book.pending if t.get("role") == pf.BUY}
+    queued = []
+    for name in sorted(n for n in names if n):
+        item_id = db.get_item_id(name)
+        if item_id is None:
+            continue
+        swept = parse_iso(db.book_swept_at(item_id))
+        if swept is not None and now - swept.timestamp() < hours * 3600 * 0.9:
+            continue
+        if db.request_orders(name):
+            queued.append(name)
+    return {"queued": len(queued), "held": len(names)}
+
+
 def automation_tick(db, now: float | None = None) -> dict:
     """One check of both background jobs. Auto-sweep on its own interval;
     auto-fill every half hour, and also right after an auto-sweep finishes -
@@ -1647,6 +1680,11 @@ def automation_tick(db, now: float | None = None) -> dict:
 
     now = _time.time() if now is None else now
     did: dict = {}
+    # What we hold: its listings, every half hour checked against the hours set.
+    last_hold = float(db.get_setting(HOLD_SWEEP_LAST_KEY) or 0)
+    if now - last_hold >= 1800:
+        db.set_setting(HOLD_SWEEP_LAST_KEY, str(now))
+        did["hold"] = hold_sweep_once(db, now)
     sweep = _auto_sweep_settings(db)
     if sweep["auto_sweep"]:
         last = float(db.get_setting(AUTO_SWEEP_LAST_KEY) or 0)
@@ -2453,8 +2491,11 @@ def api_profit_export():
     holding = [[h["market_hash_name"], h["float_value"], h.get("paint_seed"),
                 msk(h["bought_at"]), h["bought"],
                 "ждёт обмена" if h["pending"] else "у нас", h["days"],
-                h["estimate"], h["est_profit"], h["est_pct"], h["basis"],
-                "да" if h.get("by_bot") else ""]
+                h.get("estimate"), h.get("est_profit"), h.get("est_pct"),
+                h.get("median"), h.get("queue_price"), h.get("ahead"),
+                h.get("cleared"), h.get("own_ahead"), h.get("unlock_days"),
+                h.get("t_sell"), h.get("forecast_exit"), h.get("basis"),
+                h.get("queue_note"), "да" if h.get("by_bot") else ""]
                for h in data["holding"] if keep(h)]
 
     conf = profit_report.settings(db)
@@ -2487,9 +2528,12 @@ def api_profit_export():
          closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10]),
         ("В наличии",
          ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
-          "статус", "дней", "оценка $", "ожид. профит $", "%", "как оценено",
-          "ордер бота"],
-         holding, [44, 12, 8, 17, 12, 13, 7, 10, 13, 7, 40, 10]),
+          "статус", "дней", "оценка $", "ожид. профит $", "%", "медиана $",
+          "по очереди $", "лотов впереди", "уйдёт до разблок.", "свои впереди",
+          "до разблокировки, дн", "продажа, дн", "прогноз при покупке $",
+          "медиана — как", "очередь — как", "ордер бота"],
+         holding, [44, 12, 8, 17, 12, 13, 7, 10, 13, 7, 10, 11, 9, 11, 9, 11,
+                   9, 13, 40, 50, 10]),
         ("Все покупки",
          ["дата (МСК)", "предмет", "float", "паттерн", "цена $", "состояние",
           "ордер бота", "учёт", "id сделки"],
@@ -2508,6 +2552,7 @@ def api_profit_export():
             ["в наличии, шт", len(holding)],
             ["в наличии куплено на $", round(sum(r[4] for r in holding), 2)],
             ["ожидаемый профит $", round(sum(r[8] or 0 for r in holding), 2)],
+            ["очередь расходится за, дней", _analysis_params(db).queue_days],
             ["покупок всего", len(buys)],
         ], [26, 18]),
     ])
@@ -2550,8 +2595,19 @@ def api_profit_settings():
             errors.append(f"срок оценки — целое от {lo} до {hi} дней")
         else:
             db.set_setting(profit_report.DAYS_KEY, str(days))
+    if "hold_sweep_hours" in data:
+        lo, hi = profit_report.HOLD_SWEEP_BOUNDS
+        try:
+            hours = float(str(data["hold_sweep_hours"]).replace(",", "."))
+        except (TypeError, ValueError):
+            hours = None
+        if hours is None or not lo <= hours <= hi:
+            errors.append(f"обновление листингов — от {lo} до {hi} ч")
+        else:
+            db.set_setting(profit_report.HOLD_SWEEP_KEY, str(hours))
     conf = _profit_settings(db)
     return jsonify({"since": conf["since"], "estimate_days": conf["estimate_days"],
+                    "hold_sweep_hours": conf["hold_sweep_hours"],
                     "errors": errors, "error": "; ".join(errors)}), \
         (400 if errors else 200)
 

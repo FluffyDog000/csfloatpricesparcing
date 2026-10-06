@@ -129,6 +129,29 @@
       : `Комиссия CSFloat при продаже — ${(d.fee * 100).toFixed(1)}%.`;
   }
 
+  /** "3 → 1": lots under the median now, and left when ours unlocks. */
+  function queueCell(x) {
+    if (x.ahead === null || x.ahead === undefined) return "—";
+    const left = Math.max(x.ahead - Math.floor(x.cleared || 0), 0);
+    return `${x.ahead} → ${left}` + (x.own_ahead ? ` +${x.own_ahead} своих` : "");
+  }
+
+  /** When and for how much: days to unlock, days on sale, advised price. */
+  function sellCell(x) {
+    const parts = [];
+    if (x.unlock_days) parts.push(`через ${x.unlock_days} дн`);
+    if (x.t_sell !== null && x.t_sell !== undefined) parts.push(`≈${x.t_sell} дн на продаже`);
+    if (x.advice !== null && x.advice !== undefined) parts.push(`за ${cash(x.advice)}`);
+    return parts.join(" · ") || "—";
+  }
+
+  function ago(iso) {
+    const t = Date.parse(iso || "");
+    if (isNaN(t)) return "";
+    const h = (Date.now() - t) / 3600000;
+    return h < 1 ? `${Math.round(h * 60)} мин назад` : `${Math.round(h)} ч назад`;
+  }
+
   /** The item's name as a link to its sales history, with the order mark
    *  after it - the cell `table` expects. */
   function named(name, byBot) {
@@ -196,6 +219,10 @@
     // Not while it is being typed into: the page reloads every five minutes.
     if (since && document.activeElement !== since) since.value = s.since || "";
     if (days && document.activeElement !== days) days.value = s.estimate_days || 30;
+    const hold = $("f-hold-hours");
+    if (hold && document.activeElement !== hold) {
+      hold.value = s.hold_sweep_hours === undefined ? 4 : s.hold_sweep_hours;
+    }
     const note = $("f-settings-note");
     if (note) {
       const [y, m, dd] = String(s.since || "").split("-");
@@ -239,12 +266,15 @@
         + `после комиссии это ${signed(h.est_profit)}`
         + (h.est_pct !== null && h.est_pct !== undefined ? ` (${pct(h.est_pct)})` : "")
         + (h.unvalued ? ` — без ${h.unvalued} скин(ов), которые не оценить` : "")
-        + ". Оценка, а не сделка: цена может уйти."
+        + ". Оценка учитывает очередь: лоты дешевле медианы с float не хуже твоего, "
+        + "сколько их уйдёт до разблокировки и твои же скины той же сотой впереди. "
+        + "Оценка, а не сделка: цена может уйти."
         + (h.pending ? ` ${h.pending} из них ещё ждут обмена — если продавец `
           + "не отдаст скин, сделка отменится и деньги вернутся." : "")
       : "";
     table($("f-holding"),
-      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "ожид. профит", "%", ""],
+      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "очередь",
+       "продажа", "ожид. профит", "%", ""],
       holding.map((x) => [
         named(x.market_hash_name, x.by_bot),
         [flt(x.float_value), "mono"],
@@ -253,8 +283,16 @@
         [x.pending ? "ждёт обмена" : (x.days === null ? "—" : x.days + " дн"),
           x.pending ? "warn-text" : "mono",
           x.pending ? `сделка ещё не завершена (${STATES[x.state] || x.state || "—"})` : ""],
-        [cash(x.estimate), "", x.tracked ? x.basis
+        [cash(x.estimate), "", x.tracked
+          ? `${x.basis}` + (x.median !== null && x.median !== undefined && x.estimate !== x.median
+            ? ` · медиана ${cash(x.median)}, но очередь даёт меньше` : "")
+            + (x.forecast_exit ? ` · при покупке бот ждал ${cash(x.forecast_exit)}` : "")
           : "предмет не отслеживается — добавь его, чтобы была история продаж"],
+        [queueCell(x), "muted", (x.queue_note || "")
+          + (x.book_at ? ` · листинги ${ago(x.book_at)}` : "")],
+        [sellCell(x), "muted",
+          "совет — выставить за эту цену, когда скин разблокируется: окажешься "
+          + "перед оставшейся очередью"],
         [signed(x.est_profit), tone(x.est_profit)],
         [pct(x.est_pct), tone(x.est_profit)],
         dropButton([x.trade_id], "например, оставил себе или продал не на CSFloat"),
@@ -355,6 +393,7 @@
         await postJSON("/api/profit/settings", {
           since: $("f-since").value || "",
           estimate_days: $("f-est-days").value,
+          hold_sweep_hours: $("f-hold-hours") ? $("f-hold-hours").value : 4,
         }, token());
         $("f-since").blur();
         $("f-est-days").blur();

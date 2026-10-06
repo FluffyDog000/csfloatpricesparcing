@@ -133,3 +133,25 @@ def test_sweep_progress_is_written_as_it_goes():
     state = json.loads(db.get_setting("sweep_state"))
     assert state["done"] == 2 and state["current"] == [] and state["finished_at"]
     db.close()
+
+
+def test_held_items_have_their_listings_read_every_few_hours():
+    from tests.test_profit import parsed, trade
+    c, name = _stocked()
+    webapp, _ = _db()
+    with webapp.app.app_context():
+        db = webapp.get_db()
+        for t in parsed(trade("1", "buy", 10000, name=name, at="2026-10-01T10:00:00Z")):
+            db.upsert_trade(t)
+        item_id = db.get_item_id(name)
+        db.conn.execute("UPDATE items SET orders_swept_at = ? WHERE id = ?",
+                        (_iso(-300), item_id))
+        db.conn.commit()
+        assert webapp.hold_sweep_once(db) == {"queued": 1, "held": 1}
+        assert [r["market_hash_name"] for r in db.pending_order_requests()] == [name]
+        db.conn.execute("UPDATE items SET orders_requested_at = NULL, "
+                        "orders_swept_at = ? WHERE id = ?", (_iso(-30), item_id))
+        db.conn.commit()
+        assert webapp.hold_sweep_once(db)["queued"] == 0, "read half an hour ago"
+        db.set_setting("profit_hold_sweep_hours", "0")
+        assert webapp.hold_sweep_once(db) == {"skipped": "выключено"}

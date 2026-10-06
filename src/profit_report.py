@@ -15,6 +15,10 @@ SINCE_KEY = "profit_since"
 DAYS_KEY = "profit_estimate_days"
 EXCLUDED_KEY = "profit_excluded"
 DAYS_BOUNDS = (1, 180)
+# How often the listings of what is held are read again, hours; 0 = never.
+HOLD_SWEEP_KEY = "profit_hold_sweep_hours"
+HOLD_SWEEP_BOUNDS = (0, 48)
+HOLD_SWEEP_DEFAULT = 4
 
 
 def settings(db) -> dict:
@@ -31,7 +35,19 @@ def settings(db) -> dict:
             db.get_setting(EXCLUDED_KEY) or "[]")}
     except ValueError:
         excluded = set()
-    return {"since": since, "estimate_days": days, "excluded": excluded}
+    try:
+        hours = float(db.get_setting(HOLD_SWEEP_KEY) or HOLD_SWEEP_DEFAULT)
+    except (TypeError, ValueError):
+        hours = HOLD_SWEEP_DEFAULT
+    hours = min(max(hours, HOLD_SWEEP_BOUNDS[0]), HOLD_SWEEP_BOUNDS[1])
+    return {"since": since, "estimate_days": days, "excluded": excluded,
+            "hold_sweep_hours": hours}
+
+
+def _iso(when: str | None) -> str | None:
+    """A trade's time in the form the forecasts are stamped with."""
+    at = parse_iso(when) if when else None
+    return at.replace(microsecond=0).isoformat() if at else None
 
 
 def build(db, fee: float, days: float = 0.0) -> dict:
@@ -67,9 +83,7 @@ def build(db, fee: float, days: float = 0.0) -> dict:
                                  "float_value": d["float_value"],
                                  "price": d["bought"]}, events)
 
-    sales_cache: dict[str, list] = {}
     holding = []
-    cutoff = pf.since_iso(conf["estimate_days"])
     # A purchase still in its trade is money already spent on a skin that is
     # on its way: it belongs with what is held, marked, rather than at the
     # foot of the page. Every fill of a new bot spends its first week there.
@@ -78,35 +92,31 @@ def build(db, fee: float, days: float = 0.0) -> dict:
     for t in list(book.holding) + coming:
         if not counted(t.get("done_at") or t.get("created_at")):
             continue
-        name = t["market_hash_name"] or ""
-        if name not in sales_cache:
-            item_id = db.get_item_id(name) if name else None
-            sales_cache[name] = (db.query_sales(int(item_id), since_iso=cutoff)
-                                 if item_id is not None else [])
-        est, basis = pf.estimate(sales_cache[name], t["float_value"])
-        if est is not None:
-            basis += f" за {conf['estimate_days']} дн"
-        bought = float(t["price"] or 0)
         bought_at = t.get("done_at") or t.get("created_at")
         when = parse_iso(bought_at)
         holding.append({
-            "market_hash_name": name, "float_value": t["float_value"],
-            "paint_seed": t["paint_seed"], "bought": bought,
+            "market_hash_name": t["market_hash_name"] or "",
+            "float_value": t["float_value"],
+            "paint_seed": t["paint_seed"], "bought": float(t["price"] or 0),
             "bought_at": bought_at,
             "days": (round((datetime.now(timezone.utc) - when).total_seconds()
                            / 86400.0, 1) if when else None),
-            "estimate": round(est, 2) if est is not None else None,
-            "basis": basis,
-            "est_profit": (round(est * (1 - fee) - bought, 2)
-                           if est is not None else None),
-            "est_pct": (round((est * (1 - fee) - bought) / bought * 100.0, 1)
-                        if est is not None and bought else None),
             "by_bot": pf.by_bot(t, events),
-            "tracked": bool(sales_cache[name]),
             "trade_id": t["trade_id"],
             "pending": t["trade_id"] in coming_ids,
             "state": t.get("state"),
         })
+    # Valued by the queue each will join, not the median alone (holding_value).
+    from .holding_value import value_all
+    from .settings import params as read_params
+    value_all(db, holding, fee, float(conf["estimate_days"]),
+              float(read_params(db).queue_days))
+    for h in holding:
+        if h.get("median") is not None:
+            h["basis"] = f"{h['basis']} за {conf['estimate_days']} дн"
+        fc = db.forecast_for(h["market_hash_name"], h["float_value"], h["bought"],
+                             _iso(h["bought_at"])) if h.get("by_bot") else None
+        h["forecast_exit"] = fc["exit"] if fc else None
 
     # Newest first, whichever list a purchase came from: running trades were
     # appended after the finished ones and read upside down.
@@ -137,7 +147,8 @@ def build(db, fee: float, days: float = 0.0) -> dict:
         "pending": [dict(t) for t in book.pending
                     if t["trade_id"] not in coming_ids],
         "trades": len(everything),
-        "settings": {"since": start, "estimate_days": conf["estimate_days"]},
+        "settings": {"since": start, "estimate_days": conf["estimate_days"],
+                     "hold_sweep_hours": conf["hold_sweep_hours"]},
         "excluded": [{"trade_id": t["trade_id"], "role": t.get("role"),
                       "market_hash_name": t.get("market_hash_name"),
                       "float_value": t.get("float_value"),

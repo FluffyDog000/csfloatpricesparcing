@@ -1439,6 +1439,49 @@ class Collector:
         except Exception as exc:  # noqa: BLE001
             log.debug("Could not keep the forecast for '%s': %s", name, exc)
 
+    HOLD_ALERTED_KEY = "hold_alerted"
+
+    def check_holding_alerts(self, now: float | None = None) -> list[str]:
+        """Once an hour: a held skin whose valuation fell under what it cost,
+        after the fee, is told once to Telegram. Returns the lines sent."""
+        import json as _json
+        import time as _time
+
+        from . import profit_report
+        from .settings import params as read_params
+
+        now = _time.monotonic() if now is None else now
+        if now - getattr(self, "_last_hold_check", -3600.0) < 3600.0:
+            return []
+        self._last_hold_check = now
+        try:
+            data = profit_report.build(self.db, read_params(self.db).fee, 0)
+        except Exception as exc:  # noqa: BLE001 - a report is not the bot
+            log.debug("Holding check failed: %s", exc)
+            return []
+        try:
+            told = set(_json.loads(self.db.get_setting(self.HOLD_ALERTED_KEY) or "[]"))
+        except ValueError:
+            told = set()
+        held = {h["trade_id"] for h in data["holding"]}
+        lines = []
+        for h in data["holding"]:
+            loss = h.get("est_profit")
+            if loss is None or loss >= 0 or h["trade_id"] in told:
+                continue
+            told.add(h["trade_id"])
+            lines.append(
+                f"• {h['market_hash_name']} float {h['float_value']:.4f}: куплен за "
+                f"${h['bought']:.2f}, оценка ${h['estimate']:.2f} → {loss:+.2f}$"
+                + (f" ({h['queue_note']})" if h.get("queue_note") else ""))
+        # Only what is still held is remembered: a sold skin cannot alert again.
+        self.db.set_setting(self.HOLD_ALERTED_KEY, _json.dumps(sorted(told & held)))
+        if lines:
+            self._tell("📉 Оценка в наличии ниже цены покупки (после комиссии):\n"
+                       + "\n".join(lines[:15])
+                       + (f"\n… и ещё {len(lines) - 15}" if len(lines) > 15 else ""))
+        return lines
+
     def maintain_db(self, now: float | None = None) -> dict | None:
         """Clear old logs and snapshots once an hour, or at once when asked
         from the settings page; compress the file when asked. Results are kept
