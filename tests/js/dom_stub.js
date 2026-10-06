@@ -71,6 +71,7 @@ global.fetch = async (url) => ({
       return api.weakest || { order: "", item: "", held: 0 };
     }
     if (url.startsWith("/api/profit")) return api;
+    if (url.startsWith("/api/bot_status")) return api.bot_status || {};
     if (url.startsWith("/api/analysis")) return api;
     return { items: [] };
   },
@@ -124,6 +125,7 @@ function deepText(node) {
     settingsNote: deepText(nodes["f-settings-note"]),
     excludedTitle: deepText(nodes["f-excluded-title"]),
     excludedText: deepText(nodes["f-excluded"]),
+    botStatus: deepText(nodes["bot-status"]),
     profitLinks: ["f-closed", "f-holding", "f-unmatched"].flatMap((id) => {
       const out = [];
       const walk = (n) => {

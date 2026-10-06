@@ -604,3 +604,21 @@ a.cbtn { text-decoration: none; display: inline-flex; align-items: center; }
 /* Item names on the profit page lead to the item's sales history. */
 a.item-link { color: inherit; text-decoration: underline; text-decoration-color: var(--accent, #58a6ff); text-underline-offset: 3px; }
 a.item-link:hover, a.item-link:focus-visible { color: var(--accent, #58a6ff); }
+
+/* Bot status panel (status.js): one line per job, a dot for its state. */
+.bot-status { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 14px; margin: 12px 0; display: grid; gap: 6px; font-size: 14px; }
+.bot-status:empty { display: none; }
+.bs-head { font-weight: 600; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.bs-row { display: grid; grid-template-columns: 10px minmax(150px, max-content) 1fr; gap: 10px; align-items: baseline; }
+.bs-row b { font-weight: 600; }
+.bs-text { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.bs-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--muted); align-self: center; }
+.bs-dot.on { background: var(--good); }
+.bs-dot.busy { background: var(--accent); animation: bs-pulse 1.2s ease-in-out infinite; }
+.bs-dot.wait { background: #d29922; }
+.bs-dot.warn { background: var(--bad); }
+.bs-dot.off, .bs-dot.idle { background: var(--muted); opacity: .6; }
+@keyframes bs-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .bs-dot.busy { animation: none; } }
+@media (max-width: 640px) { .bs-row { grid-template-columns: 10px 1fr; } .bs-row .bs-text { grid-column: 2; } }

@@ -67,6 +67,17 @@ FREE_PER_PASS = 3
 AUTO_FREE_KEY = "an_auto_free"
 
 
+# Progress of the plan being sent, read by the status panel.
+PLACING_KEY = "placing_state"
+KIND_WORDS = {"place": "ставлю", "raise": "поднимаю", "lower": "снижаю",
+              "cancel": "снимаю", "keep": "оставляю"}
+
+
+def _action_label(action) -> str:
+    return (f"{KIND_WORDS.get(action.kind, action.kind)} {action.item} "
+            f"{action.float_min:.4f}–{action.float_max:.4f} за ${action.price:.2f}")
+
+
 def auto_free_on(db) -> bool:
     """Free room for outbid orders by taking down weaker ones. On unless
     turned off: asked for, and it only ever trades down in rank."""
@@ -780,8 +791,22 @@ class Collector:
                             dry_run=dry)
             results = []
             source = str(pending.get("source") or "plan")
+            # What is going out right now, for the status panel: a plan of
+            # sixty actions takes minutes on the main key's pace.
+            placing = {"source": source, "dry_run": dry, "started_at": utcnow_iso(),
+                       "finished_at": None, "total": len(actions), "done": 0,
+                       "ok": 0, "current": None}
+
+            def note(current=None) -> None:
+                placing["current"] = current
+                self.db.set_setting(PLACING_KEY,
+                                    _json.dumps(placing, ensure_ascii=False))
+
             for action in actions:
+                note(_action_label(action))
                 out = sender.perform(action)
+                placing["done"] += 1
+                placing["ok"] += 1 if out.ok else 0
                 results.append(out.as_dict())
                 self._log_order_event(out, source, dry)
                 if not out.ok or dry:
@@ -802,6 +827,8 @@ class Collector:
                         remote_id=out.remote_id, note=out.detail,
                         quantity=action.quantity)
                     self._follow_in_book(item_id, action)
+            placing["finished_at"] = utcnow_iso()
+            note(None)
         finally:
             self.client.pool.unpin()
 

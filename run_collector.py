@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import heapq
+import json
 import logging
 import random
 import time
@@ -234,8 +235,16 @@ def run_forever(collector: Collector) -> None:
                 # Several at a time when there are keys to do it with; with
                 # one key this is the same loop it replaces, one item after
                 # another.
-                done = sweep_items(collector, names,
-                                   report=_state_writer(collector))
+                progress = SweepProgress(collector.db, names)
+                writer = _state_writer(collector)
+
+                def report(name, result, _w=writer, _p=progress):
+                    _p.finish(name, result)
+                    _w(name, result)
+
+                done = sweep_items(collector, names, report=report,
+                                   on_start=progress.start)
+                progress.close(done)
                 collector.store_rate_state()
                 # Logged whatever the count, including one worker. Written
                 # only when several ran, the line's absence meant either "the
@@ -288,6 +297,53 @@ def run_forever(collector: Collector) -> None:
         next_delay = collector.interval_for(item)
         schedule(name, time.monotonic() + next_delay, 0.0)
         log.info("Next poll for '%s' in %.1f min", name, next_delay / 60.0)
+
+
+class SweepProgress:
+    """What the sweep is doing, for the status panel: how many of how many,
+    which items are being read right now, and when it began and ended.
+    Written as it goes - a sweep of three hundred items takes minutes, and
+    "queued" alone said nothing about whether it had started."""
+
+    KEY = "sweep_state"
+
+    def __init__(self, db, names) -> None:
+        import threading
+        from src.db import utcnow_iso
+        self.db = db
+        self.lock = threading.Lock()
+        self.state = {"started_at": utcnow_iso(), "finished_at": None,
+                      "total": len(names), "done": 0, "failed": 0,
+                      "current": [], "last": None}
+        self.write()
+
+    def write(self) -> None:
+        try:
+            self.db.set_setting(self.KEY, json.dumps(self.state, ensure_ascii=False))
+        except Exception as exc:  # noqa: BLE001 - a display write is not the sweep
+            log.debug("Could not store the sweep state: %s", exc)
+
+    def start(self, name: str) -> None:
+        with self.lock:
+            self.state["current"] = (self.state["current"] + [name])[-20:]
+            self.write()
+
+    def finish(self, name: str, result: dict) -> None:
+        with self.lock:
+            if name in self.state["current"]:
+                self.state["current"].remove(name)
+            self.state["done"] += 1
+            self.state["last"] = name
+            self.write()
+
+    def close(self, done: dict) -> None:
+        from src.db import utcnow_iso
+        with self.lock:
+            self.state["done"] = len(done.get("swept", {}))
+            self.state["failed"] = len(done.get("failed", {}))
+            self.state["current"] = []
+            self.state["finished_at"] = utcnow_iso()
+            self.write()
 
 
 def _state_writer(collector, every: float = 10.0):

@@ -5,6 +5,7 @@
 <h1>Анализ ордеров</h1>
 <p class="muted">Какие ордера бот поставил бы сейчас — и почему не поставил бы
 остальные. Постановка не выполняется, только расчёт.</p>
+<div id="bot-status" class="bot-status"></div>
 
 <section class="settings-block">
   <h2>1 · Предметы</h2>
@@ -72,6 +73,14 @@
     <input type="checkbox" id="plan-autofree" disabled> освобождать место для перебивания
     <span class="muted">— CSFloat отказал «не хватило баланса»: снять самый слабый
       ордер (только если он слабее перебиваемого, до 3 за проверку) и повторить</span>
+  </label>
+  <label class="arm-line">
+    <input type="checkbox" id="plan-autosweep" disabled> обходить стаканы анализа сам
+    каждые <input type="number" id="plan-autosweep-min" disabled class="input inline-num"
+                  step="10" min="30" max="1440" value="120"> мин
+    <span class="muted">— предметы из списка, прошедшие отсев, у которых стакан старше
+      интервала. После обхода сразу запускается автодобор (если включён). Только чтение,
+      ничего не ставит</span>
   </label>
   <label class="arm-line">
     <input type="checkbox" id="plan-autofill" disabled> <b>добирать новые ордера сам</b>
@@ -254,4 +263,5 @@
 </script>
 <script src="{{ asset('common.js') }}"></script>
 <script src="{{ asset('analysis.js') }}"></script>
+<script src="{{ asset('status.js') }}"></script>
 {% endblock %}

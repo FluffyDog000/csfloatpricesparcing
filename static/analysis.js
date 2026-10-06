@@ -704,10 +704,12 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("plan-defend-min").value = d.defend_minutes || 60;
     if ($("plan-autofree")) $("plan-autofree").checked = d.auto_free !== false;
     if ($("plan-autofill")) $("plan-autofill").checked = !!d.auto_fill;
+    if ($("plan-autosweep")) $("plan-autosweep").checked = !!d.auto_sweep;
+    if ($("plan-autosweep-min")) $("plan-autosweep-min").value = d.auto_sweep_minutes || 120;
     // Unlocked only now: until the plan answers, these show defaults, and a
     // click then would save "defence off" over a defence that is on.
     ["plan-dry", "plan-arm", "plan-defend", "plan-defend-min", "plan-autofree",
-     "plan-autofill"].forEach((id) => { if ($(id)) $(id).disabled = false; });
+     "plan-autofill", "plan-autosweep", "plan-autosweep-min"].forEach((id) => { if ($(id)) $(id).disabled = false; });
     renderCreates(d.creates);
     if ($("plan-creates") && d.phase_items) {
       $("plan-creates").textContent += ` ${d.phase_items} предмет(ов) с фазой Doppler `
@@ -1240,12 +1242,15 @@ float, который принимает ордер. Ниже «ожид.» — 
         defend_minutes: $("plan-defend-min").value,
         auto_free: $("plan-autofree") ? $("plan-autofree").checked : true,
         auto_fill: $("plan-autofill") ? $("plan-autofill").checked : false,
+        auto_sweep: $("plan-autosweep") ? $("plan-autosweep").checked : false,
+        auto_sweep_minutes: $("plan-autosweep-min") ? $("plan-autosweep-min").value : 120,
       }, token());
       say(r.defend
         ? `Автозащита включена, каждые ${r.defend_minutes} мин.`
           + (r.dry_run ? " Вхолостую." : " По-настоящему.")
         : "Автозащита выключена.", r.defend && !r.dry_run ? "err" : "ok");
       await loadPlan();
+      if (window.botStatus) window.botStatus.load();
     });
     $("plan-defend").onchange = saveDefence;
 
@@ -1260,6 +1265,8 @@ float, который принимает ордер. Ниже «ожид.» — 
     };
     $("plan-defend-min").onchange = saveDefence;
     if ($("plan-autofree")) $("plan-autofree").onchange = saveDefence;
+    if ($("plan-autosweep")) $("plan-autosweep").onchange = saveDefence;
+    if ($("plan-autosweep-min")) $("plan-autosweep-min").onchange = saveDefence;
     if ($("plan-autofill")) $("plan-autofill").onchange = () => {
       if ($("plan-autofill").checked && !$("plan-dry").checked
           && !confirm("Бот будет сам ставить новые ордера (тратит деньги при исполнении), "

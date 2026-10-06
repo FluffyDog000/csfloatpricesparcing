@@ -959,7 +959,8 @@ BOOK_UNREAD = "стакан покупки не читался — сначал�
 SWEEP_FRESH_MINUTES = 45.0
 
 
-def _sweep_not_needed(db, item_id: int, name: str) -> str:
+def _sweep_not_needed(db, item_id: int, name: str,
+                      fresh_minutes: float | None = None) -> str:
     """Why this item does not need the requests, or "" when it does.
 
     Three ways to need them: the book was never read, the listings are short
@@ -992,7 +993,7 @@ def _sweep_not_needed(db, item_id: int, name: str) -> str:
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - when).total_seconds() / 60.0
-    if age >= SWEEP_FRESH_MINUTES:
+    if age >= (SWEEP_FRESH_MINUTES if fresh_minutes is None else fresh_minutes):
         return ""
     return f"обойдён {age:.0f} мин назад — обе стороны на месте"
 
@@ -1342,6 +1343,7 @@ def api_analysis_plan():
         "defend_minutes": defend_minutes(db),
         "auto_free": (db.get_setting("an_auto_free") or "1") == "1",
         "auto_fill": (db.get_setting(AUTO_FILL_KEY) or "0") == "1",
+        **_auto_sweep_settings(db),
         "defend_at": db.get_setting("defend_last_at") or None,
         "last_defend": _json_setting(db, "defend_result"),
         "last_apply": _json_setting(db, "analysis_apply_result"),
@@ -1445,6 +1447,11 @@ def api_analysis_arm():
         db.set_setting("an_auto_free", "1" if data["auto_free"] else "0")
     if "auto_fill" in data:
         db.set_setting(AUTO_FILL_KEY, "1" if data["auto_fill"] else "0")
+    if "auto_sweep" in data:
+        db.set_setting(AUTO_SWEEP_KEY, "1" if data["auto_sweep"] else "0")
+    if "auto_sweep_minutes" in data:
+        db.set_setting(AUTO_SWEEP_MIN_KEY, str(_clamp_sweep_minutes(
+            data["auto_sweep_minutes"])))
     log.warning("Analysis arming set to %s (dry run %s, defence %s)", on,
                 db.get_setting("analysis_dry_run", "1"),
                 db.get_setting("an_defend", "0"))
@@ -1453,7 +1460,8 @@ def api_analysis_arm():
                     "defend": defending(db),
                     "defend_minutes": defend_minutes(db),
                     "auto_free": (db.get_setting("an_auto_free") or "1") == "1",
-                    "auto_fill": (db.get_setting(AUTO_FILL_KEY) or "0") == "1"})
+                    "auto_fill": (db.get_setting(AUTO_FILL_KEY) or "0") == "1",
+                    **_auto_sweep_settings(db)})
 
 
 AUTO_FILL_KEY = "an_auto_fill"
@@ -1472,6 +1480,16 @@ def _face_standing(db) -> float:
 
 
 def auto_fill_once(db) -> dict:
+    """One round of auto-fill, its outcome kept for the status panel."""
+    out = _auto_fill_round(db)
+    if out.get("skipped") != "выключено":
+        db.set_setting(AUTO_FILL_RESULT_KEY, json.dumps(
+            {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **out},
+            ensure_ascii=False))
+    return out
+
+
+def _auto_fill_round(db) -> dict:
     """Place the best new orders the plan wants, up to the day's creations
     left, without anyone pressing "apply". Only placements, and only where
     the book is fresh: an item with an old book is sent for a sweep instead,
@@ -1542,24 +1560,211 @@ def auto_fill_once(db) -> dict:
     return {"queued": len(take), "swept": len(asked), "left": left}
 
 
+AUTO_FILL_RESULT_KEY = "an_auto_fill_result"
+AUTO_SWEEP_KEY = "an_auto_sweep"
+AUTO_SWEEP_MIN_KEY = "an_auto_sweep_minutes"
+AUTO_SWEEP_LAST_KEY = "an_auto_sweep_last"
+AUTO_SWEEP_RESULT_KEY = "an_auto_sweep_result"
+AUTO_SWEEP_BOUNDS = (30, 1440)
+AUTO_SWEEP_DEFAULT = 120
+
+
+def _clamp_sweep_minutes(raw) -> int:
+    try:
+        value = int(float(str(raw).strip().replace(",", ".")))
+    except (TypeError, ValueError):
+        value = AUTO_SWEEP_DEFAULT
+    lo, hi = AUTO_SWEEP_BOUNDS
+    return min(max(value, lo), hi)
+
+
+def _auto_sweep_settings(db) -> dict:
+    return {"auto_sweep": (db.get_setting(AUTO_SWEEP_KEY) or "0") == "1",
+            "auto_sweep_minutes": _clamp_sweep_minutes(
+                db.get_setting(AUTO_SWEEP_MIN_KEY) or AUTO_SWEEP_DEFAULT)}
+
+
+def auto_sweep_once(db) -> dict:
+    """Send the analysis list's books for a sweep: every item that passes the
+    free pass and whose book is older than the interval.
+
+    Only the defence and auto-fill read books on their own, and both only for
+    items already in play - an item added to the list, or one whose book went
+    stale, never reached the plan and so never got read. Kept for the status
+    panel; the next auto-fill runs as soon as this sweep is done.
+    """
+    from src.phases import is_phase
+    from src.screen import look
+
+    cfg = _auto_sweep_settings(db)
+    if not cfg["auto_sweep"]:
+        return {"skipped": "выключено"}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if db.pending_order_requests():
+        out = {"skipped": "предыдущий обход ещё идёт"}
+    else:
+        params = _analysis_params(db)
+        screen = _analysis_screen(db)
+        queued, fresh, screened = [], 0, 0
+        for name in _analysis_items(db):
+            item_id = db.get_item_id(name)
+            if item_id is None or is_phase(name):
+                continue
+            if not look(_sales_for(db, item_id, params), screen,
+                        params.window_days, params.fee).passed:
+                screened += 1
+                continue
+            # A little under the interval: a book read 115 minutes ago is due
+            # on a two-hour round, not skipped to the next one.
+            if _sweep_not_needed(db, item_id, name,
+                                 fresh_minutes=cfg["auto_sweep_minutes"] * 0.9):
+                fresh += 1
+                continue
+            if db.request_orders(name):
+                queued.append(name)
+        out = {"queued": len(queued), "fresh": fresh, "screened": screened}
+        log.info("Auto-sweep queued %d book(s); %d fresh, %d screened out",
+                 len(queued), fresh, screened)
+    db.set_setting(AUTO_SWEEP_RESULT_KEY, json.dumps({"at": now, **out},
+                                                     ensure_ascii=False))
+    return out
+
+
+def _sweep_finished_after(db, epoch: float) -> bool:
+    """The last sweep ended after `epoch` and nothing is left in the queue."""
+    from src.pacing import parse_iso
+    state = _json_setting(db, "sweep_state") or {}
+    ended = parse_iso(state.get("finished_at"))
+    return (ended is not None and ended.timestamp() > epoch
+            and not db.pending_order_requests())
+
+
+def automation_tick(db, now: float | None = None) -> dict:
+    """One check of both background jobs. Auto-sweep on its own interval;
+    auto-fill every half hour, and also right after an auto-sweep finishes -
+    the new books are what it should place from, not ones half an hour old."""
+    import time as _time
+
+    now = _time.time() if now is None else now
+    did: dict = {}
+    sweep = _auto_sweep_settings(db)
+    if sweep["auto_sweep"]:
+        last = float(db.get_setting(AUTO_SWEEP_LAST_KEY) or 0)
+        if now - last >= sweep["auto_sweep_minutes"] * 60:
+            did["sweep"] = auto_sweep_once(db)
+            # Behind a sweep still running, it asks again next minute rather
+            # than skipping a whole interval.
+            if did["sweep"].get("skipped") != "предыдущий обход ещё идёт":
+                db.set_setting(AUTO_SWEEP_LAST_KEY, str(now))
+    if (db.get_setting(AUTO_FILL_KEY) or "0") == "1":
+        last_fill = float(db.get_setting(AUTO_FILL_LAST_KEY) or 0)
+        last_sweep = float(db.get_setting(AUTO_SWEEP_LAST_KEY) or 0)
+        after_sweep = (sweep["auto_sweep"] and last_sweep > last_fill
+                       and _sweep_finished_after(db, last_sweep))
+        if now - last_fill >= AUTO_FILL_EVERY_SECONDS or after_sweep:
+            db.set_setting(AUTO_FILL_LAST_KEY, str(now))
+            did["fill"] = auto_fill_once(db)
+    return did
+
+
+def _epoch_iso(raw) -> str | None:
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds")
+
+
+def _plus_minutes(iso: str | None, minutes: float) -> str | None:
+    from src.pacing import parse_iso
+    when = parse_iso(iso) if iso else None
+    if when is None:
+        return None
+    return (when + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+
+
+@app.route("/api/bot_status")
+def api_bot_status():
+    """What the bot is doing and when it does it next: the defence, auto-fill,
+    the auto-sweep, a sweep or a plan in progress, how fresh the analysis
+    books are, and the day's creations. Times are ISO, in UTC."""
+    from src.collector import PLACING_KEY
+    from src.pacing import parse_iso
+    from src.phases import is_phase
+
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    defend_at = db.get_setting("defend_last_at") or None
+    minutes = defend_minutes(db)
+    sweep_cfg = _auto_sweep_settings(db)
+    fill_last = _epoch_iso(db.get_setting(AUTO_FILL_LAST_KEY))
+    sweep_last = _epoch_iso(db.get_setting(AUTO_SWEEP_LAST_KEY))
+
+    queue = db.pending_order_requests()
+    try:
+        pending = json.loads(db.get_setting("analysis_pending_actions") or "null")
+    except ValueError:
+        pending = None
+
+    fresh_limit = now - timedelta(hours=AUTO_FILL_FRESH_HOURS)
+    books = {"items": 0, "fresh": 0, "stale": 0, "never": 0, "oldest": None,
+             "fresh_hours": AUTO_FILL_FRESH_HOURS}
+    for name in _analysis_items(db):
+        item_id = db.get_item_id(name)
+        if item_id is None or is_phase(name):
+            continue
+        books["items"] += 1
+        when = parse_iso(db.book_swept_at(item_id))
+        if when is None:
+            books["never"] += 1
+        elif when >= fresh_limit:
+            books["fresh"] += 1
+        else:
+            books["stale"] += 1
+        if when is not None and (books["oldest"] is None or when.isoformat() < books["oldest"]):
+            books["oldest"] = when.isoformat(timespec="seconds")
+
+    return jsonify({
+        "now": now.isoformat(timespec="seconds"),
+        "defence": {"on": defending(db), "minutes": minutes, "last_at": defend_at,
+                    "next_at": _plus_minutes(defend_at, minutes) if defending(db) else None},
+        "auto_fill": {"on": (db.get_setting(AUTO_FILL_KEY) or "0") == "1",
+                      "minutes": AUTO_FILL_EVERY_SECONDS // 60,
+                      "last_at": fill_last,
+                      "next_at": _plus_minutes(fill_last, AUTO_FILL_EVERY_SECONDS / 60),
+                      "result": _json_setting(db, AUTO_FILL_RESULT_KEY)},
+        "auto_sweep": {"on": sweep_cfg["auto_sweep"],
+                       "minutes": sweep_cfg["auto_sweep_minutes"],
+                       "last_at": sweep_last,
+                       "next_at": _plus_minutes(sweep_last, sweep_cfg["auto_sweep_minutes"]),
+                       "result": _json_setting(db, AUTO_SWEEP_RESULT_KEY)},
+        "sweep": {"state": _json_setting(db, "sweep_state"),
+                  "queued": len(queue),
+                  "queued_names": [r["market_hash_name"] for r in queue[:5]]},
+        "placing": {"state": _json_setting(db, PLACING_KEY),
+                    "pending": len((pending or {}).get("actions") or []),
+                    "pending_source": (pending or {}).get("source") or ("plan" if pending else None)},
+        "books": books,
+        "creates": _creates_status(db),
+        "waiting": _why_waiting(db),
+    })
+
+
 def _auto_fill_loop() -> None:
-    """Every half hour, in the background of the web process."""
+    """Auto-sweep and auto-fill, checked every minute in the background of
+    the web process."""
     import time as _time
 
     while True:
         _time.sleep(60)
         try:
             with app.app_context():
-                db = get_db()
-                last = float(db.get_setting(AUTO_FILL_LAST_KEY) or 0)
-                if _time.time() - last < AUTO_FILL_EVERY_SECONDS:
-                    continue
-                if (db.get_setting(AUTO_FILL_KEY) or "0") != "1":
-                    continue
-                db.set_setting(AUTO_FILL_LAST_KEY, str(_time.time()))
-                auto_fill_once(db)
+                automation_tick(get_db())
         except Exception as exc:  # noqa: BLE001 - the dashboard keeps serving
-            log.warning("Auto-fill round failed: %s", exc)
+            log.warning("Background round failed: %s", exc)
 
 
 def _creates_status(db) -> dict:

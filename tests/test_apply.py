@@ -61,6 +61,10 @@ def test_a_dry_run_records_what_it_would_have_sent():
     assert sent == [], "a dry run sends nothing"
     assert db.our_orders() == [], "and records no position"
     assert "вхолостую" in out["results"][0]["detail"]
+    import json
+    state = json.loads(db.get_setting("placing_state"))
+    assert state["total"] == 1 and state["done"] == 1 and state["finished_at"]
+    assert state["source"] == "plan" and state["dry_run"] and state["current"] is None
     db.close()
 
 

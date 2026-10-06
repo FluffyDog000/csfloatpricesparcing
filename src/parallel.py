@@ -51,7 +51,8 @@ def workers_for(collector, wanted: int | None = None) -> int:
 
 def sweep_items(collector, names: Sequence[str],
                 report: Callable[[str, dict], None] | None = None,
-                workers: int | None = None) -> dict[str, Any]:
+                workers: int | None = None,
+                on_start: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Sweep both sides of each item, several at a time.
 
     One worker per key, each taking the next item as it frees up rather than
@@ -72,6 +73,11 @@ def sweep_items(collector, names: Sequence[str],
     lock = threading.Lock()
 
     def one(name: str) -> None:
+        if on_start:
+            try:
+                on_start(name)
+            except Exception as exc:  # noqa: BLE001 - a display hook is not the sweep
+                log.debug("Sweep start hook failed: %s", exc)
         item_id = collector.db.get_item_id(name)
         if item_id is None:
             with lock:
