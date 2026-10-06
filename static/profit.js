@@ -319,7 +319,17 @@
     }
   }
 
+  /** The Excel link follows the period and the bot filter on the page. */
+  function exportLink() {
+    const a = $("f-xlsx");
+    if (!a) return;
+    const days = ($("f-days") && $("f-days").value) || "30";
+    a.href = `/api/profit/export.xlsx?days=${encodeURIComponent(days)}`
+      + (onlyBot() ? "&bot=1" : "");
+  }
+
   async function load() {
+    exportLink();
     const days = ($("f-days") && $("f-days").value) || "30";
     say("Считаю…");
     try {
@@ -336,7 +346,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     $("f-reload").onclick = load;
     $("f-days").onchange = load;
-    $("f-bot").onchange = render;
+    $("f-bot").onchange = () => { exportLink(); render(); };
     $("f-search").addEventListener("input", render);
     $("f-save").onclick = async () => {
       const btn = $("f-save");

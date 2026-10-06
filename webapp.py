@@ -2418,6 +2418,105 @@ def api_profit():
     return jsonify(out)
 
 
+@app.route("/api/profit/export.xlsx")
+def api_profit_export():
+    """The earnings tab as an Excel file: closed deals, what is held, every
+    purchase on the account, and sales with no purchase. The period and the
+    "only the bot's orders" filter of the page apply."""
+    from src import profit as pf
+    from src import profit_report
+    from src.pacing import parse_iso
+    from src.xlsx import workbook
+
+    db = get_db()
+    try:
+        days = float(request.args.get("days") or 0)
+    except (TypeError, ValueError):
+        days = 0.0
+    only_bot = request.args.get("bot") == "1"
+    fee = _analysis_params(db).fee
+    data = profit_report.build(db, fee, days)
+
+    def msk(iso):
+        when = parse_iso(iso) if iso else None
+        return ((when + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
+                if when else None)
+
+    def keep(row):
+        return not only_bot or row.get("by_bot")
+
+    closed = [[d["market_hash_name"], d["float_value"], d.get("paint_seed"),
+               msk(d["bought_at"]), d["bought"], msk(d["sold_at"]), d["sold"],
+               d["fee"], d["profit"], d["pct"], d["days"],
+               "да" if d.get("by_bot") else ""]
+              for d in data["closed"] if keep(d)]
+    holding = [[h["market_hash_name"], h["float_value"], h.get("paint_seed"),
+                msk(h["bought_at"]), h["bought"],
+                "ждёт обмена" if h["pending"] else "у нас", h["days"],
+                h["estimate"], h["est_profit"], h["est_pct"], h["basis"],
+                "да" if h.get("by_bot") else ""]
+               for h in data["holding"] if keep(h)]
+
+    conf = profit_report.settings(db)
+    events = [e for e in db.order_events(limit=50000, include_dry=False)
+              if e["ok"] and e["kind"] in ("place", "raise", "lower")]
+    buys = []
+    for t in reversed(db.all_trades()):
+        if t.get("role") != pf.BUY:
+            continue
+        mine = pf.by_bot(t, events)
+        if only_bot and not mine:
+            continue
+        buys.append([msk(t.get("done_at") or t.get("created_at")),
+                     t.get("market_hash_name"), t.get("float_value"),
+                     t.get("paint_seed"), t.get("price"), t.get("state"),
+                     "да" if mine else "",
+                     "убрана из учёта" if t["trade_id"] in conf["excluded"] else "",
+                     t["trade_id"]])
+    unmatched = [[msk(t.get("done_at") or t.get("created_at")),
+                  t.get("market_hash_name"), t.get("float_value"),
+                  t.get("paint_seed"), t.get("price")]
+                 for t in data["unmatched"]] if not only_bot else []
+
+    stamp = datetime.now(timezone.utc) + timedelta(hours=3)
+    body = workbook([
+        ("Закрытые сделки",
+         ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
+          "продано (МСК)", "цена продажи $", "комиссия $", "профит $", "%",
+          "дней", "ордер бота"],
+         closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10]),
+        ("В наличии",
+         ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
+          "статус", "дней", "оценка $", "ожид. профит $", "%", "как оценено",
+          "ордер бота"],
+         holding, [44, 12, 8, 17, 12, 13, 7, 10, 13, 7, 40, 10]),
+        ("Все покупки",
+         ["дата (МСК)", "предмет", "float", "паттерн", "цена $", "состояние",
+          "ордер бота", "учёт", "id сделки"],
+         buys, [17, 44, 12, 8, 10, 12, 10, 16, 20]),
+        ("Продажи без покупки",
+         ["дата (МСК)", "предмет", "float", "паттерн", "цена $"],
+         unmatched, [17, 44, 12, 8, 10]),
+        ("Итоги", ["параметр", "значение"], [
+            ["выгружено (МСК)", stamp.strftime("%Y-%m-%d %H:%M")],
+            ["период, дней (0 — всё)", days],
+            ["только ордера бота", "да" if only_bot else "нет"],
+            ["считать с даты", conf["since"] or "все сделки"],
+            ["комиссия, %", round(fee * 100, 2)],
+            ["закрытых сделок", len(closed)],
+            ["профит по закрытым $", round(sum(r[8] for r in closed), 2)],
+            ["в наличии, шт", len(holding)],
+            ["в наличии куплено на $", round(sum(r[4] for r in holding), 2)],
+            ["ожидаемый профит $", round(sum(r[8] or 0 for r in holding), 2)],
+            ["покупок всего", len(buys)],
+        ], [26, 18]),
+    ])
+    name = f"profit_{stamp.strftime('%Y-%m-%d_%H%M')}.xlsx"
+    return Response(body, mimetype=(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 def _profit_settings(db) -> dict:
     from src import profit_report
     return profit_report.settings(db)

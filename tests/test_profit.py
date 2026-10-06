@@ -512,3 +512,29 @@ def test_an_order_brought_down_and_then_filled_is_still_the_bots():
     db.close()
     held = c.get("/api/profit?days=0").get_json()["holding"]
     assert held[0]["by_bot"] is True
+
+
+def test_the_earnings_download_as_an_excel_file():
+    import io
+    import zipfile
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    for t in parsed(trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+                    trade("2", "sell", 11000, at="2026-09-09T10:00:00Z"),
+                    trade("3", "buy", 9000, flt=0.2, at="2026-09-20T10:00:00Z")):
+        db.upsert_trade(t)
+    db.close()
+    r = c.get("/api/profit/export.xlsx?days=0")
+    assert r.status_code == 200 and r.mimetype.endswith("spreadsheetml.sheet")
+    assert "profit_" in r.headers["Content-Disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.data))
+    closed = z.read("xl/worksheets/sheet1.xml").decode()
+    held = z.read("xl/worksheets/sheet2.xml").decode()
+    buys = z.read("xl/worksheets/sheet3.xml").decode()
+    assert "цена покупки $" in closed and "<v>100" in closed and "<v>110" in closed
+    assert "<v>90" in held, "the unsold purchase is held"
+    assert buys.count("<row ") == 3, "header and both purchases"
+    only_bot = zipfile.ZipFile(io.BytesIO(
+        c.get("/api/profit/export.xlsx?days=0&bot=1").data))
+    assert only_bot.read("xl/worksheets/sheet3.xml").decode().count("<row ") == 1
