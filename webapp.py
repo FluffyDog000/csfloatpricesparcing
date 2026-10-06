@@ -3107,7 +3107,7 @@ def _digest_settings(db) -> dict:
 
 # Tables worth a line on the storage panel, biggest first in practice.
 STORAGE_TABLES = ("sales", "poll_log", "order_events", "buy_orders",
-                  "listing_depth", "trades", "our_orders", "items")
+                  "listing_depth", "book_history", "trades", "our_orders", "items")
 
 
 @app.route("/api/settings/storage")
@@ -3141,14 +3141,56 @@ def api_settings_storage():
     except OSError:
         free = total = None
     tables = []
+    # Bytes per table where SQLite was built with the dbstat table, which is
+    # what says where the room actually goes; rows always.
+    sizes: dict[str, int] = {}
+    try:
+        for row in db.conn.execute(
+                "SELECT name, SUM(pgsize) AS b FROM dbstat GROUP BY name"):
+            sizes[row["name"]] = int(row["b"] or 0)
+    except Exception:  # noqa: BLE001 - not compiled in: rows alone
+        sizes = {}
     for name in STORAGE_TABLES:
         try:
-            row = db.conn.execute(f"SELECT MAX(rowid) AS n FROM {name}").fetchone()
-            tables.append({"table": name, "rows": int(row["n"] or 0)})
+            row = db.conn.execute(f"SELECT COUNT(*) AS n FROM {name}").fetchone()
+            tables.append({"table": name, "rows": int(row["n"] or 0),
+                           "bytes": sizes.get(name)})
         except Exception:  # noqa: BLE001 - an older DB lacks a table
             continue
+    from src.collector import PRUNE_RESULT_KEY, VACUUM_RESULT_KEY
+    from src.settings import keep_days
     return jsonify({"db": main, "wal": wal, "backups": backups,
-                    "disk_free": free, "disk_total": total, "tables": tables})
+                    "disk_free": free, "disk_total": total, "tables": tables,
+                    "keep_days": keep_days(db),
+                    "prune": _json_setting(db, PRUNE_RESULT_KEY),
+                    "prune_pending": db.get_setting("db_prune_requested") == "1",
+                    "vacuum": _json_setting(db, VACUUM_RESULT_KEY),
+                    "vacuum_pending": db.get_setting("db_vacuum_requested") == "1"})
+
+
+@app.route("/api/settings/storage", methods=["POST"])
+def api_settings_storage_save():
+    """How many days of logs to keep, and housekeeping on demand - both done
+    by the collector, which is the database's main writer."""
+    from src.settings import KEEP_DAYS_BOUNDS, KEEP_DAYS_KEY, keep_days
+
+    _require_admin()
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    if "keep_days" in data:
+        try:
+            value = float(str(data["keep_days"]).replace(",", "."))
+        except (TypeError, ValueError):
+            abort(400, description="дней — число")
+        lo, hi = KEEP_DAYS_BOUNDS
+        db.set_setting(KEEP_DAYS_KEY, str(min(max(value, lo), hi)))
+    if data.get("prune"):
+        db.set_setting("db_prune_requested", "1")
+    if data.get("vacuum"):
+        db.set_setting("db_vacuum_requested", "1")
+    return jsonify({"keep_days": keep_days(db),
+                    "prune_pending": db.get_setting("db_prune_requested") == "1",
+                    "vacuum_pending": db.get_setting("db_vacuum_requested") == "1"})
 
 
 @app.route("/api/settings", methods=["POST"])

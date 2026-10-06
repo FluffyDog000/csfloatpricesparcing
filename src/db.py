@@ -854,6 +854,104 @@ class Database:
         self.conn.commit()
         return len(profile)
 
+    # -- retention -------------------------------------------------------------
+
+    def prune_history(self, days: float, events_days: float = 30.0,
+                      orders_days: float = 14.0, batch: int = 5000) -> dict[str, int]:
+        """Delete what nothing reads any more. Returns rows removed per table.
+
+        Every sweep, defence pass and poll wrote rows that were never cleared:
+        a month-old book, every listing reading of every band. What is read is
+        far less:
+          poll_log       - the last day for the load page, the last few polls
+                           of each item for its pacing: `days`, plus the ten
+                           newest of every item whatever their age;
+          book_history   - nothing in the pricing reads it: `days`;
+          listing_depth  - only the newest reading of each band: that one is
+                           kept whatever its age, older ones past `days` go;
+          order_events   - real actions mark trades as "ордер бота" on the
+                           earnings tab weeks later, and the day's creations
+                           are counted from them: `events_days`; dry runs and
+                           refusals only `days`;
+          our_orders     - live and manual orders always; finished ones past
+                           `orders_days` (the trade lock needs a week of fills).
+        Deleted in batches, so a writer elsewhere waits a moment, not minutes.
+        """
+        from datetime import timedelta
+
+        now = datetime.now(timezone.utc)
+        iso = lambda d: (now - timedelta(days=d)).replace(microsecond=0).isoformat()
+        cut, ev_cut, ord_cut = iso(days), iso(max(events_days, days)), \
+            iso(max(orders_days, 8.0))
+        conn = self.conn
+        conn.execute("DROP TABLE IF EXISTS temp.keep_poll")
+        conn.execute(
+            "CREATE TEMP TABLE keep_poll AS SELECT id FROM ("
+            " SELECT id, ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY id DESC) AS rn"
+            " FROM poll_log) WHERE rn <= 10")
+        # The newest reading of every band, worked out once: asked per row it
+        # was a lookup for each of millions of rows, batch after batch.
+        conn.execute("DROP TABLE IF EXISTS temp.keep_depth")
+        try:
+            conn.execute(
+                "CREATE TEMP TABLE keep_depth AS SELECT d.rowid AS rid "
+                "FROM listing_depth d JOIN (SELECT item_id, float_min, float_max, "
+                "MAX(fetched_at) AS m FROM listing_depth "
+                "GROUP BY item_id, float_min, float_max) x "
+                "ON d.item_id = x.item_id AND d.float_min = x.float_min "
+                "AND d.float_max = x.float_max AND d.fetched_at = x.m")
+        except sqlite3.OperationalError:
+            conn.execute("CREATE TEMP TABLE keep_depth (rid INTEGER)")
+        jobs = {
+            "poll_log": ("SELECT rowid FROM poll_log WHERE polled_at < ? "
+                         "AND id NOT IN (SELECT id FROM temp.keep_poll)", (cut,)),
+            "book_history": ("SELECT rowid FROM book_history WHERE fetched_at < ?",
+                             (cut,)),
+            "listing_depth": ("SELECT rowid FROM listing_depth WHERE fetched_at < ? "
+                              "AND rowid NOT IN (SELECT rid FROM temp.keep_depth)",
+                              (cut,)),
+            "order_events": ("SELECT rowid FROM order_events WHERE at < ? "
+                             "OR (at < ? AND (dry = 1 OR ok = 0))", (ev_cut, cut)),
+            "our_orders": ("SELECT rowid FROM our_orders WHERE updated_at < ? "
+                           "AND state NOT IN ('live', 'manual', 'planned')",
+                           (ord_cut,)),
+        }
+        removed: dict[str, int] = {}
+        for table, (select, args) in jobs.items():
+            total = 0
+            try:
+                while True:
+                    cur = conn.execute(
+                        f"DELETE FROM {table} WHERE rowid IN ({select} LIMIT {int(batch)})",
+                        args)
+                    conn.commit()
+                    total += cur.rowcount
+                    if cur.rowcount < batch:
+                        break
+            except sqlite3.OperationalError as exc:
+                # An older database without the table: nothing to clear.
+                if "no such table" not in str(exc):
+                    raise
+            removed[table] = total
+        conn.execute("DROP TABLE IF EXISTS temp.keep_poll")
+        conn.execute("DROP TABLE IF EXISTS temp.keep_depth")
+        conn.commit()
+        return removed
+
+    def vacuum(self) -> tuple[int, int]:
+        """Give the room freed by deletes back to the disk. (before, after)
+        in bytes. SQLite reuses freed pages on its own, so the file stops
+        growing without this; it only shrinks with it."""
+        import os
+        self.conn.commit()
+        # Measured once the log is folded in: before that the newest pages sit
+        # in the -wal file and "before" would read smaller than "after".
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        before = os.path.getsize(self.path)
+        self.conn.execute("VACUUM")
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return before, os.path.getsize(self.path)
+
     def listing_depth(self, item_id: int,
                       latest_only: bool = True) -> list[dict[str, Any]]:
         """Per-band sell-side depth, newest reading of each band by default.

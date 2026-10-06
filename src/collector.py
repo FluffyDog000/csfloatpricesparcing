@@ -78,6 +78,11 @@ def _action_label(action) -> str:
             f"{action.float_min:.4f}–{action.float_max:.4f} за ${action.price:.2f}")
 
 
+PRUNE_EVERY_SECONDS = 3600.0
+PRUNE_RESULT_KEY = "db_prune_result"
+VACUUM_RESULT_KEY = "db_vacuum_result"
+
+
 def auto_free_on(db) -> bool:
     """Free room for outbid orders by taking down weaker ones. On unless
     turned off: asked for, and it only ever trades down in rank."""
@@ -1410,6 +1415,44 @@ class Collector:
                 reason=change.detail, detail="сверка с аккаунтом")
         except Exception as exc:  # noqa: BLE001 - the sync matters more
             log.warning("Could not write the order journal: %s", exc)
+
+    def maintain_db(self, now: float | None = None) -> dict | None:
+        """Clear old logs and snapshots once an hour, or at once when asked
+        from the settings page; compress the file when asked. Results are kept
+        for the page."""
+        import json as _json
+        import time as _time
+
+        from .settings import keep_days
+
+        now = _time.monotonic() if now is None else now
+        out = None
+        asked = self.db.get_setting("db_prune_requested") == "1"
+        if asked or now - getattr(self, "_last_prune", -PRUNE_EVERY_SECONDS) \
+                >= PRUNE_EVERY_SECONDS:
+            self._last_prune = now
+            self.db.set_setting("db_prune_requested", "0")
+            days = keep_days(self.db)
+            started = _time.monotonic()
+            removed = self.db.prune_history(days)
+            out = {"at": utcnow_iso(), "days": days, "removed": removed,
+                   "seconds": round(_time.monotonic() - started, 1)}
+            self.db.set_setting(PRUNE_RESULT_KEY, _json.dumps(out, ensure_ascii=False))
+            if sum(removed.values()):
+                log.info("Database pruned (%s days): %s", days, removed)
+        if self.db.get_setting("db_vacuum_requested") == "1":
+            self.db.set_setting("db_vacuum_requested", "0")
+            started = _time.monotonic()
+            try:
+                before, after = self.db.vacuum()
+                res = {"at": utcnow_iso(), "before": before, "after": after,
+                       "seconds": round(_time.monotonic() - started, 1)}
+                log.info("Database compressed: %d -> %d bytes", before, after)
+            except Exception as exc:  # noqa: BLE001 - reported on the page
+                res = {"at": utcnow_iso(), "error": str(exc)[:200]}
+                log.warning("VACUUM failed: %s", exc)
+            self.db.set_setting(VACUUM_RESULT_KEY, _json.dumps(res, ensure_ascii=False))
+        return out
 
     def defend_orders(self) -> dict | None:
         """Look at the orders we hold and answer what has happened to them.

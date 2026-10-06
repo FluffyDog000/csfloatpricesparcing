@@ -182,6 +182,12 @@ def run_forever(collector: Collector) -> None:
             # was approved against a book that is already minutes old.
             collector.apply_pending_actions()
 
+            # Old logs and snapshots out, hourly; the file compressed on request.
+            try:
+                collector.maintain_db()
+            except Exception as exc:  # noqa: BLE001 - housekeeping is not the bot
+                log.warning("Database housekeeping failed: %s", exc)
+
             # "Are the orders we think we hold actually there." Asked on
             # demand, and by the defence before every pass.
             if collector.db.get_setting("orders_sync_requested") == "1":

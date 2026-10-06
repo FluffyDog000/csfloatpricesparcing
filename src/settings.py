@@ -72,6 +72,23 @@ BALANCE_AT_KEY = "account_balance_at"
 BALANCE_FRESH_HOURS = 6.0
 
 
+# How many days of logs and snapshots the database keeps (see
+# Database.prune_history). The sales history is never cut.
+KEEP_DAYS_KEY = "db_keep_days"
+KEEP_DAYS_DEFAULT = 2.0
+KEEP_DAYS_BOUNDS = (1.0, 30.0)
+
+
+def keep_days(db) -> float:
+    try:
+        value = float(str(db.get_setting(KEEP_DAYS_KEY) or KEEP_DAYS_DEFAULT)
+                      .replace(",", "."))
+    except (TypeError, ValueError):
+        value = KEEP_DAYS_DEFAULT
+    lo, hi = KEEP_DAYS_BOUNDS
+    return min(max(value, lo), hi)
+
+
 def live_balance(db) -> tuple[float | None, str | None]:
     """(dollars, when read) of the account's balance, when it is fresh."""
     from datetime import datetime, timedelta, timezone

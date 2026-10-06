@@ -57,6 +57,20 @@
 <section class="settings-block">
   <h2>База данных</h2>
   <div id="storage" class="muted">Считаю…</div>
+  <div class="storage-keep">
+    <label>хранить журналы и снимки, дней
+      <input class="input inline-num" type="number" id="keep-days" min="1" max="30" step="1" value="2"></label>
+    <button class="btn" id="keep-save">Сохранить</button>
+    <button class="btn" id="prune-now">Очистить сейчас</button>
+    <button class="btn" id="vacuum-now" title="вернуть освобождённое место диску — база на это время занята, сборщик подождёт">Сжать файл базы</button>
+  </div>
+  <p class="muted">Журнал опросов, история стаканов и старые снимки листингов
+    хранятся столько дней; последний снимок каждой полосы — всегда. Журнал ордеров —
+    30 дней (по нему сделки помечаются «ордер бота»), завершённые ордера — 14 дней,
+    стоящие — всегда. История продаж не удаляется никогда. Очистка идёт сама раз
+    в час. Удалённое место база занимает заново, не раздуваясь; чтобы файл
+    уменьшился, нажми «Сжать файл базы».</p>
+  <div class="muted" id="storage-house"></div>
   <button class="btn" id="storage-reload">Обновить</button>
 </section>
 

@@ -113,8 +113,45 @@ function bytes(n) {
 const TABLE_NAMES = {
   sales: "история продаж", poll_log: "журнал опросов", order_events: "журнал ордеров",
   buy_orders: "стаканы", listing_depth: "листинги", trades: "сделки аккаунта",
-  our_orders: "наши ордера", items: "предметы",
+  our_orders: "наши ордера", items: "предметы", book_history: "история стаканов",
 };
+
+function storageStamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit",
+    hour: "2-digit", minute: "2-digit" });
+}
+
+function houseText(s) {
+  const out = [];
+  if (s.prune_pending) out.push("Очистка поставлена в очередь — сборщик выполнит в ближайшую минуту.");
+  if (s.prune) {
+    const r = s.prune.removed || {};
+    const parts = Object.keys(r).filter((k) => r[k])
+      .map((k) => `${TABLE_NAMES[k] || k} ${r[k].toLocaleString("ru-RU")}`);
+    out.push(`Последняя очистка ${storageStamp(s.prune.at)} (хранить ${s.prune.days} дн): `
+      + (parts.length ? "удалено " + parts.join(", ") : "удалять было нечего") + ".");
+  }
+  if (s.vacuum_pending) out.push("Сжатие поставлено в очередь.");
+  if (s.vacuum) {
+    out.push(s.vacuum.error
+      ? `Сжатие ${storageStamp(s.vacuum.at)} не удалось: ${s.vacuum.error}`
+      : `Сжатие ${storageStamp(s.vacuum.at)}: ${bytes(s.vacuum.before)} → ${bytes(s.vacuum.after)}.`);
+  }
+  return out.join(" ");
+}
+
+async function storageAction(body, note) {
+  const msg = document.getElementById("storage-house");
+  try {
+    await postJSON("/api/settings/storage", body, token());
+    msg.textContent = note;
+    setTimeout(loadStorage, 1500);
+  } catch (e) {
+    msg.textContent = "Ошибка: " + e.message;
+  }
+}
 
 async function loadStorage() {
   const box = document.getElementById("storage");
@@ -132,12 +169,28 @@ async function loadStorage() {
         box.lastChild.className = "err";
       }
     }
-    const rows = s.tables.filter((t) => t.rows).sort((a, b) => b.rows - a.rows)
-      .map((t) => `${TABLE_NAMES[t.table] || t.table} ≈ ${t.rows.toLocaleString("ru-RU")}`);
-    if (rows.length) line("Строк: " + rows.join(" · "));
+    const rows = s.tables.filter((t) => t.rows)
+      .sort((a, b) => (b.bytes || 0) - (a.bytes || 0) || b.rows - a.rows)
+      .map((t) => `${TABLE_NAMES[t.table] || t.table}: ${t.rows.toLocaleString("ru-RU")} строк`
+        + (t.bytes ? ` (${bytes(t.bytes)})` : ""));
+    if (rows.length) line(rows.join(" · "));
+    const keep = document.getElementById("keep-days");
+    if (keep && document.activeElement !== keep) keep.value = s.keep_days || 2;
+    const house = document.getElementById("storage-house");
+    if (house) house.textContent = houseText(s);
   } catch (e) {
     box.textContent = "Не удалось посчитать: " + e.message;
   }
 }
 document.getElementById("storage-reload").addEventListener("click", loadStorage);
+document.getElementById("keep-save").addEventListener("click", () =>
+  storageAction({ keep_days: document.getElementById("keep-days").value },
+    "Сохранено — применится при следующей очистке (раз в час) или по кнопке «Очистить сейчас»."));
+document.getElementById("prune-now").addEventListener("click", () =>
+  storageAction({ keep_days: document.getElementById("keep-days").value, prune: true },
+    "Очистка поставлена в очередь — сборщик выполнит в ближайшую минуту."));
+document.getElementById("vacuum-now").addEventListener("click", () => {
+  if (!confirm("Сжать файл базы? Это займёт до нескольких минут, сборщик на это время подождёт.")) return;
+  storageAction({ vacuum: true }, "Сжатие поставлено в очередь — сборщик выполнит в ближайшую минуту.");
+});
 loadStorage();
