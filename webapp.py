@@ -2511,7 +2511,7 @@ def api_profit_export():
     for t in reversed(db.all_trades()):
         if t.get("role") != pf.BUY:
             continue
-        mine = pf.by_bot(t, events)
+        mine = profit_report.is_bot(t, events)
         if only_bot and not mine:
             continue
         buys.append([msk(t.get("done_at") or t.get("created_at")),
@@ -2603,9 +2603,10 @@ def api_profit_forecasts_export():
         if t.get("role") != pf.BUY or t.get("float_value") is None:
             continue
         at = t.get("done_at") or t.get("created_at")
-        fc = db.forecast_for(t.get("market_hash_name"), t.get("float_value"),
-                             t.get("price"), profit_report._iso(at))
-        mine = pf.by_bot(t, events)
+        fc = profit_report._stored(t.get("forecast")) or db.forecast_for(
+            t.get("market_hash_name"), t.get("float_value"), t.get("price"),
+            profit_report._iso(at))
+        mine = profit_report.is_bot(t, events)
         if not fc and not mine:
             continue
         d = (fc or {}).get("data") or {}

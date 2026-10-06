@@ -320,6 +320,17 @@ class Database:
             # Items one order asks for; every order before this asked for one.
             self.conn.execute("ALTER TABLE our_orders ADD COLUMN quantity "
                               "INTEGER NOT NULL DEFAULT 1")
+        trade_cols = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(trades)").fetchall()}
+        if trade_cols and "by_bot" not in trade_cols:
+            # Kept on the trade itself: the order journal that tells whether a
+            # purchase was the bot's is cleared after a month, and the
+            # earnings a year back must still say which deals were its.
+            self.conn.execute("ALTER TABLE trades ADD COLUMN by_bot INTEGER")
+        if trade_cols and "forecast" not in trade_cols:
+            # The forecast in force when the bot bought it, copied from
+            # `forecasts` (kept half a year) so the comparison outlives it.
+            self.conn.execute("ALTER TABLE trades ADD COLUMN forecast TEXT")
         cols = {
             r["name"]
             for r in self.conn.execute("PRAGMA table_info(items)").fetchall()
@@ -781,6 +792,18 @@ class Database:
              t.get("price"), t.get("created_at"), t.get("done_at"), utcnow_iso()))
         self.conn.commit()
         return row is None or row["state"] != t.get("state")
+
+    def mark_trade(self, trade_id: str, by_bot: bool | None = None,
+                   forecast: dict | None = None) -> None:
+        """Write down, on the trade itself, what is only known for a while:
+        that an order of ours made it, and what that order expected."""
+        if by_bot is not None:
+            self.conn.execute("UPDATE trades SET by_bot = ? WHERE trade_id = ?",
+                              (1 if by_bot else 0, trade_id))
+        if forecast is not None:
+            self.conn.execute("UPDATE trades SET forecast = ? WHERE trade_id = ?",
+                              (json.dumps(forecast, ensure_ascii=False), trade_id))
+        self.conn.commit()
 
     def trade_states(self) -> dict[str, str]:
         return {r["trade_id"]: r["state"] for r in self.conn.execute(

@@ -44,13 +44,66 @@ def settings(db) -> dict:
             "hold_sweep_hours": hours}
 
 
-def attach_forecast(db, deal: dict) -> None:
+# A purchase this recent still has its order in the journal (kept 30 days):
+# "not the bot's" can be written down for good. Older and unmarked, the
+# journal may simply have been cleared - left unmarked rather than called wrong.
+SURE_DAYS = 25
+
+
+def _stored(raw) -> dict | None:
+    from .forecast import loads
+    return loads(raw) if isinstance(raw, str) else (raw or None)
+
+
+def remember(db, trades: list[dict], events) -> None:
+    """Copy onto each purchase, for good, what the journal and the forecasts
+    only keep for a while: whether an order of ours made it, and the forecast
+    it was bought on. Earnings a year back still know which deals were the
+    bot's, and how they compared with what it expected."""
+    from datetime import timedelta
+    recent = (datetime.now(timezone.utc) - timedelta(days=SURE_DAYS)).isoformat()
+    for t in trades:
+        if t.get("role") != pf.BUY:
+            continue
+        when = _iso(t.get("done_at") or t.get("created_at")) or ""
+        mine = t.get("by_bot")
+        if mine is None:
+            found = pf.by_bot(t, events)
+            if found or when >= recent:
+                db.mark_trade(t["trade_id"], by_bot=found)
+                t["by_bot"] = 1 if found else 0
+                mine = t["by_bot"]
+        if t.get("forecast") is None and (mine or mine is None):
+            fc = db.forecast_for(t.get("market_hash_name"), t.get("float_value"),
+                                 t.get("price"), when or None)
+            if fc:
+                keep = {"exit": fc.get("exit"), "at": fc.get("at"),
+                        "float_min": fc.get("float_min"),
+                        "float_max": fc.get("float_max"), "data": fc.get("data")}
+                db.mark_trade(t["trade_id"], forecast=keep)
+                t["forecast"] = keep
+                if mine is None:
+                    db.mark_trade(t["trade_id"], by_bot=True)
+                    t["by_bot"] = 1
+
+
+def is_bot(trade: dict, events) -> bool:
+    """Whether an order of ours made this purchase: as written on the trade,
+    or worked out from the journal while it still holds the order."""
+    if trade.get("by_bot") is not None:
+        return bool(trade["by_bot"])
+    return pf.by_bot(trade, events)
+
+
+def attach_forecast(db, deal: dict, stored=None) -> None:
     """What the bot expected a closed deal to sell for, and how far off it
-    was: the forecast in force when the order bought it (see forecast.py)."""
+    was: the forecast in force when the order bought it (see forecast.py) -
+    as copied onto the purchase, or looked up while it is still on file."""
     from .forecast import exit_gross
     deal["forecast_exit"] = deal["forecast_error"] = None
-    fc = db.forecast_for(deal["market_hash_name"], deal["float_value"],
-                         deal["bought"], _iso(deal["bought_at"]))
+    fc = _stored(stored) or db.forecast_for(
+        deal["market_hash_name"], deal["float_value"], deal["bought"],
+        _iso(deal["bought_at"]))
     if not fc:
         return
     data = fc.get("data") or {}
@@ -125,16 +178,19 @@ def build(db, fee: float, days: float = 0.0) -> dict:
                     if t["trade_id"] not in conf["excluded"]], fee)
     events = [e for e in db.order_events(limit=50000, include_dry=False)
               if e["ok"] and e["kind"] in ("place", "raise", "lower")]
+    remember(db, everything, events)
+    trades = {t["trade_id"]: t for t in everything}
 
     # Bought before the date and sold after goes too: the purchase is part of
     # what the date leaves out, and half a deal is no profit to report.
     counted_closed = [d for d in book.closed if counted(d["bought_at"])]
     closed = [d for d in counted_closed if (d["sold_at"] or "") >= since]
     for d in closed:
-        d["by_bot"] = pf.by_bot({"market_hash_name": d["market_hash_name"],
-                                 "float_value": d["float_value"],
-                                 "price": d["bought"]}, events)
-        attach_forecast(db, d)
+        buy = trades.get(d["buy_id"]) or {}
+        d["by_bot"] = is_bot(buy, events) if buy else pf.by_bot(
+            {"market_hash_name": d["market_hash_name"],
+             "float_value": d["float_value"], "price": d["bought"]}, events)
+        attach_forecast(db, d, buy.get("forecast"))
 
     holding = []
     # A purchase still in its trade is money already spent on a skin that is
@@ -154,7 +210,7 @@ def build(db, fee: float, days: float = 0.0) -> dict:
             "bought_at": bought_at,
             "days": (round((datetime.now(timezone.utc) - when).total_seconds()
                            / 86400.0, 1) if when else None),
-            "by_bot": pf.by_bot(t, events),
+            "by_bot": is_bot(t, events),
             "trade_id": t["trade_id"],
             "pending": t["trade_id"] in coming_ids,
             "state": t.get("state"),
@@ -167,9 +223,8 @@ def build(db, fee: float, days: float = 0.0) -> dict:
     for h in holding:
         if h.get("median") is not None:
             h["basis"] = f"{h['basis']} за {conf['estimate_days']} дн"
-        fc = db.forecast_for(h["market_hash_name"], h["float_value"], h["bought"],
-                             _iso(h["bought_at"])) if h.get("by_bot") else None
-        h["forecast_exit"] = fc["exit"] if fc else None
+        stored = _stored(trades.get(h["trade_id"], {}).get("forecast"))
+        h["forecast_exit"] = stored.get("exit") if stored else None
 
     # Newest first, whichever list a purchase came from: running trades were
     # appended after the finished ones and read upside down.

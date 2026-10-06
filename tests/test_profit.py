@@ -599,3 +599,37 @@ def test_the_forecasts_download_for_a_closer_look():
     assert "продан" in rows and "<v>120" in rows
     lots = z.read("xl/worksheets/sheet2.xml").decode()
     assert lots.count("<row ") == 3 and "<v>0.155</v>" in lots
+
+
+def test_the_bot_mark_and_the_forecast_outlive_the_journal():
+    """The order journal goes after a month and the forecasts after half a
+    year; a deal a year back must still say it was the bot's, and what it
+    was expected to fetch."""
+    from src.forecast import snapshot
+    from src.pricing import Band, Params
+    from src import profit_report
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    for t in parsed(trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+                    trade("2", "sell", 11000, at="2026-09-09T10:00:00Z")):
+        db.upsert_trade(t)
+    item = db.get_item_id(NAME) or db.add_item(NAME)
+    db.record_order_event(name=NAME, kind="place", ok=True, dry=False, source="plan",
+                          item_id=item, float_min=0.15, float_max=0.16, price=100.0)
+    db.record_forecast(order_id=1, item_id=item, name=NAME, float_min=0.15,
+                       float_max=0.16, price=100.0,
+                       data=snapshot(Band(float_min=0.15, float_max=0.16, market=120.0,
+                                          exit_net=117.6), Params(fee=0.02)))
+    db.conn.execute("UPDATE forecasts SET at = '2026-08-30T10:00:00+00:00'")
+    db.conn.commit()
+    first = profit_report.build(db, 0.02, 0)["closed"][0]
+    assert first["by_bot"] and first["forecast_exit"] == 120.0
+
+    db.conn.execute("DELETE FROM order_events")
+    db.conn.execute("DELETE FROM forecasts")
+    db.conn.commit()
+    later = profit_report.build(db, 0.02, 0)["closed"][0]
+    assert later["by_bot"], "kept on the purchase itself"
+    assert later["forecast_exit"] == 120.0 and later["forecast_error"] == -8.3
+    db.close()
