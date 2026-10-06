@@ -107,6 +107,9 @@ class Params:
     # Standard errors the careful median takes off: 1, half, or none (the
     # window and today's prices still apply).
     careful: float = 1.0
+    # Days of sales the sell queue is taken to clear by while ours is locked
+    # (see ladder.Params.queue_days). Seven is the whole lock.
+    queue_days: float = 7.0
 
     def ladder_params(self):
         from . import ladder as _ladder
@@ -115,7 +118,8 @@ class Params:
                               min_sample=self.min_sample,
                               max_drop=self.max_drop,
                               adaptive=bool(self.adaptive),
-                              careful=float(self.careful))
+                              careful=float(self.careful),
+                              queue_days=float(self.queue_days))
 
 
 @dataclass

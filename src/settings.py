@@ -27,6 +27,7 @@ PARAM_BOUNDS = {
     "max_drop": (0.0, 1.0),
     "adaptive": (0, 1),
     "careful": (0.0, 1.0),
+    "queue_days": (0.0, 7.0),
 }
 PARAM_KEYS = (
     ("an_fee", "fee", float), ("an_min_margin", "min_margin", float),
@@ -35,6 +36,7 @@ PARAM_KEYS = (
     ("an_max_drop", "max_drop", float),
     ("an_adaptive", "adaptive", int),
     ("an_careful", "careful", float),
+    ("an_queue_days", "queue_days", float),
 )
 
 LIMIT_BOUNDS = {

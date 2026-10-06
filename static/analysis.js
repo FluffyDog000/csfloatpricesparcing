@@ -1088,6 +1088,7 @@ float, который принимает ордер. Ниже «ожид.» — 
     $("p-sample").value = p.min_sample;
     $("p-drop").value = Math.round((p.max_drop || 0) * 1000) / 10;
     if ($("p-adaptive")) $("p-adaptive").checked = !!p.adaptive;
+    if ($("p-queue-days")) $("p-queue-days").value = p.queue_days == null ? 7 : p.queue_days;
     if ($("p-careful")) {
       const k = p.careful == null ? 1 : Number(p.careful);
       $("p-careful").value = k >= 0.75 ? "1" : (k >= 0.25 ? "0.5" : "0");
@@ -1368,6 +1369,7 @@ float, который принимает ордер. Ниже «ожид.» — 
         an_max_drop: (parseFloat($("p-drop").value) || 0) / 100,
         an_adaptive: $("p-adaptive") && $("p-adaptive").checked ? 1 : 0,
         an_careful: $("p-careful") ? $("p-careful").value : 1,
+        an_queue_days: $("p-queue-days") ? $("p-queue-days").value : 7,
       an_total_capital: $("l-total").value,
       an_per_item_capital: $("l-item").value,
       an_max_orders: $("l-max").value,

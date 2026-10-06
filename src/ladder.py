@@ -72,6 +72,11 @@ class Params:
     window_days: float = 16.0    # how much history the medians are read from
     min_sample: int = 8          # sales needed before a median means anything
     lock_days: float = LOCK_DAYS
+    # Days of sales counted as clearing the sell queue while ours is locked.
+    # The lock is seven, but the queue is not only drained: others list their
+    # own skins over the same week, and the cheap lots that went are replaced.
+    # Fewer days here is that inflow, taken as a discount on the drain.
+    queue_days: float = LOCK_DAYS
     top_step: float = TOP_STEP
     # How far the skin may have fallen over the last week, float-adjusted,
     # before no rung of it is opened. 0 turns the check off. See `trend`.
@@ -542,7 +547,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     # own band, not the rung's reach.
     q_lo, q_hi = lot_span or (max(low, top - params.top_step), top)
     rate = sale_rate(sales, q_lo, q_hi, params.window_days)
-    rung.lots_cleared = rate * params.lock_days
+    rung.lots_cleared = rate * min(params.queue_days, params.lock_days)
     rung.lot_lo, rung.lot_hi = q_lo, q_hi
     rung.sell_rate = rate
     rung.own = sum(1 for f in own if f is not None and q_lo < f <= q_hi + 1e-9)

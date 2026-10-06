@@ -193,3 +193,40 @@ def test_the_lot_prices_stay_out_of_the_payload_that_feeds_the_page():
     from src.pricing import Band
 
     assert not hasattr(Band(float_min=0.15, float_max=0.17), "asks")
+
+
+def test_fewer_queue_days_clear_fewer_lots_and_price_the_exit_lower():
+    """Others list their own skins while ours is locked: counting four days of
+    sales as gone rather than seven leaves us further back in the queue."""
+    from src.pricing import Params, plan
+
+    sales = [{"price": 110.0, "float_value": 0.165, "age_days": i % 14 + 0.5}
+             for i in range(28)]                       # two a day
+    depth = [{"float_min": 0.15, "float_max": 0.17, "listings": 20,
+              "cheapest": 100.0,
+              "asks": [[100.0 + i, 0.165] for i in range(20)]}]
+
+    def band(days):
+        out = plan(sales, [], (0.15, 0.38), depth,
+                   Params(window_days=14.0, min_sample=5, queue_days=days))
+        return next(b for b in out if b.float_max == 0.17)
+
+    week, four, none = band(7.0), band(4.0), band(0.0)
+    assert week.lots_cleared == 14.0 and four.lots_cleared == 8.0
+    assert none.lots_cleared == 0.0
+    # Eleven lots under the median: a week of sales clears them all, four
+    # days leave us behind the ninth, none behind the first.
+    assert week.queue_price is None
+    assert 107.0 <= four.queue_price < 108.0   # behind the ninth, undercut by a step
+    assert 99.0 <= none.queue_price < 100.0
+    assert week.ceiling > four.ceiling > none.ceiling
+
+
+def test_queue_days_are_saved_and_bounded():
+    from tests.test_analysis_page import _stocked
+    c, _ = _stocked()
+    assert c.get("/api/analysis").get_json()["params"]["queue_days"] == 7.0
+    body = c.post("/api/analysis/params", json={"an_queue_days": "4"}).get_json()
+    assert body["params"]["queue_days"] == 4.0
+    body = c.post("/api/analysis/params", json={"an_queue_days": "30"}).get_json()
+    assert body["params"]["queue_days"] == 7.0

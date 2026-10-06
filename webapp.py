@@ -1920,6 +1920,7 @@ def api_analysis_plan_xlsx():
         ["выгружено (МСК)", stamp.strftime("%Y-%m-%d %H:%M")],
         ["расчёт цен", "новый" if params.adaptive else "старый"],
         ["осторожность медианы, погрешностей", params.careful],
+        ["очередь расходится за, дней", params.queue_days],
         ["окно истории, дн", params.window_days],
         ["минимальная выборка", params.min_sample],
         ["минимальная маржа, %", pct(params.min_margin)],
