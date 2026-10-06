@@ -2573,6 +2573,115 @@ def api_profit_export():
         headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.route("/api/profit/forecasts.xlsx")
+def api_profit_forecasts_export():
+    """Everything the forecasts rest on, for working out where the pricing is
+    wrong: every purchase an order of ours made, the forecast in force when it
+    bought (with the queue's lots and floats and the settings), what it sold
+    for or how it is valued now, and the summary by group."""
+    from src import profit as pf
+    from src import profit_report
+    from src.forecast import exit_gross
+    from src.pacing import parse_iso
+    from src.xlsx import workbook
+
+    db = get_db()
+    fee = _analysis_params(db).fee
+    data = profit_report.build(db, fee, 0)
+    sold = {d["buy_id"]: d for d in data["closed"]}
+    held = {h["trade_id"]: h for h in data["holding"]}
+    events = [e for e in db.order_events(limit=50000, include_dry=False)
+              if e["ok"] and e["kind"] in ("place", "raise", "lower")]
+
+    def msk(iso):
+        when = parse_iso(iso) if iso else None
+        return ((when + timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
+                if when else None)
+
+    rows, lots = [], []
+    for t in db.all_trades():
+        if t.get("role") != pf.BUY or t.get("float_value") is None:
+            continue
+        at = t.get("done_at") or t.get("created_at")
+        fc = db.forecast_for(t.get("market_hash_name"), t.get("float_value"),
+                             t.get("price"), profit_report._iso(at))
+        mine = pf.by_bot(t, events)
+        if not fc and not mine:
+            continue
+        d = (fc or {}).get("data") or {}
+        st = d.get("settings") or {}
+        deal = sold.get(t["trade_id"])
+        hold = held.get(t["trade_id"])
+        expected = (fc or {}).get("exit") or exit_gross(d)
+        rows.append([
+            t["trade_id"], msk(at), t.get("market_hash_name"), t.get("float_value"),
+            t.get("paint_seed"), t.get("price"),
+            fc["float_min"] if fc else None, fc["float_max"] if fc else None,
+            msk(fc["at"]) if fc else None,
+            expected, d.get("market"), d.get("market_plain"), d.get("market_then"),
+            d.get("queue_price"), d.get("priced_from"), d.get("sample"),
+            d.get("window"), d.get("shift"), d.get("queue"), d.get("lots_cleared"),
+            d.get("margin_expected"), d.get("t_sell"), d.get("sell_rate"),
+            d.get("trend"), st.get("careful"), st.get("queue_days"), st.get("adaptive"),
+            "продан" if deal else ("в наличии" if hold else "—"),
+            msk(deal["sold_at"]) if deal else None,
+            deal["sold"] if deal else None,
+            (round((deal["sold"] - expected) / expected * 100, 1)
+             if deal and expected else None),
+            hold.get("estimate") if hold else None,
+            hold.get("median") if hold else None,
+            hold.get("ahead") if hold else None,
+            hold.get("cleared") if hold else None,
+            hold.get("own_ahead") if hold else None,
+        ])
+        for p, f in d.get("queue_lots") or []:
+            lots.append([t["trade_id"], t.get("market_hash_name"),
+                         t.get("float_value"), p, f])
+
+    acc = [[g["group"], g["count"], g.get("median"), g.get("mean"),
+            g.get("mean_abs"), g.get("below")] for g in data["accuracy"]["groups"]]
+    stamp = datetime.now(timezone.utc) + timedelta(hours=3)
+    p = _analysis_params(db)
+    body = workbook([
+        ("Покупки ботом",
+         ["id сделки", "куплено (МСК)", "предмет", "float", "паттерн", "цена покупки $",
+          "ордер от", "ордер до", "прогноз записан (МСК)", "ожидалось продать $",
+          "медиана $", "медиана без поправки $", "медиана до пересчёта $",
+          "цена по очереди $", "цена от", "продаж у верха", "окно, дн",
+          "сдвиг уровня", "лотов в очереди", "уйдёт за блокировку",
+          "ожид. маржа", "дней на продаже", "продаж в день (полоса продажи)",
+          "тренд недели", "осторожность", "очередь, дн", "новый расчёт",
+          "статус", "продано (МСК)", "продано за $", "отклонение %",
+          "оценка сейчас $", "медиана сейчас $", "впереди сейчас",
+          "уйдёт до разблок.", "свои впереди"],
+         rows, [16, 17, 44, 12, 8, 11, 8, 8, 17, 12, 10, 12, 12, 11, 9, 9, 7, 9,
+                9, 10, 9, 9, 11, 9, 9, 9, 9, 10, 17, 11, 10, 11, 11, 9, 10, 9]),
+        ("Лоты очереди при покупке",
+         ["id сделки", "предмет", "наш float", "цена лота $", "float лота"],
+         lots, [16, 44, 12, 11, 12]),
+        ("Прогноз против факта",
+         ["группа", "сделок", "медиана откл. %", "среднее откл. %",
+          "средняя ошибка ±%", "продано дешевле прогноза, %"], acc,
+         [26, 8, 15, 15, 17, 24]),
+        ("Настройки", ["параметр", "значение"], [
+            ["выгружено (МСК)", stamp.strftime("%Y-%m-%d %H:%M")],
+            ["комиссия, %", round(fee * 100, 2)],
+            ["минимальная маржа, %", round(p.min_margin * 100, 2)],
+            ["окно истории, дн", p.window_days],
+            ["минимальная выборка", p.min_sample],
+            ["новый расчёт", "да" if p.adaptive else "нет"],
+            ["осторожность медианы", p.careful],
+            ["очередь расходится за, дн", p.queue_days],
+            ["оценка «в наличии» за, дн", profit_report.settings(db)["estimate_days"]],
+            ["покупок ботом", len(rows)],
+        ], [30, 18]),
+    ])
+    name = f"forecasts_{stamp.strftime('%Y-%m-%d_%H%M')}.xlsx"
+    return Response(body, mimetype=(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 def _profit_settings(db) -> dict:
     from src import profit_report
     return profit_report.settings(db)

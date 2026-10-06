@@ -568,3 +568,34 @@ def test_a_sale_is_set_against_what_the_bot_expected_when_it_bought():
     assert groups["до 15 продаж у верха"]["count"] == 1
     assert groups["40+ продаж"]["count"] == 0
     db.close()
+
+
+def test_the_forecasts_download_for_a_closer_look():
+    import io
+    import zipfile
+
+    from src.forecast import snapshot
+    from src.pricing import Band, Params
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    for t in parsed(trade("1", "buy", 10000, at="2026-09-01T10:00:00Z"),
+                    trade("2", "sell", 11000, at="2026-09-09T10:00:00Z"),
+                    trade("3", "buy", 9000, flt=0.2, at="2026-09-20T10:00:00Z")):
+        db.upsert_trade(t)
+    item = db.get_item_id(NAME) or db.add_item(NAME)
+    band = Band(float_min=0.15, float_max=0.16, market=120.0, exit_net=117.6,
+                sample=9, queue_lots=[[118.0, 0.152], [119.0, 0.155]])
+    db.record_forecast(order_id=1, item_id=item, name=NAME, float_min=0.15,
+                       float_max=0.16, price=100.0, data=snapshot(band, Params()))
+    db.conn.execute("UPDATE forecasts SET at = '2026-08-30T10:00:00+00:00'")
+    db.conn.commit()
+    db.close()
+    r = c.get("/api/profit/forecasts.xlsx")
+    assert r.status_code == 200 and "forecasts_" in r.headers["Content-Disposition"]
+    z = zipfile.ZipFile(io.BytesIO(r.data))
+    rows = z.read("xl/worksheets/sheet1.xml").decode()
+    assert rows.count("<row ") == 2, "only the purchase the forecast covers"
+    assert "продан" in rows and "<v>120" in rows
+    lots = z.read("xl/worksheets/sheet2.xml").decode()
+    assert lots.count("<row ") == 3 and "<v>0.155</v>" in lots
