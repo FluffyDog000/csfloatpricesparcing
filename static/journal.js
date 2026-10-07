@@ -233,6 +233,33 @@
       tile.appendChild(node("span", "", label));
       box.appendChild(tile);
     });
+    outbidWhy(read);
+  }
+
+  /** Why the outbid orders stand where they do. "62 перебиты" alone read as
+   *  a defence that is not working, when most of them are a rival above our
+   *  ceiling - a price the bot refuses to pay on purpose. */
+  function whyOutbid(r) {
+    const v = r.verdict || {};
+    if (r.top >= r.ceiling - 0.005) return "ceiling";
+    if (v.held_back) return "held";
+    if (/очередь разойдётся/.test(v.reason || "")) return "queue";
+    return "next";
+  }
+
+  function outbidWhy(read) {
+    const el = $("j-outbid-why");
+    if (!el) return;
+    const out = read.filter((r) => !r.first);
+    if (!out.length) { el.textContent = ""; return; }
+    const n = { ceiling: 0, held: 0, queue: 0, next: 0 };
+    out.forEach((r) => { n[whyOutbid(r)] += 1; });
+    const parts = [];
+    if (n.ceiling) parts.push(`соперник выше нашего потолка — ${n.ceiling} (не переплачиваем, стоим позади)`);
+    if (n.next) parts.push(`ответим на ближайшей проверке защиты — ${n.next}`);
+    if (n.queue) parts.push(`очередь скоро разойдётся, ждём — ${n.queue}`);
+    if (n.held) parts.push(`правка не отправлена: CSFloat отказал по балансу — ${n.held}`);
+    el.textContent = `Почему перебиты ${out.length}: ` + parts.join(" · ") + ".";
   }
 
   // -- problems ----------------------------------------------------------------

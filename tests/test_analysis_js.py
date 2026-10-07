@@ -870,3 +870,26 @@ def test_a_band_says_what_the_new_pricing_would_do():
     assert "окно 30 дн" in text and "−1.2%" in text
     assert "по-новому: ставка $30.10, потолок $31.00 — проходит" in text
     assert "По-новому было бы 2 полос" in text
+
+
+def test_outbid_orders_are_counted_by_why():
+    """"62 перебиты" read as a defence not working, when most stood behind a
+    rival above the ceiling on purpose."""
+    pos = _position(
+        _row(id=1, first=False, ahead=1, top=12.5),                    # above ceiling
+        _row(id=2, first=False, ahead=1, top=12.5),
+        _row(id=3, first=False, ahead=1, top=10.5),                    # answer next pass
+        _row(id=4, first=False, ahead=2, top=10.5, verdict={
+            "kind": "keep", "at": _ago(2), "reason":
+            "перебили, но очередь разойдётся за 3 ч — ждём"}),
+        _row(id=5, first=False, ahead=1, top=10.5, verdict={
+            "kind": "raise", "at": _ago(2), "reason": "перебиваем",
+            "held_back": "CSFloat отказывает «не хватило баланса»"}),
+        _row(id=6))                                                    # first
+    got = _run_script("static/journal.js", _journal([], defend=True, positions=pos))
+    why = got["outbidWhy"]
+    assert "Почему перебиты 5" in why
+    assert "выше нашего потолка — 2" in why
+    assert "ближайшей проверке защиты — 1" in why
+    assert "очередь скоро разойдётся, ждём — 1" in why
+    assert "по балансу — 1" in why

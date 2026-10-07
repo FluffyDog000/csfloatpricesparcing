@@ -141,6 +141,7 @@ function deepText(node) {
       .map((id) => deepText(nodes[id])).join(" | "),
     tiles: (nodes["j-summary"] || el("div")).children.length,
     tilesText: deepText(nodes["j-summary"]),
+    outbidWhy: deepText(nodes["j-outbid-why"]),
     weakest: deepText(nodes["j-weakest-info"]),
     defence: deepText(nodes["j-state"]),
     sync: deepText(nodes["j-sync-state"]),
