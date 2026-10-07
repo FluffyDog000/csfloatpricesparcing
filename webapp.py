@@ -2345,8 +2345,10 @@ def api_analysis_positions():
         # before ours or after it depending on who placed first, which the
         # book does not say, and counting it is the reading that does not
         # flatter us.
-        above = ahead_of(book, lo, hi, price)
-        top = rival_bid(book, hi)
+        from src.ladder import plain
+        competing = plain(book)
+        above = ahead_of(competing, lo, hi, price)
+        top = rival_bid(competing, hi)
         ahead = sum(int(o.get("qty") or 1) for o in above)
         # The ceiling stored with the order is the one it was last sent with;
         # the defence re-scores it every pass, and the one it last arrived at

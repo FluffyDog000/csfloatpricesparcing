@@ -133,6 +133,27 @@ def price_to_dollars(value: Any) -> float | None:
     return round(number / 100.0, 2)
 
 
+# Filter keys that only narrow the float: everything else an order carries
+# (a pattern, a paint seed list, stickers, an expression) makes it an order
+# for particular skins, not for whatever a seller has.
+FLOAT_FILTER_KEYS = {"float_value", "min_float", "max_float"}
+
+
+def is_filtered(record: dict) -> bool:
+    """An order that asks for more than a float range: a pattern, a list of
+    seeds, stickers, an advanced expression. A blue-gem order for $181 on a
+    $48 glove is not bidding for the glove a seller hands us."""
+    for key in ("hybrid_properties", "expression"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if k not in FLOAT_FILTER_KEYS and v not in (None, "", [], {}):
+                    return True
+    return False
+
+
 def parse_orders(payload: Any) -> list[dict]:
     """Normalize the response into rows ready for storage."""
     out = []
@@ -148,6 +169,7 @@ def parse_orders(payload: Any) -> list[dict]:
             "float_min": _to_float(first(record, *FLOAT_MIN_PATHS)),
             "float_max": _to_float(first(record, *FLOAT_MAX_PATHS)),
             "paint_seed": _to_int(first(record, *SEED_PATHS)),
+            "filtered": is_filtered(record),
         })
     out.sort(key=lambda r: r["price"], reverse=True)
     return out

@@ -312,8 +312,11 @@ def ahead_of(book: Iterable[dict], lo: float, hi: float,
     $23 that was first for everything from 0.01 up - and the defence, seeing
     "outbid to $28, above the ceiling", took down orders that were winning.
     """
+    from .ladder import competes
     out = []
     for o in book:
+        if not competes(o):
+            continue
         o_lo = o.get("float_min")
         o_hi = o.get("float_max")
         o_lo = 0.0 if o_lo is None else float(o_lo)
@@ -488,8 +491,11 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
                 order_id=row.get("id"), remote_id=row.get("remote_id")))
             continue
 
-        # Whoever would take the item we get, at our price or above.
-        rivals = ahead_of(book, key[0], key[1], price)
+        # Whoever would take the item we get, at our price or above - among
+        # the orders that would take an ordinary skin at all.
+        from .ladder import plain
+        book_here = plain(book, band.market if band is not None else None)
+        rivals = ahead_of(book_here, key[0], key[1], price)
         ahead = sum(int(o.get("qty") or 1) for o in rivals)
 
         if band.ceiling is None:
@@ -521,7 +527,7 @@ def reconcile(item: str, wanted: Sequence[Band], existing: Sequence[dict],
             # First - and maybe by more than it takes. A rival who stood just
             # under us and left leaves us paying for a fight that is over: at
             # $100 over a $90 book, every fill costs ten dollars it need not.
-            lead = lowest_lead(book, key[1])
+            lead = lowest_lead(book_here, key[1])
             if lead is not None and price - lead >= LOWER_STEPS * increment(lead) - 1e-9:
                 actions.append(Action(
                     LOWER, item, key[0], key[1], lead, new_ceiling,

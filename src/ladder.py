@@ -241,6 +241,33 @@ def in_range(rows: Sequence[dict], lo: float, hi: float) -> list[dict]:
     return out
 
 
+# A bid more than this many times the skin's price is not bidding for the
+# skin a seller hands over: it is a pattern or sticker order whose filter the
+# book did not show us. Blue-gem orders at $181-198 on a $48 glove read as
+# rivals "outbidding" every order of ours.
+OUTLIER = 2.0
+
+
+def competes(order: dict) -> bool:
+    """Whether an order would take an ordinary skin: not one asking for a
+    pattern, a seed or anything beyond a float range."""
+    return not order.get("filtered") and order.get("paint_seed") is None
+
+
+def plain(orders: Sequence[dict], market: float | None = None) -> list[dict]:
+    """The orders that compete for an ordinary skin. Filtered ones go, and so
+    do bids above OUTLIER times the price - the skin's market price when
+    known, else the median bid of the book (three or more bids)."""
+    rows = [o for o in orders if competes(o)]
+    ref = market
+    if not ref:
+        prices = sorted(float(o.get("price") or 0) for o in rows)
+        ref = prices[len(prices) // 2] if len(prices) >= 3 else None
+    if not ref:
+        return rows
+    return [o for o in rows if float(o.get("price") or 0) <= OUTLIER * ref]
+
+
 def rival_bid(orders: Sequence[dict], f: float) -> float:
     """The best standing bid that would accept an item at this float.
 
@@ -250,6 +277,8 @@ def rival_bid(orders: Sequence[dict], f: float) -> float:
     """
     best = 0.0
     for order in orders:
+        if not competes(order):
+            continue
         lo = order.get("float_min")
         hi = order.get("float_max")
         lo = 0.0 if lo is None else float(lo)
@@ -634,6 +663,7 @@ def evaluate(top: float, sales: Sequence[dict], orders: Sequence[dict],
     # rival scoped to a sliver of it takes a sliver of the flow, not the rung.
     # Judging every rung against the range's best bid rejected all 23 tops of
     # a live item because one order covered 0.15-0.16.
+    orders = plain(orders, rung.market)
     rung.rival = rival_bid(orders, top)
 
     if rung.rival > 0:

@@ -371,6 +371,11 @@ function floatBound(v) {
 }
 
 function orderFilter(o) {
+  if (o.filtered) {
+    // A pattern, seeds, stickers: an order for particular skins, which the
+    // bot does not count as a rival for an ordinary one.
+    return '<span class="scoped" title="ордер на особые скины — паттерн, сиды или наклейки; бот не считает его соперником">паттерн / особый</span>';
+  }
   if (o.float_min !== null || o.float_max !== null) {
     const lo = o.float_min !== null ? floatBound(o.float_min) : "0";
     const hi = o.float_max !== null ? floatBound(o.float_max) : "1";

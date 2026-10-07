@@ -320,6 +320,13 @@ class Database:
             # Items one order asks for; every order before this asked for one.
             self.conn.execute("ALTER TABLE our_orders ADD COLUMN quantity "
                               "INTEGER NOT NULL DEFAULT 1")
+        book_cols = {r["name"] for r in self.conn.execute(
+            "PRAGMA table_info(buy_orders)").fetchall()}
+        if book_cols and "filtered" not in book_cols:
+            # An order for particular skins - a pattern, stickers - which
+            # does not compete for the ones we would be handed.
+            self.conn.execute("ALTER TABLE buy_orders ADD COLUMN filtered "
+                              "INTEGER NOT NULL DEFAULT 0")
         trade_cols = {r["name"] for r in self.conn.execute(
             "PRAGMA table_info(trades)").fetchall()}
         if trade_cols and "by_bot" not in trade_cols:
@@ -628,11 +635,11 @@ class Database:
         self.conn.execute("DELETE FROM buy_orders WHERE item_id = ?", (item_id,))
         self.conn.executemany(
             "INSERT INTO buy_orders (item_id, order_id, price, qty, float_min, "
-            "float_max, paint_seed, position, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "float_max, paint_seed, position, fetched_at, filtered) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(item_id, o.get("id"), o["price"], o.get("qty") or 1,
               o.get("float_min"), o.get("float_max"), o.get("paint_seed"),
-              i, now)
+              i, now, 1 if o.get("filtered") else 0)
              for i, o in enumerate(orders)],
         )
         self.conn.execute(
@@ -1129,7 +1136,7 @@ class Database:
     def buy_orders(self, item_id: int) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT order_id, price, qty, float_min, float_max, paint_seed, "
-            "fetched_at FROM buy_orders WHERE item_id = ? ORDER BY position",
+            "fetched_at, filtered FROM buy_orders WHERE item_id = ? ORDER BY position",
             (item_id,)).fetchall()
         return [dict(r) for r in rows]
 
