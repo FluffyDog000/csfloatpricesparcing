@@ -1,9 +1,10 @@
 """How many orders may still be created today.
 
-CSFloat allows 200 order creations a day per key, the day counted from the
+CSFloat allowed 200 order creations a day per key, the day counted from the
 first creation; amends and cancels come out of a separate, far larger count.
-A successful creation carries no counter in its reply - only a refusal does -
-so the bot counts its own: every order it placed in the last 24 hours.
+A reply that carries CSFloat's counter (x-ratelimit-limit on a create) sets
+the limit - in October 2026 it read 2000. Without one the bot counts its own:
+every order it placed in the last 24 hours, against 200.
 
 A rolling day is the cautious reading of a fixed one. CSFloat's window began
 at most a day ago, so it holds no more creations than the last 24 hours do:
@@ -32,7 +33,8 @@ def status(db, now: datetime | None = None) -> dict:
                                        since=since)
             if e["ok"] and e["kind"] == "place"]
     used = len(made)
-    left = max(DAILY_CREATES - used, 0)
+    limit = DAILY_CREATES
+    left = max(limit - used, 0)
     reset = None
     if made:
         oldest = min(parse_iso(e["at"]) for e in made if parse_iso(e["at"]))
@@ -48,10 +50,15 @@ def status(db, now: datetime | None = None) -> dict:
             continue
         at = row.get("reset")
         if at and float(at) > now.timestamp():
+            # CSFloat's own counter wins both ways: in October 2026 it
+            # started sending the create limit, and it read 2000, not 200.
+            if row.get("limit"):
+                limit = int(row["limit"])
+                left = max(limit - used, 0)
             left = min(left, int(row["remaining"]))
             reset = datetime.fromtimestamp(float(at), timezone.utc) \
                 .replace(microsecond=0).isoformat()
-    return {"limit": DAILY_CREATES, "used": used, "left": left, "reset": reset}
+    return {"limit": limit, "used": used, "left": left, "reset": reset}
 
 
 def cap_places(actions: list[dict], left: int) -> tuple[list[dict], int]:

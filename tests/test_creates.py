@@ -50,6 +50,24 @@ def test_what_csfloat_said_wins_over_the_count():
     db.close()
 
 
+def test_the_limit_csfloat_reports_replaces_the_200():
+    from src import creates
+
+    db = _db()
+    _placed(db, 3)
+    later = (datetime.now(timezone.utc) + timedelta(hours=5)).timestamp()
+    db.set_setting("main_key_state", json.dumps([
+        {"kind": "create", "remaining": 1990, "limit": 2000, "reset": later}]))
+    got = creates.status(db)
+    assert got["limit"] == 2000 and got["left"] == 1990
+    # A stale report (reset already past) is ignored: back to the 200.
+    db.set_setting("main_key_state", json.dumps([
+        {"kind": "create", "remaining": 1990, "limit": 2000,
+         "reset": later - 86400}]))
+    assert creates.status(db)["limit"] == 200
+    db.close()
+
+
 def test_places_are_capped_best_first_and_nothing_else_is():
     from src.creates import cap_places
 
