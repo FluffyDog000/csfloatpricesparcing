@@ -53,6 +53,24 @@ AMEND_BODY = (b'{"max_price": 100, "quantity": 1,'
               b' "min_float": 0.15, "max_float": 0.16}')
 
 
+def normalized(proxy: str) -> str:
+    """Строки, как их выдают продавцы прокси, в вид http://логин:пароль@адрес:порт:
+    адрес:порт:логин:пароль, логин:пароль:адрес:порт, логин:пароль@адрес:порт."""
+    text = (proxy or "").strip()
+    if not text or "://" in text:
+        return text
+    if "@" in text:
+        return "http://" + text
+    parts = text.split(":")
+    if len(parts) == 4:
+        # Адрес — тот, за которым порт и в котором есть точка.
+        tail = parts[3].isdigit() and "." in parts[2] and not (
+            parts[1].isdigit() and "." in parts[0])
+        user, password, host, port = parts if tail else parts[2:] + parts[:2]
+        return f"http://{user}:{password}@{host}:{port}"
+    return "http://" + text
+
+
 def masked(proxy: str) -> str:
     """The proxy as printed: the password replaced, so the output can be
     pasted anywhere."""
@@ -248,7 +266,9 @@ def console() -> None:
     """Без окна: на сервере без графики tkinter обычно не установлен."""
     import getpass
     key = getpass.getpass("API-ключ (ввод не отображается): ").strip()
-    proxy = input("Прокси (Enter — напрямую): ").strip()
+    # Скрытым вводом: в строке прокси пароль, а экран терминала часто
+    # фотографируют.
+    proxy = normalized(getpass.getpass("Прокси (ввод не отображается; Enter — напрямую): "))
     print()
     print(probe(key, proxy) if key else "Ключ пустой.")
 
@@ -297,7 +317,7 @@ def main() -> None:
         button.config(state="disabled")
         out.delete("1.0", "end")
         out.insert("end", "Отправляю шесть запросов…")
-        proxy = proxy_entry.get().strip()
+        proxy = normalized(proxy_entry.get())
         # В отдельном потоке, чтобы окно не зависало, пока ждём ответ.
         threading.Thread(
             target=lambda: root.after(0, show_result, probe(key, proxy)),
