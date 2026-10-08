@@ -12,11 +12,15 @@ http://user:pass@host:port, socks5://..., host:port:user:pass):
   5. история продаж без ключа — сколько квоты адреса уже потрачено
      (x-ratelimit-remaining сразу низкий = адресом пользуется кто-то ещё).
 
-Ключ берётся первый из keys.txt (или --key-file), печатается только его
-отпечаток. Пароль прокси в выводе заменён на ***.
+ВАЖНО. CSFloat разрешает одному ключу 2–4 адреса. Ключ, с которым уже
+работает бот, с новых адресов получает «429 too many IPs» — поэтому ключ здесь
+только ОТДЕЛЬНЫЙ, которого нет в keys.txt и в .env: файл с одним ключом через
+--key-file. И проверять не больше 2–3 прокси на этот ключ. При первом же
+«too many IPs» скрипт останавливается.
 
-    .venv/bin/python tools/proxy_listings_test.py webshare.txt
-    .venv/bin/python tools/proxy_listings_test.py webshare.txt --requests 30 --pause 2
+Печатается только отпечаток ключа. Пароль прокси в выводе заменён на ***.
+
+    .venv/bin/python tools/proxy_listings_test.py webshare.txt --key-file /root/test_key.txt
 """
 from __future__ import annotations
 
@@ -63,6 +67,15 @@ def get(session, url, proxy, headers=None, timeout=20.0):
     return resp, time.monotonic() - started
 
 
+class TooManyIps(Exception):
+    pass
+
+
+def _ip_complaint(resp) -> bool:
+    return resp.status_code == 429 and "too many" in resp.text.lower() \
+        and "ip" in resp.text.lower()
+
+
 def check(proxy: str, key: str, n: int, pause: float) -> None:
     print(f"\n=== {masked(proxy)} ===")
     s = requests.Session()
@@ -102,6 +115,8 @@ def check(proxy: str, key: str, n: int, pause: float) -> None:
         elif r.status_code in (403, 429):
             print(f"  листинги #{i + 1}: HTTP {r.status_code} · {limits(r)} · "
                   f"{r.text[:120]!r}")
+            if _ip_complaint(r):
+                raise TooManyIps()
         time.sleep(pause)
     ok = codes.get(200, 0)
     print(f"  листинги (страница до 50 лотов) ×{n}: ответы {codes}")
@@ -146,24 +161,39 @@ def check(proxy: str, key: str, n: int, pause: float) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("proxies", help="файл с прокси, по одному в строке")
-    ap.add_argument("--key-file", default=None, help="по умолчанию keys.txt из настроек")
+    ap.add_argument("--key-file", required=True,
+                    help="файл с ОДНИМ отдельным ключом, которого нет в keys.txt и .env")
+    ap.add_argument("--max-proxies", type=int, default=3,
+                    help="не больше стольких прокси на ключ (CSFloat разрешает 2–4)")
     ap.add_argument("--requests", type=int, default=10, help="запросов листингов на прокси")
     ap.add_argument("--pause", type=float, default=3.0, help="пауза между ними, с")
     args = ap.parse_args()
 
     cfg = load_config()
-    keys = read_keys(args.key_file or cfg.http.keys_file) or \
-        ([cfg.http.api_key] if cfg.http.api_key else [])
+    keys = read_keys(args.key_file)
     if not keys:
-        sys.exit("Нет ключа: ни keys.txt, ни CSFLOAT_API_KEY")
+        sys.exit("В файле нет ключа")
     key = keys[0]
+    working = set(read_keys(cfg.http.keys_file)) | ({cfg.http.api_key} if cfg.http.api_key else set())
+    if key in working:
+        sys.exit("Этот ключ уже использует бот (keys.txt или .env). С новых адресов CSFloat "
+                 "ответит «429 too many IPs». Нужен отдельный ключ.")
     print(f"Ключ {fingerprint(key)} · {args.requests} запросов листингов на прокси, "
           f"пауза {args.pause} с")
     with open(args.proxies, encoding="utf-8") as fh:
         proxies = [normalize_proxy(line.strip()) for line in fh
                    if line.strip() and not line.startswith("#")]
+    if len(proxies) > args.max_proxies:
+        print(f"Проверю только первые {args.max_proxies} из {len(proxies)}: больше адресов "
+              "на один ключ CSFloat не пропустит.")
+        proxies = proxies[:args.max_proxies]
     for proxy in proxies:
-        check(proxy, key, args.requests, args.pause)
+        try:
+            check(proxy, key, args.requests, args.pause)
+        except TooManyIps:
+            print("\nCSFloat: «too many IPs» для этого ключа — останавливаюсь. "
+                  "Подожди, пока снимется, и не добавляй ключу новые адреса.")
+            break
 
 
 if __name__ == "__main__":
