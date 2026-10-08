@@ -24,7 +24,9 @@ def _now() -> datetime:
 
 
 def status(db, now: datetime | None = None) -> dict:
-    """{"limit", "used", "left", "reset"} - reset an ISO time or None."""
+    """{"limit", "used", "left", "reset", "source"} - reset an ISO time or
+    None; source "csfloat" when CSFloat's own counter set the numbers, "own"
+    when they are the bot's count against 200."""
     from .pacing import parse_iso
 
     now = now or _now()
@@ -35,6 +37,7 @@ def status(db, now: datetime | None = None) -> dict:
     used = len(made)
     limit = DAILY_CREATES
     left = max(limit - used, 0)
+    told = False
     reset = None
     if made:
         oldest = min(parse_iso(e["at"]) for e in made if parse_iso(e["at"]))
@@ -56,9 +59,11 @@ def status(db, now: datetime | None = None) -> dict:
                 limit = int(row["limit"])
                 left = max(limit - used, 0)
             left = min(left, int(row["remaining"]))
+            told = True
             reset = datetime.fromtimestamp(float(at), timezone.utc) \
                 .replace(microsecond=0).isoformat()
-    return {"limit": limit, "used": used, "left": left, "reset": reset}
+    return {"limit": limit, "used": used, "left": left, "reset": reset,
+            "source": "csfloat" if told else "own"}
 
 
 def cap_places(actions: list[dict], left: int) -> tuple[list[dict], int]:

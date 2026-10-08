@@ -149,7 +149,9 @@
     if (cr.limit) {
       rows.push(row("Создания ордеров", cr.left ? "on" : "warn",
         `за сутки ${cr.used} из ${cr.limit} · осталось ${cr.left}`
-        + (cr.reset && cr.left < cr.limit ? ` · освобождаться начнут ${rel(cr.reset)}` : "")));
+        + (cr.reset && cr.left < cr.limit ? ` · освобождаться начнут ${rel(cr.reset)}` : "")
+        + (cr.source === "csfloat" ? " · лимит по ответу CSFloat"
+          : " · лимит по своему подсчёту (CSFloat его ещё не присылал)")));
     }
 
     if ((d.waiting || []).length) {

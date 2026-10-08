@@ -59,12 +59,13 @@ def test_the_limit_csfloat_reports_replaces_the_200():
     db.set_setting("main_key_state", json.dumps([
         {"kind": "create", "remaining": 1990, "limit": 2000, "reset": later}]))
     got = creates.status(db)
-    assert got["limit"] == 2000 and got["left"] == 1990
+    assert got["limit"] == 2000 and got["left"] == 1990 and got["source"] == "csfloat"
     # A stale report (reset already past) is ignored: back to the 200.
     db.set_setting("main_key_state", json.dumps([
         {"kind": "create", "remaining": 1990, "limit": 2000,
          "reset": later - 86400}]))
     assert creates.status(db)["limit"] == 200
+    assert creates.status(db)["source"] == "own"
     db.close()
 
 
