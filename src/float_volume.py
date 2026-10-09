@@ -1,17 +1,21 @@
 """How much money goes through float-premium sales: not the skin's whole
 turnover, only the sales bought for their float.
 
-A sale counts as a float sale when both hold:
+The float zone is each item's own, read off its sales rather than fixed:
 
-- its float sits in the item's best hundredths - the first `best` hundredths
-  above the lowest float the item has ever sold at (a skin capped at 0.06
-  starts there, not at the wear's 0.00);
-- it went for at least `premium` over the item's ordinary price - the median
-  of the same window's sales outside those hundredths.
+- the ordinary price is the median of the sales in the worse half of the
+  item's float range (from its lowest sold float to the top of the wear),
+  where float no longer moves the price;
+- walking up from the lowest float a hundredth at a time, a hundredth with at
+  least `MIN_BUCKET` sales belongs to the zone while its median is at least
+  `premium` over the ordinary price; the first such hundredth that is not
+  ends the zone. A hundredth too thin to judge neither ends nor extends it;
+- with `width` set, the zone is that many hundredths instead, whatever the
+  prices do.
 
-Its overpay is price minus that ordinary price: what the float itself cost
-the buyer. Items with too few ordinary sales have no ordinary price and are
-left out of the float count, but still counted in the total.
+Every sale inside the zone is a float sale; its overpay is price minus the
+ordinary price. Items with too few ordinary sales are left out of the float
+count but still counted in the total.
 """
 from __future__ import annotations
 
@@ -19,8 +23,12 @@ import statistics as st
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+from .orders import wear_range
+
 STEP = 0.01
 MIN_BASE = 5            # ordinary sales needed before an item has a price
+MIN_BUCKET = 3          # sales in a hundredth before its median is believed
+MAX_ZONE = 0.15         # no zone runs further than this from the lowest float
 BANDS = ((0, 5), (5, 20), (20, 50), (50, 200), (200, 1000), (1000, None))
 
 
@@ -31,7 +39,29 @@ def band_of(price: float) -> str:
     return "?"
 
 
-def report(db, days: float = 30.0, best: int = 2, premium: float = 0.10,
+def zone_edge(rows: list[tuple[float, float]], floor: float, base: float,
+              premium: float, width: int = 0) -> float:
+    """The float the item's zone ends at (exclusive)."""
+    if width:
+        return floor + width * STEP
+    buckets: dict[int, list[float]] = defaultdict(list)
+    for p, f in rows:
+        k = int((f - floor) / STEP + 1e-9)
+        if 0 <= k < MAX_ZONE / STEP:
+            buckets[k].append(p)
+    edge = floor
+    for k in range(int(MAX_ZONE / STEP)):
+        prices = buckets.get(k, [])
+        if len(prices) < MIN_BUCKET:
+            continue
+        if st.median(prices) >= base * (1 + premium):
+            edge = floor + (k + 1) * STEP
+        else:
+            break
+    return edge
+
+
+def report(db, days: float = 30.0, premium: float = 0.05, width: int = 0,
            now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(days=days)).isoformat()
@@ -53,12 +83,16 @@ def report(db, days: float = 30.0, best: int = 2, premium: float = 0.10,
 
     items, bands = [], defaultdict(lambda: {"n": 0, "usd": 0.0, "over": 0.0})
     for item_id, rows in by_item.items():
-        edge = floors[item_id] + best * STEP
-        ordinary = [p for p, f in rows if f >= edge]
+        floor = floors[item_id]
+        span = wear_range(names[item_id])
+        top = span[1] if span else max(f for _, f in rows)
+        middle = floor + (top - floor) / 2
+        ordinary = [p for p, f in rows if f >= middle]
         if len(ordinary) < MIN_BASE:
             continue
         base = st.median(ordinary)
-        hits = [p for p, f in rows if f < edge and p >= base * (1 + premium)]
+        edge = zone_edge(rows, floor, base, premium, width)
+        hits = [p for p, f in rows if f < edge]
         if not hits:
             continue
         usd = sum(hits)
@@ -66,6 +100,7 @@ def report(db, days: float = 30.0, best: int = 2, premium: float = 0.10,
         items.append({"name": names[item_id], "n": len(hits), "usd": round(usd, 2),
                       "over": round(over, 2), "base": round(base, 2),
                       "pct": round((usd / len(hits) / base - 1) * 100, 1),
+                      "floor": round(floor, 4), "edge": round(edge, 4),
                       "sales": len(rows)})
         b = bands[band_of(base)]
         b["n"] += len(hits)
@@ -77,7 +112,7 @@ def report(db, days: float = 30.0, best: int = 2, premium: float = 0.10,
     float_usd = sum(r["usd"] for r in items)
     order = [band_of(lo) for lo, _ in BANDS]
     return {
-        "days": days, "best": best, "premium": premium,
+        "days": days, "premium": premium, "width": width,
         "total": {"n": total_n, "usd": round(total_usd, 2)},
         "float": {"n": float_n, "usd": round(float_usd, 2),
                   "over": round(sum(r["over"] for r in items), 2),

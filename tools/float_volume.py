@@ -1,8 +1,12 @@
-"""На какую сумму продаются флотовки: продажи в лучших сотых float, которые
-ушли заметно дороже обычной цены предмета. Только чтение базы.
+"""На какую сумму продаются флотовки. Только чтение базы.
+
+Зона флота у каждого предмета своя: от самого низкого float вверх по сотым,
+пока медиана сотой дороже обычной цены предмета на --premium % и больше.
+Обычная цена — медиана продаж в худшей половине диапазона float.
 
     .venv/bin/python tools/float_volume.py
-    .venv/bin/python tools/float_volume.py --days 14 --best 1 --premium 20 --top 40
+    .venv/bin/python tools/float_volume.py --days 60 --premium 3 --top 40
+    .venv/bin/python tools/float_volume.py --width 3     # зона = ровно 3 сотые
 """
 from __future__ import annotations
 
@@ -20,18 +24,20 @@ from src.float_volume import report  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=float, default=30, help="за сколько дней, по умолчанию 30")
-    ap.add_argument("--best", type=int, default=2,
-                    help="сколько лучших сотых float считать флотом, по умолчанию 2")
-    ap.add_argument("--premium", type=float, default=10,
-                    help="дороже обычной цены хотя бы на %%, по умолчанию 10")
+    ap.add_argument("--premium", type=float, default=5,
+                    help="сотая во флоте, пока её медиана дороже обычной цены на %%; "
+                         "по умолчанию 5")
+    ap.add_argument("--width", type=int, default=0,
+                    help="зона флота ровно столько сотых (0 — по ценам, по умолчанию)")
     ap.add_argument("--top", type=int, default=25, help="сколько предметов показать")
     a = ap.parse_args()
 
     db = Database(load_config().db_path)
-    r = report(db, days=a.days, best=a.best, premium=a.premium / 100)
+    r = report(db, days=a.days, premium=a.premium / 100, width=a.width)
     t, f = r["total"], r["float"]
-    print(f"За {a.days:g} дней · флот = {a.best} лучших сотых float, дороже обычной "
-          f"цены на {a.premium:g}%+\n")
+    zone = (f"ровно {a.width} сотых от лучшего float" if a.width else
+            f"сотые от лучшего float, пока дороже обычной цены на {a.premium:g}%+")
+    print(f"За {a.days:g} дней · флот = {zone}\n")
     print(f"Все продажи:     {t['n']:>7} шт · ${t['usd']:>12,.2f}")
     print(f"Флотовки:        {f['n']:>7} шт · ${f['usd']:>12,.2f} · {f['share']}% оборота · "
           f"{f['items']} предметов · ~${f['per_day']:,.0f} в день")
@@ -41,10 +47,10 @@ def main() -> None:
     for b in r["bands"]:
         print(f"  {b['band']:>12} {b['n']:>6} {b['usd']:>12,.2f} {b['over']:>13,.2f}")
     print(f"\nПредметы с наибольшей суммой флотовок (топ {a.top}):")
-    print(f"  {'шт':>4} {'сумма, $':>10} {'обычная, $':>10} {'дороже':>7}  предмет")
+    print(f"  {'шт':>4} {'сумма, $':>10} {'обычная, $':>10} {'дороже':>7} {'зона флота':>15}  предмет")
     for it in r["items"][:a.top]:
-        print(f"  {it['n']:>4} {it['usd']:>10,.2f} {it['base']:>10,.2f} {it['pct']:>6.0f}%  "
-              f"{it['name']}")
+        print(f"  {it['n']:>4} {it['usd']:>10,.2f} {it['base']:>10,.2f} {it['pct']:>6.0f}% "
+              f"{it['floor']:>7.3f}–{it['edge']:<7.3f}  {it['name']}")
     db.close()
 
 
