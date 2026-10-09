@@ -146,7 +146,15 @@ def merge(own_path: str, other_path: str, apply: bool = False) -> dict:
             f"SELECT i.name, COUNT(*), MIN(s.sold_at) {_NEW} "
             "GROUP BY i.item_id ORDER BY COUNT(*) DESC").fetchall()
         own_first = conn.execute("SELECT MIN(sold_at) FROM main.sales").fetchone()[0]
+        # Sales both databases hold, by id: if the other program stored price
+        # or float differently, it shows here before anything is written.
+        both, same_price, same_float = conn.execute(
+            "SELECT COUNT(*), SUM(ABS(m.price - s.price) < 0.005), "
+            "SUM(ABS(m.float_value - s.float_value) < 1e-9) "
+            "FROM incoming s JOIN main.sales m ON m.sale_id = s.sale_id").fetchone()
         result = {
+            "overlap": {"both": both, "same_price": same_price or 0,
+                        "same_float": same_float or 0},
             "format": kind,
             "other_sales": conn.execute("SELECT COUNT(*) FROM incoming").fetchone()[0],
             "own_items": own_items,

@@ -46,6 +46,7 @@ def test_adds_only_own_items_and_skips_duplicates(tmp_path):
     dry = merge(own, other)
     assert dry["new_sales"] == 1 and dry["items_gaining"] == 1 and dry["inserted"] == 0
     assert dry["covered_items"] == 1
+    assert dry["overlap"] == {"both": 1, "same_price": 1, "same_float": 1}
     assert _rows(own) == [("a1", "AK", 10.0)]
 
     done = merge(own, other, apply=True)

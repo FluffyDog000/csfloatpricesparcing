@@ -52,6 +52,12 @@ def main() -> None:
     print(f"Твоих предметов: {r['own_items']}, из них есть у знакомого: {r['covered_items']}")
     print(f"Твои продажи начинаются с {day(r['own_first'])}, "
           f"у знакомого по твоим предметам — с {day(r['other_first'])}")
+    o = r["overlap"]
+    print(f"Сверка общих продаж (есть в обеих базах): {o['both']}, цена совпала: "
+          f"{o['same_price']}, float совпал: {o['same_float']}")
+    if o["both"] and min(o["same_price"], o["same_float"]) < 0.98 * o["both"]:
+        print("   ⚠ цены или float расходятся больше чем у 2% общих продаж — "
+              "не записывай, пришли этот вывод")
     print(f"Новых продаж: {r['new_sales']} по {r['items_gaining']} предметам")
     for t in r["top"]:
         print(f"   +{t['new']:>5}  с {day(t['first'])}  {t['name']}")
