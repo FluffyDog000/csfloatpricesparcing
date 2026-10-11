@@ -622,3 +622,8 @@ a.item-link:hover, a.item-link:focus-visible { color: var(--accent, #58a6ff); }
 @keyframes bs-pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .bs-dot.busy { animation: none; } }
 @media (max-width: 640px) { .bs-row { grid-template-columns: 10px 1fr; } .bs-row .bs-text { grid-column: 2; } }
+
+/* Earnings: held skins in groups - sold and awaiting money, locked, free. */
+.holding-group { margin-top: 14px; }
+.holding-group h3 { margin: 0 0 4px; font-size: 15px; }
+.holding-group > p { margin: 0 0 8px; }

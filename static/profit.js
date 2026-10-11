@@ -112,6 +112,8 @@
       ["комиссия", cash(closed.reduce((a, x) => a + x.fee, 0)), ""],
       ["срок, медиана", median === null ? "—" : median + " дн", ""],
       ["в наличии", `${h.count || 0} · ${cash(h.spent || 0)}`, ""],
+      ...(((d.awaiting || {}).count) ? [["ждёт зачисления",
+        `${d.awaiting.count} · ${cash(d.awaiting.net)}`, ""]] : []),
       ["ожидаемая прибыль", h.count ? signed(h.est_profit || 0)
         + (h.est_pct !== null && h.est_pct !== undefined ? ` · ${pct(h.est_pct)}` : "")
         : "—", tone(h.est_profit)],
@@ -262,7 +264,11 @@
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
         [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
-        [`${cash(x.sold)} · ${stamp(x.sold_at)}`],
+        x.pending
+          ? [`${cash(x.sold)} · ${stamp(x.sold_at)} · деньги ≈ ${when(x.credit_at)}`, "warn-text",
+            "продано, обмен ещё идёт: CSFloat зачислит деньги после защиты обмена Steam. "
+            + "В прибыль уже входит; если обмен сорвётся, скин вернётся в наличие"]
+          : [`${cash(x.sold)} · ${stamp(x.sold_at)}`],
         x.forecast_exit === null || x.forecast_exit === undefined
           ? ["—", "muted", "прогноза нет: куплено не ордером бота или до записи прогнозов"]
           : [`${cash(x.forecast_exit)} · ${pct(x.forecast_error)}`, tone(x.forecast_error),
@@ -294,10 +300,7 @@
         + (h.pending ? ` ${h.pending} из них ещё ждут обмена — если продавец `
           + "не отдаст скин, сделка отменится и деньги вернутся." : "")
       : "";
-    table($("f-holding"),
-      ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "очередь",
-       "продажа", "ожид. профит", "%", ""],
-      holding.map((x) => [
+    const heldRow = (x) => [
         named(x.market_hash_name, x.by_bot),
         [flt(x.float_value), "mono"],
         [x.paint_seed ?? "—", "mono"],
@@ -318,8 +321,60 @@
         [signed(x.est_profit), tone(x.est_profit)],
         [pct(x.est_pct), tone(x.est_profit)],
         dropButton([x.trade_id], "например, оставил себе или продал не на CSFloat"),
-      ]),
-      "Всё купленное продано.");
+      ];
+    const box = $("f-holding");
+    box.innerHTML = "";
+    const group = (title, note, rows, draw) => {
+      const sec = node("div", "holding-group");
+      sec.appendChild(node("h3", "", title));
+      if (note) sec.appendChild(node("p", "muted", note));
+      const inner = node("div");
+      sec.appendChild(inner);
+      box.appendChild(sec);
+      draw(inner, rows);
+    };
+    const sum = (rows, k) => rows.reduce((a, x) => a + (x[k] || 0), 0);
+
+    const aw = ((d.awaiting || {}).deals || []).filter((x) => matches(x.market_hash_name)
+      && (!onlyBot() || x.by_bot));
+    if (aw.length) {
+      group(`Продано — ждём деньги (${aw.length})`,
+        `Продано на ${cash(sum(aw, "sold"))}, после комиссии придёт ${cash(sum(aw, "sold") - sum(aw, "fee"))}, `
+        + `профит ${signed(Math.round(sum(aw, "profit") * 100) / 100)} — уже в прибыли выше. `
+        + "CSFloat зачисляет деньги после защиты обмена Steam, примерно через 8 дней.",
+        aw, (el, rows) => table(el,
+          ["предмет", "float", "паттерн", "купили", "продали", "деньги", "профит", "%", ""],
+          rows.map((x) => [
+            named(x.market_hash_name, x.by_bot),
+            [flt(x.float_value), "mono"],
+            [x.paint_seed ?? "—", "mono"],
+            [`${cash(x.bought)} · ${stamp(x.bought_at)}`],
+            [`${cash(x.sold)} · ${stamp(x.sold_at)}`],
+            [`≈ ${when(x.credit_at)}`, "warn-text", "оценка: дата сделки + 8 дней"],
+            [signed(x.profit), tone(x.profit)],
+            [pct(x.pct), tone(x.profit)],
+            dropButton([x.buy_id, x.sell_id], "и покупку, и продажу"),
+          ]), ""));
+    }
+    const heldNote = (rows) => rows.length
+      ? `Куплено на ${cash(sum(rows, "bought"))}, по оценке ${cash(sum(rows.filter((x) => x.estimate !== null && x.estimate !== undefined), "estimate"))}, `
+        + `ожид. профит ${signed(Math.round(sum(rows, "est_profit") * 100) / 100)}.` : "";
+    const locked = holding.filter((x) => x.group !== "free");
+    const free = holding.filter((x) => x.group === "free");
+    const drawHeld = (el, rows) => table(el, ["предмет", "float", "паттерн", "купили", "у нас", "оценка", "очередь",
+       "продажа", "ожид. профит", "%", ""], rows.map(heldRow), "");
+    if (locked.length) {
+      group(`В трейд-бане (${locked.length})`,
+        heldNote(locked) + " Ещё нельзя выставить: обмен идёт или не прошла неделя защиты.",
+        locked, drawHeld);
+    }
+    if (free.length) {
+      group(`Можно продавать (${free.length})`, heldNote(free) + " Блокировка снята.",
+        free, drawHeld);
+    }
+    if (!aw.length && !locked.length && !free.length) {
+      box.appendChild(node("p", "muted", "Всё купленное продано."));
+    }
 
     const unmatched = d.unmatched.filter((x) => matches(x.market_hash_name));
     $("f-unmatched-box").hidden = !unmatched.length;

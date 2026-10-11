@@ -192,19 +192,26 @@ class Book:
 
 
 def pair(trades: Iterable[dict], fee: float) -> Book:
-    """Match each completed sale to the earliest unsold purchase of the same
-    skin made before it."""
+    """Match each sale to the earliest unsold purchase of the same skin made
+    before it.
+
+    A sale still in its trade counts already: the skin is gone and the price
+    is set, only CSFloat holds the money for the trade-protection days. The
+    deal is marked `pending` so the page can say the money is on its way; if
+    the trade falls through, the next read sees it failed and the skin is
+    back among what is held. A purchase still in its trade can be sold the
+    same way - under Steam's protection it stays "pending" for days with the
+    skin already in the inventory."""
     book = Book()
-    done = [t for t in trades if t.get("state") in DONE and t.get("role")]
-    book.pending = [t for t in trades
-                    if t.get("state") not in DONE and t.get("state") not in FAILED]
+    trades = list(trades)
+    live = [t for t in trades if t.get("role") and t.get("state") not in FAILED]
     buys: dict[tuple, list[dict]] = {}
-    for t in sorted((t for t in done if t["role"] == BUY), key=_when):
+    for t in sorted((t for t in live if t["role"] == BUY), key=_when):
         key = skin_key(t)
         if key is not None:
             buys.setdefault(key, []).append(t)
     used: set[str] = set()
-    for sell in sorted((t for t in done if t["role"] == SELL), key=_when):
+    for sell in sorted((t for t in live if t["role"] == SELL), key=_when):
         key = skin_key(sell)
         match = None
         for buy in buys.get(key, ()) if key else ():
@@ -212,13 +219,17 @@ def pair(trades: Iterable[dict], fee: float) -> Book:
                 match = buy
                 break
         if match is None:
-            book.unmatched.append(sell)
+            if sell.get("state") in DONE:
+                book.unmatched.append(sell)
             continue
-        used.add(match["trade_id"])
+        used.update((match["trade_id"], sell["trade_id"]))
         book.closed.append(deal(match, sell, fee))
-    for t in done:
-        if t["role"] == BUY and t["trade_id"] not in used:
+    for t in live:
+        if t["role"] == BUY and t.get("state") in DONE and t["trade_id"] not in used:
             book.holding.append(t)
+    book.pending = [t for t in trades
+                    if t.get("state") not in DONE and t.get("state") not in FAILED
+                    and t["trade_id"] not in used]
     book.closed.sort(key=lambda d: d["sold_at"] or "", reverse=True)
     book.holding.sort(key=_when, reverse=True)
     book.unmatched.sort(key=_when, reverse=True)
@@ -241,7 +252,21 @@ def deal(buy: dict, sell: dict, fee: float) -> dict:
         "pct": round(profit / bought * 100.0, 1) if bought else None,
         "days": round(max(held, 0.0), 1),
         "buy_id": buy["trade_id"], "sell_id": sell["trade_id"],
+        # Sold, but the trade is still running: the money comes later.
+        "pending": sell.get("state") not in DONE,
+        "credit_at": (credit_date(sell) if sell.get("state") not in DONE else None),
     }
+
+
+# CSFloat pays a sale out once Steam's trade protection has run: about eight
+# days after the trade. An estimate for the page, not a promise.
+CREDIT_DAYS = 8
+
+
+def credit_date(sell: dict) -> str | None:
+    at = parse_iso(sell.get("created_at"))
+    return (at + timedelta(days=CREDIT_DAYS)).replace(microsecond=0).isoformat() \
+        if at else None
 
 
 # -- what a held skin is worth -------------------------------------------------

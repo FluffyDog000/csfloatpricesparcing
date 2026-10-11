@@ -115,6 +115,35 @@ def test_failed_trades_count_for_nothing_and_running_ones_are_listed():
     assert [t["trade_id"] for t in book.pending] == ["2"]
 
 
+def test_a_sale_still_in_its_trade_is_a_deal_with_the_money_on_its_way():
+    """Sold, Steam's protection holds the money for a week: the profit is
+    made, and the skin is no longer held."""
+    book = pf.pair(parsed(
+        trade("1", "buy", 10000, at="2026-10-01T10:00:00Z"),
+        trade("2", "sell", 12000, state="pending", at="2026-10-11T10:00:00Z"),
+    ), fee=0.02)
+    assert not book.holding and not book.pending and not book.unmatched
+    (d,) = book.closed
+    assert d["pending"] is True and d["profit"] == pytest.approx(120 * 0.98 - 100)
+    assert d["credit_at"].startswith("2026-10-19")
+
+
+def test_a_purchase_still_in_its_trade_can_be_sold():
+    book = pf.pair(parsed(
+        trade("1", "buy", 10000, state="pending", at="2026-10-05T10:00:00Z"),
+        trade("2", "sell", 12000, state="pending", at="2026-10-11T10:00:00Z"),
+    ), fee=0.02)
+    assert len(book.closed) == 1 and not book.pending
+
+
+def test_a_sale_that_fell_through_puts_the_skin_back():
+    book = pf.pair(parsed(
+        trade("1", "buy", 10000, at="2026-10-01T10:00:00Z"),
+        trade("2", "sell", 12000, state="failed", at="2026-10-11T10:00:00Z"),
+    ), fee=0.02)
+    assert not book.closed and [t["trade_id"] for t in book.holding] == ["1"]
+
+
 def test_a_held_skin_is_valued_in_its_own_hundredth_when_it_can_be():
     sales = ([{"price": 100.0, "float_value": 0.155}] * 5
              + [{"price": 80.0, "float_value": 0.30}] * 20)
@@ -633,3 +662,36 @@ def test_the_bot_mark_and_the_forecast_outlive_the_journal():
     assert later["by_bot"], "kept on the purchase itself"
     assert later["forecast_exit"] == 120.0 and later["forecast_error"] == -8.3
     db.close()
+
+
+def test_held_skins_split_into_awaiting_locked_and_free():
+    import datetime as dt
+
+    webapp, c = _app()
+    db = webapp.Database(os.environ["CSFLOAT_DB_PATH"])
+    now = dt.datetime.now(dt.timezone.utc)
+    ago = lambda d: (now - dt.timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for t in parsed(
+            trade("1", "buy", 9000, flt=0.151, at=ago(10)),                 # free
+            trade("2", "buy", 9000, flt=0.152, at=ago(2)),                  # locked
+            trade("3", "buy", 9000, flt=0.153, state="pending", at=ago(1)), # in its trade
+            trade("4", "buy", 9000, flt=0.154, at=ago(9)),
+            trade("5", "sell", 11000, flt=0.154, state="pending", at=ago(0.2))):  # awaiting
+        db.upsert_trade(t)
+    db.close()
+
+    body = c.get("/api/profit?days=0").get_json()
+    groups = {h["trade_id"]: h["group"] for h in body["holding"]}
+    assert groups == {"1": "free", "2": "locked", "3": "locked"}
+    aw = body["awaiting"]
+    assert aw["count"] == 1 and aw["sold"] == 110.0 and aw["net"] == pytest.approx(107.8)
+    assert body["holding_totals"]["groups"]["locked"]["count"] == 2
+    assert any(d["pending"] for d in body["closed"]), "the sale is in the profit already"
+    assert not body["pending"], "listed once, as a deal"
+
+    got = __import__("tests.test_analysis_js", fromlist=["_run_script"]) \
+        ._run_script("static/profit.js", body)
+    page = got["profit"]
+    assert "Продано — ждём деньги (1)" in page
+    assert "В трейд-бане (2)" in page and "Можно продавать (1)" in page
+    assert "ждёт зачисления" in page

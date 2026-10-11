@@ -155,6 +155,14 @@ def _iso(when: str | None) -> str | None:
     return at.replace(microsecond=0).isoformat() if at else None
 
 
+def _group_totals(rows: list[dict]) -> dict:
+    valued = [h for h in rows if h.get("estimate") is not None]
+    return {"count": len(rows),
+            "spent": round(sum(h["bought"] for h in rows), 2),
+            "estimate": round(sum(h["estimate"] for h in valued), 2),
+            "est_profit": round(sum(h["est_profit"] for h in valued), 2)}
+
+
 def build(db, fee: float, days: float = 0.0) -> dict:
     """Everything the earnings page shows, for sales within `days` (0 = all).
 
@@ -226,9 +234,17 @@ def build(db, fee: float, days: float = 0.0) -> dict:
         stored = _stored(trades.get(h["trade_id"], {}).get("forecast"))
         h["forecast_exit"] = stored.get("exit") if stored else None
 
+    # Three kinds of held skin, each shown apart: still locked (the trade is
+    # running or the week of trade protection has not passed) and free to
+    # list. Sold ones whose money has not come are deals already, below.
+    for h in holding:
+        h["group"] = ("locked" if h["pending"] or (h.get("unlock_days") or 0) > 0
+                      else "free")
+
     # Newest first, whichever list a purchase came from: running trades were
     # appended after the finished ones and read upside down.
     holding.sort(key=lambda h: h["bought_at"] or "", reverse=True)
+    awaiting = [d for d in counted_closed if d.get("pending")]
     valued = [h for h in holding if h["estimate"] is not None]
     valued_spent = sum(h["bought"] for h in valued)
     valued_profit = sum(h["est_profit"] for h in valued)
@@ -249,6 +265,16 @@ def build(db, fee: float, days: float = 0.0) -> dict:
                         if valued_spent else None),
             "unvalued": len(holding) - len(valued),
             "pending": sum(1 for h in holding if h["pending"]),
+            "groups": {g: _group_totals([h for h in holding if h["group"] == g])
+                       for g in ("locked", "free")},
+        },
+        # Sold, the money still held by CSFloat: already in the profit above.
+        "awaiting": {
+            "count": len(awaiting),
+            "sold": round(sum(d["sold"] for d in awaiting), 2),
+            "net": round(sum(d["sold"] - d["fee"] for d in awaiting), 2),
+            "profit": round(sum(d["profit"] for d in awaiting), 2),
+            "deals": awaiting,
         },
         "unmatched": [dict(t) for t in book.unmatched
                       if ((t.get("done_at") or t.get("created_at") or "") >= since)

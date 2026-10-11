@@ -2491,14 +2491,17 @@ def api_profit_export():
                "да" if d.get("by_bot") else "",
                d.get("forecast_exit"), d.get("forecast_error"),
                d.get("forecast_sample"), d.get("forecast_from"),
-               d.get("forecast_width"), d.get("forecast_queue")]
+               d.get("forecast_width"), d.get("forecast_queue"),
+               ("ждёт зачисления, ~" + msk(d["credit_at"])) if d.get("pending") else "зачислено"]
               for d in data["closed"] if keep(d)]
     accuracy = [[g["group"], g["count"], g.get("median"), g.get("mean"),
                  g.get("mean_abs"), g.get("below")]
                 for g in data["accuracy"]["groups"]]
     holding = [[h["market_hash_name"], h["float_value"], h.get("paint_seed"),
                 msk(h["bought_at"]), h["bought"],
-                "ждёт обмена" if h["pending"] else "у нас", h["days"],
+                "ждёт обмена" if h["pending"] else
+                ("в трейд-бане" if h.get("group") == "locked" else "можно продавать"),
+                h["days"],
                 h.get("estimate"), h.get("est_profit"), h.get("est_pct"),
                 h.get("median"), h.get("queue_price"), h.get("ahead"),
                 h.get("cleared"), h.get("own_ahead"), h.get("unlock_days"),
@@ -2533,8 +2536,8 @@ def api_profit_export():
          ["предмет", "float", "паттерн", "куплено (МСК)", "цена покупки $",
           "продано (МСК)", "цена продажи $", "комиссия $", "профит $", "%",
           "дней", "ордер бота", "прогноз $", "отклонение %", "продаж у верха",
-          "цена от", "ширина полосы", "лотов в очереди"],
-         closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10, 10, 12, 12, 10, 12, 12]),
+          "цена от", "ширина полосы", "лотов в очереди", "деньги"],
+         closed, [44, 12, 8, 17, 12, 17, 12, 11, 10, 7, 7, 10, 10, 12, 12, 10, 12, 12, 28]),
         ("Прогноз против факта",
          ["группа", "сделок", "медиана откл. %", "среднее откл. %",
           "средняя ошибка ±%", "продано дешевле прогноза, %"],
@@ -2545,7 +2548,7 @@ def api_profit_export():
           "по очереди $", "лотов впереди", "уйдёт до разблок.", "свои впереди",
           "до разблокировки, дн", "продажа, дн", "прогноз при покупке $",
           "медиана — как", "очередь — как", "ордер бота"],
-         holding, [44, 12, 8, 17, 12, 13, 7, 10, 13, 7, 10, 11, 9, 11, 9, 11,
+         holding, [44, 12, 8, 17, 12, 16, 7, 10, 13, 7, 10, 11, 9, 11, 9, 11,
                    9, 13, 40, 50, 10]),
         ("Все покупки",
          ["дата (МСК)", "предмет", "float", "паттерн", "цена $", "состояние",
